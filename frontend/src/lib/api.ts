@@ -115,52 +115,35 @@ export async function getCourse(id: string): Promise<CourseDetailResponse> {
 // ─── Chat APIs (SSE) ──────────────────────────────────
 
 export interface ChatStreamEvent {
-  type: "text_delta" | "message_end" | "error";
+  event: "text_delta" | "tool_start" | "tool_end" | "message_end" | "error";
   text?: string;
   conversation_id?: string;
   message?: string;
+  tool?: string;
 }
 
 export async function* streamChat(
   message: string,
   conversationId?: string,
-  courseId?: string
+  courseId?: string,
+  signal?: AbortSignal
 ): AsyncGenerator<ChatStreamEvent> {
-  const res = await fetch(`${API_BASE}/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+  const { streamSSE } = await import("./sse");
+
+  for await (const evt of streamSSE(
+    `${API_BASE}/chat`,
+    {
       message,
       conversation_id: conversationId,
       course_id: courseId,
-    }),
-  });
-
-  if (!res.ok) throw new Error(await res.text());
-  if (!res.body) throw new Error("No response body");
-
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-
-    for (const line of lines) {
-      if (line.startsWith("data: ")) {
-        const data = line.slice(6).trim();
-        if (data === "[DONE]") return;
-        try {
-          yield JSON.parse(data) as ChatStreamEvent;
-        } catch {
-          // skip malformed lines
-        }
-      }
+    },
+    signal
+  )) {
+    try {
+      const data = JSON.parse(evt.data);
+      yield { event: evt.event as ChatStreamEvent["event"], ...data };
+    } catch {
+      // skip malformed events
     }
   }
 }
@@ -197,6 +180,80 @@ export async function getConversationMessages(
   const res = await fetch(
     `${API_BASE}/conversations/${conversationId}/messages`
   );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+// ─── Model Config APIs ────────────────────────────────
+
+export interface ModelConfigResponse {
+  name: string;
+  provider_type: string;
+  model_id: string;
+  api_key_masked?: string;
+  base_url?: string;
+  supports_tool_use: boolean;
+  supports_streaming: boolean;
+  max_tokens_limit: number;
+  is_active: boolean;
+}
+
+export interface ModelRouteResponse {
+  task_type: string;
+  model_name: string;
+}
+
+export async function getModels(): Promise<ModelConfigResponse[]> {
+  const res = await fetch(`${API_BASE}/models`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getModelRoutes(): Promise<ModelRouteResponse[]> {
+  const res = await fetch(`${API_BASE}/model-routes`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getTaskStatus(taskId: string): Promise<{
+  task_id: string;
+  state: string;
+  result?: unknown;
+  error?: string;
+  progress?: unknown;
+}> {
+  const res = await fetch(`${API_BASE}/tasks/${taskId}/status`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function createModel(data: {
+  name: string;
+  provider_type: string;
+  model_id: string;
+  api_key?: string;
+  base_url?: string;
+}): Promise<ModelConfigResponse> {
+  const res = await fetch(`${API_BASE}/models`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function deleteModel(name: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/models/${name}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await res.text());
+}
+
+export async function testModel(name: string): Promise<{
+  success: boolean;
+  message: string;
+  model?: string;
+}> {
+  const res = await fetch(`${API_BASE}/models/${name}/test`, { method: "POST" });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }

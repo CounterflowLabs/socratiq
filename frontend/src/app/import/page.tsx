@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Brain, Sparkles, Eye, Target, FileText, Upload, CheckCircle, Loader, Play, X } from "lucide-react";
+import { Brain, Sparkles, Eye, Target, FileText, Upload, CheckCircle, Loader, Play, X, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { clsx } from "clsx";
-import { createSourceFromURL, createSourceFromFile } from "@/lib/api";
+import { createSourceFromURL, createSourceFromFile, getTaskStatus, generateCourse } from "@/lib/api";
+import { useSourcesStore } from "@/lib/stores";
 
 const goals = [
   { id: "overview", label: "快速了解大意", icon: Eye, desc: "用最短时间抓住核心思想" },
@@ -13,8 +14,30 @@ const goals = [
   { id: "apply", label: "实战应用", icon: Target, desc: "做项目、写代码、能上手" },
 ];
 
+const LOADING_STEPS_BILIBILI = ["提取 B站视频字幕", "识别核心概念与前置依赖", "评估难度等级", "准备自适应评估题"];
+const LOADING_STEPS_PDF = ["解析 PDF 文档结构", "提取文本与代码块", "识别核心概念与前置依赖", "准备自适应评估题"];
+
+/** Map backend task status strings to step indices. */
+function taskStateToStep(state: string): number {
+  switch (state) {
+    case "PENDING":
+    case "extracting":
+      return 0;
+    case "analyzing":
+      return 1;
+    case "storing":
+      return 2;
+    case "embedding":
+    case "SUCCESS":
+      return 3;
+    default:
+      return 0;
+  }
+}
+
 export default function ImportPage() {
   const router = useRouter();
+  const addSource = useSourcesStore((s) => s.addSource);
   const [url, setUrl] = useState("");
   const [goal, setGoal] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -23,32 +46,91 @@ export default function ImportPage() {
   const [dragOver, setDragOver] = useState(false);
   const [pdfName, setPdfName] = useState("");
   const [pdfFile, setPdfFile] = useState<File | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const canSubmit = goal && (sourceType === "bilibili" ? url.trim() : pdfName);
 
-  const loadingSteps = sourceType === "bilibili"
-    ? ["提取 B站视频字幕", "识别核心概念与前置依赖", "评估难度等级", "准备自适应评估题"]
-    : ["解析 PDF 文档结构", "提取文本与代码块", "识别核心概念与前置依赖", "准备自适应评估题"];
+  const loadingSteps = sourceType === "bilibili" ? LOADING_STEPS_BILIBILI : LOADING_STEPS_PDF;
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, []);
+
+  const pollTaskAndGenerateCourse = useCallback(
+    (taskId: string, sourceId: string) => {
+      pollRef.current = setInterval(async () => {
+        try {
+          const status = await getTaskStatus(taskId);
+          const mappedStep = taskStateToStep(status.state);
+          setStep(mappedStep);
+
+          if (status.state === "SUCCESS") {
+            if (pollRef.current) clearInterval(pollRef.current);
+            pollRef.current = null;
+
+            // Generate a course from the processed source
+            try {
+              const course = await generateCourse([sourceId]);
+              router.push(`/path?courseId=${course.id}`);
+            } catch (err) {
+              setErrorMsg(err instanceof Error ? err.message : "课程生成失败");
+              setLoading(false);
+            }
+          } else if (status.state === "FAILURE") {
+            if (pollRef.current) clearInterval(pollRef.current);
+            pollRef.current = null;
+            setErrorMsg(status.error || "任务处理失败");
+            setLoading(false);
+          }
+        } catch (err) {
+          if (pollRef.current) clearInterval(pollRef.current);
+          pollRef.current = null;
+          setErrorMsg(err instanceof Error ? err.message : "获取任务状态失败");
+          setLoading(false);
+        }
+      }, 2000);
+    },
+    [router]
+  );
 
   const handleImport = async () => {
     if (!canSubmit) return;
     setLoading(true);
     setStep(0);
+    setErrorMsg(null);
 
     try {
+      let source;
       if (sourceType === "bilibili") {
-        await createSourceFromURL(url.trim());
+        source = await createSourceFromURL(url.trim());
       } else if (pdfFile) {
-        await createSourceFromFile(pdfFile);
+        source = await createSourceFromFile(pdfFile);
+      } else {
+        setErrorMsg("请选择文件");
+        setLoading(false);
+        return;
       }
-    } catch { /* continue for demo */ }
 
-    for (let i = 0; i < loadingSteps.length; i++) {
-      setStep(i);
-      await new Promise((r) => setTimeout(r, 700));
+      // Store the source in Zustand
+      addSource(source);
+
+      if (source.task_id) {
+        // Poll for task completion, then generate course
+        pollTaskAndGenerateCourse(source.task_id, source.id);
+      } else {
+        // No async task — source is already ready, generate course directly
+        const course = await generateCourse([source.id]);
+        router.push(`/path?courseId=${course.id}`);
+      }
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "导入失败，请检查链接或文件后重试");
+      setLoading(false);
     }
-    router.push("/diagnostic");
   };
 
   const handleFileSelect = (file: File | undefined) => {
@@ -68,7 +150,7 @@ export default function ImportPage() {
           <h2 className="text-lg font-semibold text-gray-900 mb-2">
             {sourceType === "bilibili" ? "正在分析视频内容..." : "正在分析 PDF 文档..."}
           </h2>
-          <p className="text-sm text-gray-500 mb-1">分析完成后，我会出几道题来了解你的基础</p>
+          <p className="text-sm text-gray-500 mb-1">分析完成后，将自动生成学习路径</p>
           <div className="space-y-3 mt-6 text-left bg-gray-50 rounded-xl p-4">
             {loadingSteps.map((s, i) => (
               <div key={i} className="flex items-center gap-2 text-sm">
@@ -107,6 +189,14 @@ export default function ImportPage() {
         <div className="w-full max-w-xl">
           <h1 className="text-2xl font-bold text-gray-900 mb-2">导入学习资料</h1>
           <p className="text-sm text-gray-500 mb-8">粘贴 B站视频链接或上传 PDF，开始你的个性化学习之旅</p>
+
+          {/* Error message */}
+          {errorMsg && (
+            <div className="mb-6 flex items-start gap-2 p-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">
+              <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+              <span>{errorMsg}</span>
+            </div>
+          )}
 
           {/* Source type tabs */}
           <div className="flex gap-2 mb-6">

@@ -114,16 +114,24 @@ async def apply_profile_updates(
         if not updates:
             return
 
-        # Load current profile, merge updates, save
+        # Load current profile, deep merge updates, save
         profile = await load_profile(db, user_id)
         profile_dict = profile.model_dump()
 
-        for key, value in updates.items():
-            if key in profile_dict:
-                if isinstance(profile_dict[key], dict) and isinstance(value, dict):
-                    profile_dict[key].update(value)
+        def _deep_merge(base: dict, updates_dict: dict) -> None:
+            for key, value in updates_dict.items():
+                if key not in base:
+                    base[key] = value
+                elif isinstance(base[key], dict) and isinstance(value, dict):
+                    _deep_merge(base[key], value)
+                elif isinstance(base[key], list) and isinstance(value, list):
+                    for item in value:
+                        if item not in base[key]:
+                            base[key].append(item)
                 else:
-                    profile_dict[key] = value
+                    base[key] = value
+
+        _deep_merge(profile_dict, updates)
 
         updated_profile = StudentProfile(**profile_dict)
         await save_profile(db, user_id, updated_profile)

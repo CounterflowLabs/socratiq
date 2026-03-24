@@ -43,20 +43,14 @@ class EmbeddingService:
     async def _embed_batch(
         self, provider: LLMProvider, texts: list[str]
     ) -> list[list[float]]:
-        """Embed a single batch of texts using the embedding provider."""
-        from app.services.llm.openai_compat import OpenAICompatProvider
-
-        if isinstance(provider, OpenAICompatProvider):
-            response = await provider._client.embeddings.create(
-                model=provider.model_id(),
-                input=texts,
-            )
-            return [item.embedding for item in response.data]
-        else:
-            # Fallback: placeholder for non-OpenAI providers
+        """Embed a single batch of texts using the provider's embed method."""
+        try:
+            return await provider.embed(texts)
+        except NotImplementedError:
             logger.warning(
-                "Using placeholder embedding fallback. Configure an "
-                "OpenAI-compatible embedding model for production use."
+                "Provider %s does not support embeddings. "
+                "Configure an OpenAI-compatible embedding model.",
+                type(provider).__name__,
             )
             return [[0.0] * 1536 for _ in texts]
 

@@ -17,7 +17,7 @@ from app.services.llm.base import (
     UnifiedMessage,
 )
 from app.services.llm.router import ModelRouter, TaskType
-from app.services.profile import StudentProfile, load_profile, apply_profile_updates
+from app.services.profile import StudentProfile, load_profile
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ class MentorAgent:
     feeds the result back, and continues the loop.
     """
 
-    MAX_TOOL_LOOPS = 5  # Safety limit to prevent infinite tool loops
+    MAX_TOOL_LOOPS = 10  # Safety limit to prevent infinite tool loops
 
     def __init__(
         self,
@@ -167,7 +167,7 @@ class MentorAgent:
         # Async profile update (don't block the response)
         if full_assistant_text:
             import asyncio
-            asyncio.create_task(self._maybe_update_profile(full_assistant_text))
+            asyncio.create_task(self._maybe_update_profile(full_assistant_text, user_message))
 
     async def _execute_tool(self, tool_name: str, params: dict) -> str:
         """Execute a tool and return its result string."""
@@ -182,34 +182,45 @@ class MentorAgent:
             logger.error(f"Tool '{tool_name}' execution error: {e}", exc_info=True)
             return f"Error executing tool '{tool_name}': {str(e)}"
 
-    async def _maybe_update_profile(self, assistant_text: str) -> None:
+    async def _maybe_update_profile(self, assistant_text: str, user_message: str) -> None:
         """Asynchronously update student profile based on conversation.
 
-        This runs as a background task — failures are logged but don't
-        affect the user experience.
+        Uses its own database session since the request session may be closed.
         """
+        from app.db.database import async_session_factory
+        from app.services.profile import load_profile, apply_profile_updates
+
         try:
-            provider = await self._router.get_provider(TaskType.EVALUATION)
-            messages = [
-                UnifiedMessage(
-                    role="system",
-                    content=(
-                        "You are a student profile analysis engine. Based on the following "
-                        "conversation between a mentor and student, identify any updates "
-                        "to the student profile. Respond with JSON:\n"
-                        '{"observations": ["..."], "updates": {"field": "value"}}\n'
-                        "If no updates are needed, return empty updates."
+            async with async_session_factory() as db:
+                # Load current profile for context
+                profile = await load_profile(db, self._user_id)
+
+                provider = await self._router.get_provider(TaskType.CONTENT_ANALYSIS)
+                messages = [
+                    UnifiedMessage(
+                        role="system",
+                        content=(
+                            "You are a student profile analysis engine. Based on the following "
+                            "conversation between a mentor and student, identify any updates "
+                            "to the student profile. Respond with JSON:\n"
+                            '{"observations": ["..."], "updates": {"field": "value"}}\n'
+                            "If no updates are needed, return empty updates."
+                        ),
                     ),
-                ),
-                UnifiedMessage(
-                    role="user",
-                    content=f"Mentor's response:\n{assistant_text[:2000]}",
-                ),
-            ]
-            response = await provider.chat(messages, max_tokens=512, temperature=0.3)
-            response_text = "".join(
-                b.text or "" for b in response.content if b.type == "text"
-            )
-            await apply_profile_updates(self._db, self._user_id, response_text)
+                    UnifiedMessage(
+                        role="user",
+                        content=(
+                            f"Current student profile:\n{profile.model_dump_json(indent=2)}\n\n"
+                            f"Student's message:\n{user_message[:1000]}\n\n"
+                            f"Mentor's response:\n{assistant_text[:2000]}"
+                        ),
+                    ),
+                ]
+                response = await provider.chat(messages, max_tokens=512, temperature=0.3)
+                response_text = "".join(
+                    b.text or "" for b in response.content if b.type == "text"
+                )
+                await apply_profile_updates(db, self._user_id, response_text)
+                await db.commit()
         except Exception as e:
             logger.warning(f"Profile update failed (non-critical): {e}")

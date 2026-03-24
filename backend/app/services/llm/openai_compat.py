@@ -280,3 +280,11 @@ class OpenAICompatProvider(LLMProvider):
     def model_id(self) -> str:
         """The model identifier for this provider instance."""
         return self._model
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        """Compute embeddings using the OpenAI embeddings API."""
+        response = await self._client.embeddings.create(
+            model=self._model,
+            input=texts,
+        )
+        return [item.embedding for item in response.data]

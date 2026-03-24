@@ -5,17 +5,17 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db
+from app.config import get_settings
 from app.db.models.source import Source
 from app.models.source import SourceResponse, SourceListResponse
 from app.worker.tasks.content_ingestion import ingest_source
 
 router = APIRouter(prefix="/api/sources", tags=["sources"])
 
-UPLOAD_DIR = Path("uploads")
 
 
 @router.post("", response_model=SourceResponse, status_code=201)
@@ -39,11 +39,14 @@ async def create_source(
         source_type = "pdf"
         title = title or file.filename
 
-        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        upload_dir = Path(get_settings().upload_dir)
+        upload_dir.mkdir(parents=True, exist_ok=True)
         file_id = str(uuid.uuid4())
-        file_path = UPLOAD_DIR / f"{file_id}.pdf"
+        file_path = upload_dir / f"{file_id}.pdf"
 
         content = await file.read()
+        if len(content) > 50 * 1024 * 1024:
+            raise HTTPException(413, "File too large (max 50MB)")
         file_path.write_bytes(content)
 
         metadata = {
@@ -65,7 +68,7 @@ async def create_source(
         metadata_=metadata,
     )
     db.add(source)
-    await db.flush()
+    await db.commit()
 
     task = ingest_source.delay(str(source.id))
 
@@ -94,8 +97,8 @@ async def list_sources(
     )
     sources = result.scalars().all()
 
-    count_result = await db.execute(select(Source))
-    total = len(count_result.scalars().all())
+    count_result = await db.execute(select(func.count()).select_from(Source))
+    total = count_result.scalar()
 
     return SourceListResponse(
         items=[_source_to_response(s) for s in sources],

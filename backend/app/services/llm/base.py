@@ -124,3 +124,11 @@ class LLMProvider(ABC):
     def model_id(self) -> str:
         """The model identifier for this provider instance."""
         ...
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        """Compute embeddings for a list of texts.
+
+        Default implementation raises NotImplementedError.
+        Providers that support embeddings should override this.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not support embeddings")

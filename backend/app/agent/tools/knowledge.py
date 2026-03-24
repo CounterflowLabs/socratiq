@@ -55,6 +55,7 @@ class KnowledgeSearchTool(AgentTool):
     async def execute(self, query: str, top_k: int = 5) -> str:
         top_k = min(top_k, 10)
         results = await self._rag.search(
+            db=self._db,
             query=query,
             course_id=self._course_id,
             top_k=top_k,

@@ -4,7 +4,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_model_router
@@ -71,7 +71,7 @@ async def list_courses(
             )
             for c in courses
         ],
-        total=len(courses),
+        total=(await db.execute(select(func.count()).select_from(Course))).scalar(),
         skip=skip,
         limit=limit,
     )

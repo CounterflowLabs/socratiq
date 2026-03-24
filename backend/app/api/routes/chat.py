@@ -5,11 +5,12 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from sse_starlette.sse import EventSourceResponse
 
 from app.api.deps import get_db, get_model_router
+from app.db.database import async_session_factory
 from app.db.models.conversation import Conversation
 from app.db.models.message import Message
 from app.models.chat import (
@@ -35,110 +36,102 @@ DEMO_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 @router.post("/api/chat")
 async def chat(
     request: ChatRequest,
-    db: Annotated[AsyncSession, Depends(get_db)],
     model_router: Annotated[ModelRouter, Depends(get_model_router)],
 ):
-    """Send a message to the MentorAgent and receive an SSE stream.
-
-    Creates a new conversation if conversation_id is not provided.
-    Returns a text/event-stream response with real-time LLM output.
-    """
+    """Send a message to the MentorAgent and receive an SSE stream."""
     user_id = DEMO_USER_ID
 
-    # Get or create conversation
-    if request.conversation_id:
-        conversation = await db.get(Conversation, request.conversation_id)
-        if not conversation:
-            raise HTTPException(404, "Conversation not found")
-    else:
-        conversation = Conversation(
-            user_id=user_id,
-            course_id=request.course_id,
-            mode="qa",
-        )
-        db.add(conversation)
-        await db.flush()
+    async def event_generator():
+        async with async_session_factory() as db:
+            try:
+                # Get or create conversation
+                if request.conversation_id:
+                    conversation = await db.get(Conversation, request.conversation_id)
+                    if not conversation:
+                        yield {"event": "error", "data": json.dumps({"message": "Conversation not found"})}
+                        return
+                    if conversation.user_id != user_id:
+                        yield {"event": "error", "data": json.dumps({"message": "Conversation not found"})}
+                        return
+                else:
+                    conversation = Conversation(
+                        user_id=user_id,
+                        course_id=request.course_id,
+                        mode="qa",
+                    )
+                    db.add(conversation)
+                    await db.flush()
 
-    # Save user message
-    user_msg = Message(
-        conversation_id=conversation.id,
-        role="user",
-        content=request.message,
-    )
-    db.add(user_msg)
-    await db.flush()
-
-    # Load conversation history
-    history_result = await db.execute(
-        select(Message)
-        .where(Message.conversation_id == conversation.id)
-        .order_by(Message.created_at)
-    )
-    history_messages = history_result.scalars().all()
-
-    # Build conversation history (excluding the latest user message, which we pass separately)
-    conversation_history = []
-    for msg in history_messages[:-1]:  # Exclude the one we just added
-        role = msg.role if msg.role in ("user", "assistant") else "user"
-        conversation_history.append(UnifiedMessage(role=role, content=msg.content))
-
-    # Set up agent tools
-    rag_service = RAGService(model_router)
-    tools = [
-        KnowledgeSearchTool(db=db, rag_service=rag_service, course_id=request.course_id),
-        ProfileReadTool(db=db, user_id=user_id),
-        ProgressTrackTool(db=db, user_id=user_id),
-    ]
-
-    agent = MentorAgent(
-        model_router=model_router,
-        db=db,
-        user_id=user_id,
-        tools=tools,
-    )
-
-    conversation_id = conversation.id
-
-    async def event_stream():
-        full_response = ""
-
-        try:
-            async for chunk in agent.process(
-                user_message=request.message,
-                conversation_history=conversation_history,
-                course_id=request.course_id,
-            ):
-                if chunk.type == "text_delta" and chunk.text:
-                    full_response += chunk.text
-                    yield f"data: {json.dumps({'type': 'text_delta', 'text': chunk.text})}\n\n"
-
-                elif chunk.type == "message_end":
-                    yield f"data: {json.dumps({'type': 'message_end', 'conversation_id': str(conversation_id)})}\n\n"
-
-            # Save assistant message
-            if full_response:
-                assistant_msg = Message(
-                    conversation_id=conversation_id,
-                    role="assistant",
-                    content=full_response,
+                # Save user message
+                user_msg = Message(
+                    conversation_id=conversation.id,
+                    role="user",
+                    content=request.message,
                 )
-                db.add(assistant_msg)
+                db.add(user_msg)
                 await db.flush()
 
-        except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+                # Load conversation history (last 20 messages)
+                history_result = await db.execute(
+                    select(Message)
+                    .where(Message.conversation_id == conversation.id)
+                    .order_by(Message.created_at.desc())
+                    .limit(20)
+                )
+                history_messages = list(reversed(history_result.scalars().all()))
 
-        yield "data: [DONE]\n\n"
+                # Build history excluding latest user message
+                conversation_history = []
+                for msg in history_messages[:-1]:
+                    role = msg.role if msg.role in ("user", "assistant") else "user"
+                    conversation_history.append(UnifiedMessage(role=role, content=msg.content))
 
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+                # Set up agent
+                rag_service = RAGService(model_router)
+                tools = [
+                    KnowledgeSearchTool(db=db, rag_service=rag_service, course_id=request.course_id),
+                    ProfileReadTool(db=db, user_id=user_id),
+                    ProgressTrackTool(db=db, user_id=user_id),
+                ]
+                agent = MentorAgent(
+                    model_router=model_router,
+                    db=db,
+                    user_id=user_id,
+                    tools=tools,
+                )
+
+                # Stream response
+                full_response = ""
+                async for chunk in agent.process(
+                    user_message=request.message,
+                    conversation_history=conversation_history,
+                    course_id=request.course_id,
+                ):
+                    if chunk.type == "text_delta" and chunk.text:
+                        full_response += chunk.text
+                        yield {"event": "text_delta", "data": json.dumps({"text": chunk.text})}
+                    elif chunk.type == "tool_use_start":
+                        yield {"event": "tool_start", "data": json.dumps({"tool": chunk.tool_name})}
+                    elif chunk.type == "tool_use_end":
+                        yield {"event": "tool_end", "data": "{}"}
+                    elif chunk.type == "message_end":
+                        yield {"event": "message_end", "data": json.dumps({"conversation_id": str(conversation.id)})}
+
+                # Save assistant message
+                if full_response:
+                    assistant_msg = Message(
+                        conversation_id=conversation.id,
+                        role="assistant",
+                        content=full_response,
+                    )
+                    db.add(assistant_msg)
+
+                await db.commit()
+
+            except Exception as e:
+                yield {"event": "error", "data": json.dumps({"message": str(e)})}
+
+    return EventSourceResponse(event_generator())
 
 
 @router.get("/api/conversations", response_model=ConversationListResponse)
@@ -173,7 +166,12 @@ async def list_conversations(
             message_count=count,
         ))
 
-    return ConversationListResponse(items=items, total=len(items))
+    # Fix total count
+    count_result = await db.execute(
+        select(func.count(Conversation.id)).where(Conversation.user_id == user_id)
+    )
+    total = count_result.scalar()
+    return ConversationListResponse(items=items, total=total)
 
 
 @router.get("/api/conversations/{conversation_id}/messages")
@@ -183,7 +181,7 @@ async def get_conversation_messages(
 ) -> list[MessageResponse]:
     """Get all messages in a conversation."""
     conversation = await db.get(Conversation, conversation_id)
-    if not conversation:
+    if not conversation or conversation.user_id != DEMO_USER_ID:
         raise HTTPException(404, "Conversation not found")
 
     result = await db.execute(

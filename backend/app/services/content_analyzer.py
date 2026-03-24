@@ -29,7 +29,7 @@ class AnalyzedChunk(BaseModel):
     summary: str = ""
     raw_text: str = ""
     concepts: list[str] = Field(default_factory=list)
-    difficulty: int = 3
+    difficulty: int = Field(default=3, ge=1, le=5)
     key_terms: list[str] = Field(default_factory=list)
     has_code: bool = False
     has_formula: bool = False
@@ -40,7 +40,7 @@ class AnalysisResult(BaseModel):
     """Complete analysis result for a source."""
     source_title: str
     overall_summary: str = ""
-    overall_difficulty: int = 3
+    overall_difficulty: int = Field(default=3, ge=1, le=5)
     concepts: list[ExtractedConcept] = Field(default_factory=list)
     chunks: list[AnalyzedChunk] = Field(default_factory=list)
     suggested_prerequisites: list[str] = Field(default_factory=list)

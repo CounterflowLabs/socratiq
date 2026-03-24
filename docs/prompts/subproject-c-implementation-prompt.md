@@ -140,11 +140,6 @@ feat(agent): <描述>       # Phase C1-C2
 feat(frontend): <描述>    # Phase C3-C6
 ```
 
-每个 commit 末尾加：
-```
-Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
-```
-
 ## 开始开发
 
 请先完整阅读设计文档，然后从 Phase C1 开始。每完成一个 Phase，报告进度和测试结果。

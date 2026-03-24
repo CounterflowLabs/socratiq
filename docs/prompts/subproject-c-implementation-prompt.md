@@ -8,25 +8,35 @@
 
 你是一个全栈工程师（Python + TypeScript），需要按照已有的设计文档和实现计划，为 LearnMentor 项目实现 Sub-project C（MentorAgent 核心 + Next.js 前端）。
 
+## 开发模式
+
+**REQUIRED SUB-SKILL:** Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task.
+
 ## 前置条件
 
-Sub-project A（基础设施）和 Sub-project B（内容摄入）必须已实现。在开始前确认：
+Sub-project A（基础设施）必须已实现。Sub-project B（内容摄入）推荐但非必须。在开始前确认：
 ```bash
 cd backend && .venv/bin/python -m pytest -v  # 所有测试通过
 ```
 
 ## 开发流程要求
 
-1. **先读设计文档**：阅读 `docs/superpowers/specs/2026-03-24-subproject-c-agent-frontend-design.md`，这是你的唯一实现规范
-2. **再读现有代码**：了解 Sub-project A 和 B 已实现的内容
-3. **按 Plan 分阶段执行**：设计文档末尾有 Phase C1-C6 的详细计划
-4. **后端先行**：先完成 C1-C2（Agent 核心 + Chat API），再做 C3-C6（前端）
-5. **TDD 优先**：每个模块先写测试，再写实现
-6. **每完成一个 Phase 就运行全部测试 + commit**
+1. **先读实现计划**：阅读 `docs/superpowers/plans/2026-03-24-subproject-c-agent-frontend.md`，这是你的 **唯一执行蓝图**
+2. **再读设计文档**：阅读 `docs/superpowers/specs/2026-03-24-subproject-c-agent-frontend-design.md`，作为实现的详细参考
+3. **再读现有代码**：了解 Sub-project A 和 B 已实现的内容
+4. **按 Plan 的 Task 顺序执行**：Task 1-9 后端，Task 10-18 前端
+5. **后端先行**：先完成 Task 1-9（Agent 核心 + Chat API），再做 Task 10-18（前端）
+6. **TDD 优先**：每个模块先写测试，再写实现
+7. **每完成一个 Task 就运行全部测试 + commit**
 
 ## 必须阅读的文件
 
-### 设计文档（实现规范）
+### 实现计划（执行蓝图）
+```
+docs/superpowers/plans/2026-03-24-subproject-c-agent-frontend.md
+```
+
+### 设计文档（详细参考）
 ```
 docs/superpowers/specs/2026-03-24-subproject-c-agent-frontend-design.md
 ```
@@ -94,30 +104,31 @@ backend/app/api/routes/courses.py              # Courses API
 
 前端（在 `frontend/` 目录初始化）：
 ```bash
-npx create-next-app@latest frontend --typescript --tailwind --eslint --app --src-dir=false
+npx create-next-app@latest frontend --typescript --tailwind --eslint --app --src-dir=false --import-alias="@/*" --use-npm
 cd frontend
-npm install zustand eventsource-parser react-markdown
+npm install zustand eventsource-parser react-markdown remark-gfm
 npx shadcn@latest init
+npx shadcn@latest add button input card dialog scroll-area badge tabs separator skeleton avatar dropdown-menu sheet textarea toast
 ```
 
 ## 实现顺序
 
-**必须按此顺序**：
-1. **Phase C1**: MentorAgent 核心（`agent/mentor.py` + tools + prompts）
-2. **Phase C2**: Chat API + RAG 服务（SSE endpoint + pgvector 检索）
-3. **Phase C3**: Next.js 前端骨架（项目初始化 + 路由 + 布局 + API client）
-4. **Phase C4**: 导入页 + 课程页
-5. **Phase C5**: 学习页（Bilibili 播放器 + Mentor Chat 面板）
-6. **Phase C6**: Settings 页 + 端到端联调
+**必须按此顺序**（对应 Plan 中的 Task）：
+1. **Task 1-5**: Agent 核心（AgentTool base + Profile service + Tools + Prompts + MentorAgent）
+2. **Task 6-9**: Chat API + RAG 服务（RAG service + Chat SSE endpoint + Courses API + Routers）
+3. **Task 10-12**: Next.js 前端骨架（项目初始化 + API client + SSE + 布局）
+4. **Task 13-14**: 导入页 + 课程页
+5. **Task 15-16**: 学习页（Bilibili 播放器 + Mentor Chat 面板）
+6. **Task 17-18**: Settings 页 + 端到端验证
 
 ## 验证标准
 
-每个后端 Phase 完成后：
+每个后端 Task 完成后：
 ```bash
 cd backend && .venv/bin/python -m pytest -v  # 全部测试通过
 ```
 
-每个前端 Phase 完成后：
+每个前端 Task 完成后：
 ```bash
 cd frontend && npm run build  # 构建成功无错误
 ```
@@ -136,10 +147,10 @@ cd frontend && npm run dev
 ## Commit 规范
 
 ```
-feat(agent): <描述>       # Phase C1-C2
-feat(frontend): <描述>    # Phase C3-C6
+feat(agent): <描述>       # Task 1-9
+feat(frontend): <描述>    # Task 10-18
 ```
 
 ## 开始开发
 
-请先完整阅读设计文档，然后从 Phase C1 开始。每完成一个 Phase，报告进度和测试结果。
+请先完整阅读 **实现计划**（`docs/superpowers/plans/2026-03-24-subproject-c-agent-frontend.md`），然后从 Task 1 开始。每完成一个 Task，报告进度和测试结果。

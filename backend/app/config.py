@@ -13,6 +13,14 @@ class Settings(BaseSettings):
     # Security
     llm_encryption_key: str = ""
 
+    # Bilibili (optional — for authenticated subtitle access)
+    bilibili_sessdata: str = ""
+    bilibili_bili_jct: str = ""
+    bilibili_buvid3: str = ""
+
+    # File uploads
+    upload_dir: str = "uploads"
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 @lru_cache

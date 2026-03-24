@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.db.database import engine
-from app.api.routes import health, models, model_routes, tasks
+from app.api.routes import health, models, model_routes, tasks, sources, courses, chat
 
 
 @asynccontextmanager
@@ -27,3 +27,7 @@ app.include_router(health.router, tags=["health"])
 app.include_router(models.router)
 app.include_router(model_routes.router)
 app.include_router(tasks.router)
+app.include_router(sources.router)
+app.include_router(courses.router)
+app.include_router(chat.router)
+

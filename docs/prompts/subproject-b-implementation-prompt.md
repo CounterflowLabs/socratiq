@@ -8,20 +8,30 @@
 
 你是一个高级 Python 后端工程师，需要按照已有的设计文档和实现计划，为 LearnMentor 项目实现 Sub-project B（内容摄入管线）。
 
+## 开发模式
+
+**REQUIRED SUB-SKILL:** Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task.
+
 ## 开发流程要求
 
 请严格按照以下流程开发：
 
-1. **先读设计文档**：阅读 `docs/superpowers/specs/2026-03-24-subproject-b-content-ingestion-design.md`，这是你的唯一实现规范
-2. **再读现有代码**：了解 Sub-project A 已实现的基础设施，避免重复造轮子
-3. **按 Plan 分阶段执行**：设计文档最后有详细的 Implementation Plan，按阶段顺序执行
-4. **TDD 优先**：每个模块先写测试，再写实现
-5. **每完成一个 Phase 就运行全部测试**，确保不破坏已有功能
-6. **每完成一个 Phase 就 commit**，commit message 格式：`feat(content): <描述>`
+1. **先读实现计划**：阅读 `docs/superpowers/plans/2026-03-24-subproject-b-content-ingestion.md`，这是你的 **唯一执行蓝图**
+2. **再读设计文档**：阅读 `docs/superpowers/specs/2026-03-24-subproject-b-content-ingestion-design.md`，作为实现的详细参考
+3. **再读现有代码**：了解 Sub-project A 已实现的基础设施，避免重复造轮子
+4. **按 Plan 的 Task 顺序执行**：每个 Task 有 bite-sized 的步骤，逐步完成
+5. **TDD 优先**：每个模块先写测试，再写实现
+6. **每完成一个 Task 就运行全部测试**，确保不破坏已有功能
+7. **每完成一个 Task 就 commit**，commit message 格式参照 Plan 中的指引
 
 ## 必须阅读的文件
 
-### 设计文档（实现规范）
+### 实现计划（执行蓝图）
+```
+docs/superpowers/plans/2026-03-24-subproject-b-content-ingestion.md
+```
+
+### 设计文档（详细参考）
 ```
 docs/superpowers/specs/2026-03-24-subproject-b-content-ingestion-design.md
 ```
@@ -68,7 +78,7 @@ backend/tests/conftest.py                      # 测试基础设施
 
 ## 验证标准
 
-每个 Phase 完成后，运行以下命令确认：
+每个 Task 完成后，运行以下命令确认：
 ```bash
 cd backend
 .venv/bin/python -m pytest -v                    # 全部测试通过
@@ -83,4 +93,4 @@ cd backend
 
 ## 开始开发
 
-请先完整阅读设计文档，然后从 Phase 1 开始，按计划逐步实现。每完成一个 Phase，报告进度和测试结果。
+请先完整阅读 **实现计划**（`docs/superpowers/plans/2026-03-24-subproject-b-content-ingestion.md`），然后从 Task 1 开始，按计划逐步实现。每完成一个 Task，报告进度和测试结果。

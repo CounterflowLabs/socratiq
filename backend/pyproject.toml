@@ -1,0 +1,44 @@
+[project]
+name = "learnmentor-backend"
+version = "0.1.0"
+description = "LearnMentor - AI-driven adaptive learning system backend"
+requires-python = ">=3.12"
+dependencies = [
+    # Web framework
+    "fastapi>=0.115",
+    "uvicorn[standard]",
+
+    # Database
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg",
+    "alembic",
+    "pgvector",
+
+    # LLM SDKs
+    "anthropic>=0.40",
+    "openai>=1.50",
+
+    # Async tasks
+    "celery[redis]",
+    "redis",
+
+    # Security
+    "cryptography",
+
+    # Utils
+    "pydantic>=2.0",
+    "pydantic-settings",
+    "httpx",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "testcontainers[postgres]",
+    "fakeredis[lua]",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

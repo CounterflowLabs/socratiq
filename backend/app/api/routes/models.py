@@ -1,10 +1,15 @@
 """API routes for LLM model configuration management."""
 
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db
+from app.api.deps import get_db, get_current_user
 from app.config import get_settings
+from app.db.models.model_config import ModelConfig
+from app.db.models.user import User
 from app.models.model_schemas import (
     ModelConfigCreate,
     ModelConfigResponse,
@@ -13,7 +18,7 @@ from app.models.model_schemas import (
 )
 from app.services.llm.config import ModelConfigManager
 
-router = APIRouter(prefix="/api/models", tags=["models"])
+router = APIRouter(prefix="/api/v1/models", tags=["models"])
 
 
 def _get_config_manager() -> ModelConfigManager:
@@ -22,10 +27,16 @@ def _get_config_manager() -> ModelConfigManager:
 
 @router.get("", response_model=list[ModelConfigResponse])
 async def list_models(
+    user: Annotated[User, Depends(get_current_user)],
     db: AsyncSession = Depends(get_db),
     manager: ModelConfigManager = Depends(_get_config_manager),
 ):
-    models = await manager.get_all_models(db)
+    result = await db.execute(
+        select(ModelConfig)
+        .where(or_(ModelConfig.user_id == user.id, ModelConfig.user_id.is_(None)))
+        .order_by(ModelConfig.name)
+    )
+    models = list(result.scalars().all())
     return [
         ModelConfigResponse(
             name=m.name,
@@ -45,6 +56,7 @@ async def list_models(
 @router.post("", response_model=ModelConfigResponse, status_code=201)
 async def create_model(
     data: ModelConfigCreate,
+    user: Annotated[User, Depends(get_current_user)],
     db: AsyncSession = Depends(get_db),
     manager: ModelConfigManager = Depends(_get_config_manager),
 ):
@@ -63,6 +75,9 @@ async def create_model(
         supports_streaming=data.supports_streaming,
         max_tokens_limit=data.max_tokens_limit,
     )
+    model.user_id = user.id
+    await db.flush()
+
     return ModelConfigResponse(
         name=model.name,
         provider_type=model.provider_type,
@@ -80,9 +95,21 @@ async def create_model(
 async def update_model(
     name: str,
     data: ModelConfigUpdate,
+    user: Annotated[User, Depends(get_current_user)],
     db: AsyncSession = Depends(get_db),
     manager: ModelConfigManager = Depends(_get_config_manager),
 ):
+    # Allow updating own models or system models
+    result = await db.execute(
+        select(ModelConfig).where(
+            ModelConfig.name == name,
+            or_(ModelConfig.user_id == user.id, ModelConfig.user_id.is_(None)),
+        )
+    )
+    model_obj = result.scalar_one_or_none()
+    if not model_obj:
+        raise HTTPException(status_code=404, detail=f"Model '{name}' not found")
+
     update_data = data.model_dump(exclude_unset=True)
     model = await manager.update_model(db, name, **update_data)
     if not model:
@@ -104,17 +131,29 @@ async def update_model(
 @router.delete("/{name}", status_code=204)
 async def delete_model(
     name: str,
+    user: Annotated[User, Depends(get_current_user)],
     db: AsyncSession = Depends(get_db),
     manager: ModelConfigManager = Depends(_get_config_manager),
 ):
-    deleted = await manager.delete_model(db, name)
-    if not deleted:
+    # Only allow deleting own models, not system models
+    result = await db.execute(
+        select(ModelConfig).where(
+            ModelConfig.name == name,
+            ModelConfig.user_id == user.id,
+        )
+    )
+    model_obj = result.scalar_one_or_none()
+    if not model_obj:
         raise HTTPException(status_code=404, detail=f"Model '{name}' not found")
+
+    await db.delete(model_obj)
+    await db.flush()
 
 
 @router.post("/{name}/test", response_model=ModelTestResponse)
 async def test_model(
     name: str,
+    user: Annotated[User, Depends(get_current_user)],
     db: AsyncSession = Depends(get_db),
     manager: ModelConfigManager = Depends(_get_config_manager),
 ):
@@ -123,7 +162,14 @@ async def test_model(
     from app.services.llm.openai_compat import OpenAICompatProvider
     from app.services.llm.base import UnifiedMessage, LLMError
 
-    model = await manager.get_model_by_name(db, name)
+    # Allow testing own models or system models
+    result = await db.execute(
+        select(ModelConfig).where(
+            ModelConfig.name == name,
+            or_(ModelConfig.user_id == user.id, ModelConfig.user_id.is_(None)),
+        )
+    )
+    model = result.scalar_one_or_none()
     if not model:
         raise HTTPException(status_code=404, detail=f"Model '{name}' not found")
 

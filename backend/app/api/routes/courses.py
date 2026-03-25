@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db, get_model_router
+from app.api.deps import get_db, get_current_user, get_model_router
 from app.db.models.course import Course, CourseSource, Section
 from app.models.course import (
     CourseGenerateRequest,
@@ -19,13 +19,16 @@ from app.models.course import (
 from app.services.course_generator import CourseGenerator
 from app.services.llm.router import ModelRouter
 
-router = APIRouter(prefix="/api/courses", tags=["courses"])
+from app.db.models.user import User
+
+router = APIRouter(prefix="/api/v1/courses", tags=["courses"])
 
 
 @router.post("/generate", response_model=CourseResponse, status_code=201)
 async def generate_course(
     request: CourseGenerateRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
     model_router: Annotated[ModelRouter, Depends(get_model_router)],
 ) -> CourseResponse:
     """Generate a course from one or more ingested sources."""
@@ -35,6 +38,7 @@ async def generate_course(
             db=db,
             source_ids=request.source_ids,
             title=request.title,
+            user_id=user.id,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -51,14 +55,23 @@ async def generate_course(
 @router.get("", response_model=CourseListResponse)
 async def list_courses(
     db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
     skip: int = 0,
     limit: int = 20,
 ) -> CourseListResponse:
     """List all courses with pagination."""
     result = await db.execute(
-        select(Course).order_by(Course.created_at.desc()).offset(skip).limit(limit)
+        select(Course)
+        .where(Course.created_by == user.id)
+        .order_by(Course.created_at.desc())
+        .offset(skip)
+        .limit(limit)
     )
     courses = result.scalars().all()
+
+    total = (await db.execute(
+        select(func.count()).select_from(Course).where(Course.created_by == user.id)
+    )).scalar()
 
     return CourseListResponse(
         items=[
@@ -71,7 +84,7 @@ async def list_courses(
             )
             for c in courses
         ],
-        total=(await db.execute(select(func.count()).select_from(Course))).scalar(),
+        total=total,
         skip=skip,
         limit=limit,
     )
@@ -81,9 +94,13 @@ async def list_courses(
 async def get_course(
     course_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> CourseDetailResponse:
     """Get a course with its sections."""
-    course = await db.get(Course, course_id)
+    result = await db.execute(
+        select(Course).where(Course.id == course_id, Course.created_by == user.id)
+    )
+    course = result.scalar_one_or_none()
     if not course:
         raise HTTPException(404, f"Course {course_id} not found")
 

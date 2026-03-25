@@ -1,14 +1,17 @@
 """API routes for LLM model routing configuration."""
 
+from typing import Annotated
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db
+from app.api.deps import get_db, get_current_user
 from app.config import get_settings
+from app.db.models.user import User
 from app.models.model_schemas import ModelRouteResponse, ModelRouteUpdate
 from app.services.llm.config import ModelConfigManager
 
-router = APIRouter(prefix="/api/model-routes", tags=["model-routes"])
+router = APIRouter(prefix="/api/v1/model-routes", tags=["model-routes"])
 
 
 def _get_config_manager() -> ModelConfigManager:
@@ -17,6 +20,7 @@ def _get_config_manager() -> ModelConfigManager:
 
 @router.get("", response_model=list[ModelRouteResponse])
 async def get_routes(
+    user: Annotated[User, Depends(get_current_user)],
     db: AsyncSession = Depends(get_db),
     manager: ModelConfigManager = Depends(_get_config_manager),
 ):
@@ -30,6 +34,7 @@ async def get_routes(
 @router.put("", response_model=list[ModelRouteResponse])
 async def update_routes(
     routes: list[ModelRouteUpdate],
+    user: Annotated[User, Depends(get_current_user)],
     db: AsyncSession = Depends(get_db),
     manager: ModelConfigManager = Depends(_get_config_manager),
 ):

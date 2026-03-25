@@ -88,7 +88,8 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
 
 @pytest_asyncio.fixture
 async def demo_user(db_session):
-    """Insert the demo user needed for chat/conversation endpoints."""
+    """Insert a demo user. Kept for backward compatibility but most tests
+    now register real users via the auth API."""
     user = User(
         id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
         email="demo@test.com",

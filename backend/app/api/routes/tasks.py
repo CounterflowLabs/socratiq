@@ -5,7 +5,7 @@ from celery.result import AsyncResult
 
 from app.worker.celery_app import celery_app
 
-router = APIRouter(prefix="/api/tasks", tags=["tasks"])
+router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
 
 
 @router.get("/{task_id}/status")

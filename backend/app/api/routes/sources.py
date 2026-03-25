@@ -8,19 +8,21 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db
+from app.api.deps import get_db, get_current_user
 from app.config import get_settings
 from app.db.models.source import Source
+from app.db.models.user import User
 from app.models.source import SourceResponse, SourceListResponse
 from app.worker.tasks.content_ingestion import ingest_source
 
-router = APIRouter(prefix="/api/sources", tags=["sources"])
+router = APIRouter(prefix="/api/v1/sources", tags=["sources"])
 
 
 
 @router.post("", response_model=SourceResponse, status_code=201)
 async def create_source(
     db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
     url: str | None = Form(None),
     source_type: str | None = Form(None),
     title: str | None = Form(None),
@@ -66,6 +68,7 @@ async def create_source(
         title=title,
         status="pending",
         metadata_=metadata,
+        created_by=user.id,
     )
     db.add(source)
     await db.commit()
@@ -88,16 +91,23 @@ async def create_source(
 @router.get("", response_model=SourceListResponse)
 async def list_sources(
     db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
     skip: int = 0,
     limit: int = 20,
 ) -> SourceListResponse:
     """List all content sources with pagination."""
     result = await db.execute(
-        select(Source).order_by(Source.created_at.desc()).offset(skip).limit(limit)
+        select(Source)
+        .where(Source.created_by == user.id)
+        .order_by(Source.created_at.desc())
+        .offset(skip)
+        .limit(limit)
     )
     sources = result.scalars().all()
 
-    count_result = await db.execute(select(func.count()).select_from(Source))
+    count_result = await db.execute(
+        select(func.count()).select_from(Source).where(Source.created_by == user.id)
+    )
     total = count_result.scalar()
 
     return SourceListResponse(
@@ -112,9 +122,13 @@ async def list_sources(
 async def get_source(
     source_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> SourceResponse:
     """Get a single source by ID."""
-    source = await db.get(Source, source_id)
+    result = await db.execute(
+        select(Source).where(Source.id == source_id, Source.created_by == user.id)
+    )
+    source = result.scalar_one_or_none()
     if not source:
         raise HTTPException(404, f"Source {source_id} not found")
     return _source_to_response(source)

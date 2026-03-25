@@ -9,10 +9,11 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
-from app.api.deps import get_db, get_model_router
+from app.api.deps import get_db, get_current_user, get_model_router
 from app.db.database import async_session_factory
 from app.db.models.conversation import Conversation
 from app.db.models.message import Message
+from app.db.models.user import User
 from app.models.chat import (
     ChatRequest,
     ConversationResponse,
@@ -29,17 +30,15 @@ from app.services.rag import RAGService
 
 router = APIRouter(tags=["chat"])
 
-# Hardcoded demo user ID for MVP (auth will be added later)
-DEMO_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
-
-@router.post("/api/chat")
+@router.post("/api/v1/chat")
 async def chat(
     request: ChatRequest,
+    user: Annotated[User, Depends(get_current_user)],
     model_router: Annotated[ModelRouter, Depends(get_model_router)],
 ):
     """Send a message to the MentorAgent and receive an SSE stream."""
-    user_id = DEMO_USER_ID
+    user_id = user.id
 
     async def event_generator():
         async with async_session_factory() as db:
@@ -134,18 +133,17 @@ async def chat(
     return EventSourceResponse(event_generator())
 
 
-@router.get("/api/conversations", response_model=ConversationListResponse)
+@router.get("/api/v1/conversations", response_model=ConversationListResponse)
 async def list_conversations(
     db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
     skip: int = 0,
     limit: int = 20,
 ):
     """List conversations for the current user."""
-    user_id = DEMO_USER_ID
-
     result = await db.execute(
         select(Conversation)
-        .where(Conversation.user_id == user_id)
+        .where(Conversation.user_id == user.id)
         .order_by(Conversation.created_at.desc())
         .offset(skip)
         .limit(limit)
@@ -168,20 +166,21 @@ async def list_conversations(
 
     # Fix total count
     count_result = await db.execute(
-        select(func.count(Conversation.id)).where(Conversation.user_id == user_id)
+        select(func.count(Conversation.id)).where(Conversation.user_id == user.id)
     )
     total = count_result.scalar()
     return ConversationListResponse(items=items, total=total)
 
 
-@router.get("/api/conversations/{conversation_id}/messages")
+@router.get("/api/v1/conversations/{conversation_id}/messages")
 async def get_conversation_messages(
     conversation_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> list[MessageResponse]:
     """Get all messages in a conversation."""
     conversation = await db.get(Conversation, conversation_id)
-    if not conversation or conversation.user_id != DEMO_USER_ID:
+    if not conversation or conversation.user_id != user.id:
         raise HTTPException(404, "Conversation not found")
 
     result = await db.execute(

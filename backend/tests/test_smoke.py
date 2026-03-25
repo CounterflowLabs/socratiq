@@ -120,6 +120,22 @@ class TestSources:
             assert res.json()["id"] == source_id
 
     @pytest.mark.asyncio
+    async def test_create_youtube_source(self, client: AsyncClient):
+        with patch("app.api.routes.sources.ingest_source") as mock_task:
+            mock_result = MagicMock()
+            mock_result.id = "fake-yt-task"
+            mock_task.delay.return_value = mock_result
+
+            res = await client.post("/api/sources", data={
+                "url": "https://www.youtube.com/watch?v=kCc8FmEb1nY",
+            })
+            assert res.status_code == 201
+            data = res.json()
+            assert data["type"] == "youtube"
+            assert data["status"] == "pending"
+            assert data["task_id"] == "fake-yt-task"
+
+    @pytest.mark.asyncio
     async def test_no_input_returns_400(self, client: AsyncClient):
         res = await client.post("/api/sources", data={})
         assert res.status_code in (400, 422)

@@ -28,7 +28,8 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isDesktop, setIsDesktop] = useState(false);
 
-  const showSidebar = SIDEBAR_PAGES.includes(pathname);
+  const showDesktopSidebar = SIDEBAR_PAGES.includes(pathname);
+  const hideSidebarEntirely = pathname === "/login" || pathname === "/setup";
 
   // Close mobile sidebar on route change
   useEffect(() => {
@@ -44,11 +45,11 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
     return () => mq.removeEventListener("change", handler);
   }, []);
 
-  if (!showSidebar) {
+  if (hideSidebarEntirely) {
     return <>{children}</>;
   }
 
-  const marginLeft = isDesktop ? (collapsed ? 64 : 224) : 0;
+  const marginLeft = isDesktop && showDesktopSidebar ? (collapsed ? 64 : 224) : 0;
 
   return (
     <div className="app-layout">
@@ -59,7 +60,7 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
         onMobileToggle={() => setMobileOpen(!mobileOpen)}
       />
       <main
-        className="main-content transition-[margin] duration-200"
+        className="main-content transition-[margin] duration-200 min-h-screen"
         style={{ marginLeft }}
       >
         {children}

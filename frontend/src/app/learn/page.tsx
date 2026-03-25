@@ -1,8 +1,9 @@
 "use client";
 
-import { Suspense, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import ReactMarkdown from "react-markdown";
 import {
   ChevronLeft,
@@ -16,6 +17,8 @@ import {
   Brain,
   Send,
   Plus,
+  Languages,
+  Loader2,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,10 +26,20 @@ import { clsx } from "clsx";
 import {
   streamChat,
   getCourse,
+  estimateTranslation,
+  translateSection,
+  getKnowledgeGraph,
   type CourseDetailResponse,
   type SectionResponse,
+  type KnowledgeGraphNode,
+  type KnowledgeGraphEdge,
 } from "@/lib/api";
 import { useChatStore } from "@/lib/stores";
+
+const ForceGraph = dynamic(
+  () => import("@/components/knowledge-graph/force-graph"),
+  { ssr: false }
+);
 
 const QUICK_PROMPTS = [
   "这个概念能再解释一下吗？",
@@ -56,6 +69,28 @@ function LearnPageInner() {
   const [activeTab, setActiveTab] = useState("chat");
   const chatEndRef = useRef<HTMLDivElement>(null);
 
+  // Translation state
+  const [showTranslation, setShowTranslation] = useState(false);
+  const [translationLoading, setTranslationLoading] = useState(false);
+  const [translationEstimate, setTranslationEstimate] = useState<{
+    chunks_total: number;
+    chunks_cached: number;
+    chunks_to_translate: number;
+    estimated_tokens: number;
+    estimated_cost_usd: number;
+  } | null>(null);
+  const [translations, setTranslations] = useState<
+    { chunk_id: string; translated_text: string | null }[]
+  >([]);
+  const [translationError, setTranslationError] = useState<string | null>(null);
+
+  // Knowledge graph state
+  const [graphNodes, setGraphNodes] = useState<KnowledgeGraphNode[]>([]);
+  const [graphEdges, setGraphEdges] = useState<KnowledgeGraphEdge[]>([]);
+  const [graphLoading, setGraphLoading] = useState(false);
+  const [graphLoaded, setGraphLoaded] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+
   // Load course and section data
   useEffect(() => {
     if (courseId) {
@@ -77,6 +112,101 @@ function LearnPageInner() {
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // Detect mobile
+  useEffect(() => {
+    const checkMobile = () => setIsMobile(window.innerWidth < 768);
+    checkMobile();
+    window.addEventListener("resize", checkMobile);
+    return () => window.removeEventListener("resize", checkMobile);
+  }, []);
+
+  // Reset translation when section changes
+  useEffect(() => {
+    setShowTranslation(false);
+    setTranslations([]);
+    setTranslationEstimate(null);
+    setTranslationError(null);
+  }, [section?.id]);
+
+  // Load knowledge graph when concepts tab is selected
+  useEffect(() => {
+    if (activeTab === "concepts" && courseId && !graphLoaded) {
+      setGraphLoading(true);
+      getKnowledgeGraph(courseId)
+        .then((data) => {
+          setGraphNodes(data.nodes);
+          setGraphEdges(data.edges);
+          setGraphLoaded(true);
+        })
+        .catch(() => {
+          setGraphNodes([]);
+          setGraphEdges([]);
+          setGraphLoaded(true);
+        })
+        .finally(() => setGraphLoading(false));
+    }
+  }, [activeTab, courseId, graphLoaded]);
+
+  async function handleTranslationToggle() {
+    if (showTranslation) {
+      setShowTranslation(false);
+      return;
+    }
+    if (!section) return;
+
+    // If we already have translations, just toggle on
+    if (translations.length > 0) {
+      setShowTranslation(true);
+      return;
+    }
+
+    // First, get estimate
+    setTranslationLoading(true);
+    setTranslationError(null);
+    try {
+      const estimate = await estimateTranslation(section.id);
+      setTranslationEstimate(estimate);
+
+      // If all cached or low cost, auto-translate
+      if (estimate.chunks_to_translate === 0 || estimate.estimated_cost_usd < 0.01) {
+        const result = await translateSection(section.id);
+        setTranslations(result.translations);
+        setShowTranslation(true);
+        setTranslationEstimate(null);
+      }
+      // Otherwise estimate is shown, user confirms via confirmTranslation
+    } catch (e) {
+      setTranslationError(e instanceof Error ? e.message : "翻译失败");
+    } finally {
+      setTranslationLoading(false);
+    }
+  }
+
+  async function confirmTranslation() {
+    if (!section) return;
+    setTranslationLoading(true);
+    setTranslationError(null);
+    try {
+      const result = await translateSection(section.id);
+      setTranslations(result.translations);
+      setShowTranslation(true);
+      setTranslationEstimate(null);
+    } catch (e) {
+      setTranslationError(e instanceof Error ? e.message : "翻译失败");
+    } finally {
+      setTranslationLoading(false);
+    }
+  }
+
+  const handleNodeClick = useCallback(
+    (node: KnowledgeGraphNode) => {
+      if (node.section_id && courseId) {
+        router.push(`/learn?courseId=${courseId}&sectionId=${node.section_id}`);
+      }
+    },
+    [courseId, router]
+  );
 
   async function sendMessage() {
     if (!input.trim() || isStreaming) return;
@@ -189,6 +319,64 @@ function LearnPageInner() {
               </div>
             )}
           </div>
+
+          {/* Translation toggle + content */}
+          <div className="px-4 pt-3 pb-1 flex items-center gap-2 flex-shrink-0 border-b border-gray-100">
+            <Button
+              variant={showTranslation ? "accent" : "secondary"}
+              size="sm"
+              onClick={handleTranslationToggle}
+              disabled={translationLoading || !section}
+            >
+              {translationLoading ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Languages className="w-3.5 h-3.5" />
+              )}
+              {showTranslation ? "隐藏翻译" : "翻译为中文"}
+            </Button>
+            {translationError && (
+              <span className="text-xs text-red-500">{translationError}</span>
+            )}
+          </div>
+
+          {/* Translation estimate confirmation */}
+          {translationEstimate && !showTranslation && (
+            <div className="px-4 py-3 bg-blue-50 border-b border-blue-100 flex-shrink-0">
+              <p className="text-xs text-blue-700 mb-2">
+                需要翻译 {translationEstimate.chunks_to_translate} 个片段
+                （已缓存 {translationEstimate.chunks_cached} 个），
+                预计消耗 ~{translationEstimate.estimated_tokens.toLocaleString()} tokens
+                （${translationEstimate.estimated_cost_usd.toFixed(4)}）
+              </p>
+              <div className="flex gap-2">
+                <Button size="sm" onClick={confirmTranslation} disabled={translationLoading}>
+                  确认翻译
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setTranslationEstimate(null)}
+                >
+                  取消
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* Inline translations */}
+          {showTranslation && translations.length > 0 && (
+            <div className="px-4 py-3 bg-amber-50/50 border-b border-amber-100 max-h-48 overflow-y-auto flex-shrink-0">
+              <h4 className="text-xs font-semibold text-amber-700 mb-2">中文翻译</h4>
+              <div className="space-y-2">
+                {translations.map((t) => (
+                  <p key={t.chunk_id} className="text-sm text-gray-700 leading-relaxed">
+                    {t.translated_text ?? "（翻译不可用）"}
+                  </p>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Chapter navigation */}
           <div className="flex-1 overflow-y-auto p-4">
@@ -380,13 +568,60 @@ function LearnPageInner() {
 
           {/* Concepts Tab */}
           {activeTab === "concepts" && (
-            <div className="flex-1 p-4 overflow-y-auto">
-              <div className="text-center py-8">
-                <BookOpen className="w-8 h-8 text-gray-300 mx-auto mb-2" />
-                <p className="text-sm text-gray-400">
-                  概念图谱将在学习过程中自动生成
-                </p>
-              </div>
+            <div className="flex-1 p-4 overflow-hidden flex flex-col">
+              {graphLoading && (
+                <div className="text-center py-8">
+                  <Loader2 className="w-8 h-8 text-gray-300 mx-auto mb-2 animate-spin" />
+                  <p className="text-sm text-gray-400">加载概念图谱...</p>
+                </div>
+              )}
+              {!graphLoading && graphNodes.length === 0 && (
+                <div className="text-center py-8">
+                  <BookOpen className="w-8 h-8 text-gray-300 mx-auto mb-2" />
+                  <p className="text-sm text-gray-400">暂无概念数据</p>
+                </div>
+              )}
+              {!graphLoading && graphNodes.length > 0 && !isMobile && (
+                <div className="flex-1 min-h-0">
+                  <ForceGraph
+                    nodes={graphNodes}
+                    edges={graphEdges}
+                    onNodeClick={handleNodeClick}
+                  />
+                </div>
+              )}
+              {!graphLoading && graphNodes.length > 0 && isMobile && (
+                <div className="flex-1 overflow-y-auto space-y-2">
+                  {graphNodes.map((node) => (
+                    <button
+                      key={node.id}
+                      onClick={() => handleNodeClick(node)}
+                      className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-50 transition-colors text-left bg-transparent"
+                    >
+                      <span className="text-sm font-medium text-gray-800 flex-1">
+                        {node.label}
+                      </span>
+                      <div className="w-20 h-2 bg-gray-200 rounded-full overflow-hidden">
+                        <div
+                          className="h-full rounded-full"
+                          style={{
+                            width: `${Math.round(node.mastery * 100)}%`,
+                            backgroundColor:
+                              node.mastery >= 0.7
+                                ? "#22c55e"
+                                : node.mastery >= 0.3
+                                  ? "#eab308"
+                                  : "#ef4444",
+                          }}
+                        />
+                      </div>
+                      <span className="text-xs text-gray-400 w-8 text-right">
+                        {Math.round(node.mastery * 100)}%
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>

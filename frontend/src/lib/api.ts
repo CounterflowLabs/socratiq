@@ -356,3 +356,49 @@ export async function getReviewStats(): Promise<{ due_today: number; completed_t
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
+
+// ─── Translation APIs ───────────────────────────────
+export async function estimateTranslation(sectionId: string, target: string = "zh"): Promise<{
+  chunks_total: number;
+  chunks_cached: number;
+  chunks_to_translate: number;
+  estimated_tokens: number;
+  estimated_cost_usd: number;
+}> {
+  const res = await fetch(`${API_BASE}/sections/${sectionId}/translate/estimate?target=${target}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function translateSection(sectionId: string, target: string = "zh"): Promise<{
+  translations: { chunk_id: string; translated_text: string | null }[];
+  total: number;
+}> {
+  const res = await fetch(`${API_BASE}/sections/${sectionId}/translate?target=${target}`, { method: "POST" });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+// ─── Knowledge Graph API ────────────────────────────
+export interface KnowledgeGraphNode {
+  id: string;
+  label: string;
+  category: string | null;
+  mastery: number;
+  section_id: string | null;
+}
+
+export interface KnowledgeGraphEdge {
+  source: string;
+  target: string;
+  relationship: string;
+}
+
+export async function getKnowledgeGraph(courseId: string, maxDepth: number = 2): Promise<{
+  nodes: KnowledgeGraphNode[];
+  edges: KnowledgeGraphEdge[];
+}> {
+  const res = await fetch(`${API_BASE}/courses/${courseId}/knowledge-graph?max_depth=${maxDepth}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}

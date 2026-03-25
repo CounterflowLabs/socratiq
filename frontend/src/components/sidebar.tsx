@@ -7,7 +7,7 @@ import { clsx } from "clsx";
 
 const items = [
   { id: "/", label: "首页", icon: Home },
-  { id: "/import", label: "导入资料", icon: BookOpen },
+  { id: "/import", label: "导入资料", icon: Search },
   { id: "/settings", label: "设置", icon: Settings },
 ];
 
@@ -26,19 +26,21 @@ export function Sidebar({
 
   return (
     <>
-      {/* Mobile hamburger button */}
-      <button
-        onClick={onMobileToggle}
-        className="fixed top-3 left-3 z-50 flex md:hidden items-center justify-center w-11 h-11 rounded-lg bg-white border border-gray-200 shadow-sm text-gray-600 hover:bg-gray-50"
-        aria-label="打开菜单"
-      >
-        <Menu className="w-5 h-5" />
-      </button>
+      {/* Mobile hamburger button — hidden when sidebar is open */}
+      {!mobileOpen && (
+        <button
+          onClick={onMobileToggle}
+          className="fixed top-3 left-3 z-40 flex md:hidden items-center justify-center w-11 h-11 rounded-lg bg-white border border-gray-200 shadow-sm text-gray-600 hover:bg-gray-50"
+          aria-label="打开菜单"
+        >
+          <Menu className="w-5 h-5" />
+        </button>
+      )}
 
       {/* Mobile overlay backdrop */}
       {mobileOpen && (
         <div
-          className="fixed inset-0 z-40 bg-black/40 md:hidden"
+          className="fixed inset-0 z-50 bg-black/40 md:hidden"
           onClick={onMobileToggle}
         />
       )}
@@ -46,7 +48,7 @@ export function Sidebar({
       {/* Sidebar — desktop: always visible; mobile: slide-in overlay */}
       <aside
         className={clsx(
-          "fixed left-0 top-0 h-full bg-white border-r border-gray-200 z-50 transition-all duration-200 flex flex-col",
+          "fixed left-0 top-0 h-full bg-white border-r border-gray-200 z-[60] transition-all duration-200 flex flex-col",
           // Desktop
           "hidden md:flex",
           collapsed ? "md:w-16" : "md:w-56",

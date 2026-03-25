@@ -5,6 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.db.database import engine
 from app.api.routes import auth, health, models, model_routes, tasks, sources, courses, chat
+from app.api.middleware.correlation import CorrelationIdMiddleware
+from app.api.middleware.rate_limit import RateLimitMiddleware
 
 
 @asynccontextmanager
@@ -15,6 +17,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="LearnMentor", version="0.1.0", lifespan=lifespan)
 
+app.add_middleware(RateLimitMiddleware)
+app.add_middleware(CorrelationIdMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],

@@ -18,9 +18,10 @@ export default function SetupPage() {
   const [success, setSuccess] = useState("");
 
   // Manual form state
-  const [provider, setProvider] = useState<"anthropic" | "openai">("anthropic");
+  const [provider, setProvider] = useState<"anthropic" | "openai" | "openai_compatible">("anthropic");
   const [apiKey, setApiKey] = useState("");
   const [modelId, setModelId] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [testing, setTesting] = useState(false);
 
@@ -73,12 +74,15 @@ export default function SetupPage() {
     setTestResult(null);
     try {
       const defaultModelId = modelId ||
-        (provider === "anthropic" ? "claude-haiku-4-20250414" : "gpt-4o-mini");
+        (provider === "anthropic" ? "claude-haiku-4-20250414"
+          : provider === "openai" ? "gpt-4o-mini"
+          : "deepseek-chat");
       const created = await createModel({
         name: `${provider}-default`,
         provider_type: provider,
         model_id: defaultModelId,
         api_key: apiKey || undefined,
+        base_url: baseUrl || undefined,
       });
       // Auto-test after creation
       setTesting(true);
@@ -232,14 +236,16 @@ export default function SetupPage() {
                 <select
                   value={provider}
                   onChange={(e) => {
-                    setProvider(e.target.value as "anthropic" | "openai");
+                    setProvider(e.target.value as "anthropic" | "openai" | "openai_compatible");
                     setModelId("");
+                    setBaseUrl("");
                     setTestResult(null);
                   }}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
                   <option value="anthropic">Anthropic (Claude)</option>
                   <option value="openai">OpenAI (GPT)</option>
+                  <option value="openai_compatible">OpenAI 兼容（DeepSeek / 通义千问 / Moonshot 等）</option>
                 </select>
               </div>
 
@@ -255,6 +261,25 @@ export default function SetupPage() {
                 />
               </div>
 
+              {provider === "openai_compatible" && (
+                <div>
+                  <label className="block text-xs text-gray-600 mb-1.5">
+                    Base URL <span className="text-red-400">*</span>
+                  </label>
+                  <input
+                    type="url"
+                    value={baseUrl}
+                    onChange={(e) => setBaseUrl(e.target.value)}
+                    placeholder="https://api.deepseek.com/v1"
+                    required
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <p className="text-xs text-gray-400 mt-1">
+                    DeepSeek: https://api.deepseek.com/v1 · 通义千问: https://dashscope.aliyuncs.com/compatible-mode/v1 · Moonshot: https://api.moonshot.cn/v1
+                  </p>
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs text-gray-600 mb-1.5">
                   模型 ID（可选，默认使用推荐模型）
@@ -266,7 +291,9 @@ export default function SetupPage() {
                   placeholder={
                     provider === "anthropic"
                       ? "claude-haiku-4-20250414"
-                      : "gpt-4o-mini"
+                      : provider === "openai"
+                      ? "gpt-4o-mini"
+                      : "deepseek-chat"
                   }
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />

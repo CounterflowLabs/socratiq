@@ -257,3 +257,102 @@ export async function testModel(name: string): Promise<{
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
+
+// ─── Diagnostic APIs ────────────────────────────────
+export interface DiagnosticQuestion {
+  id: string;
+  concept_id: string;
+  question: string;
+  options: string[];
+  correct_index: number;
+  difficulty: number;
+}
+
+export interface DiagnosticResult {
+  level: string;
+  mastered_concepts: string[];
+  gaps: string[];
+  score: number;
+}
+
+export async function generateDiagnostic(courseId: string): Promise<{
+  questions: DiagnosticQuestion[];
+  concept_map: Record<string, string>;
+}> {
+  const res = await fetch(`${API_BASE}/courses/${courseId}/diagnostic/generate`, { method: "POST" });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function submitDiagnostic(
+  courseId: string,
+  questions: { id: string; correct_index: number; concept_name: string }[],
+  answers: { question_id: string; selected_answer: number; time_spent_seconds: number }[],
+): Promise<DiagnosticResult> {
+  const res = await fetch(`${API_BASE}/courses/${courseId}/diagnostic/submit`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ questions, answers }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+// ─── Exercise APIs ──────────────────────────────────
+export interface ExerciseResponse {
+  id: string;
+  type: "mcq" | "code" | "open";
+  question: string;
+  options?: string[];
+  difficulty: number;
+  section_id: string;
+}
+
+export interface SubmissionResult {
+  submission_id: string;
+  score: number | null;
+  feedback: string;
+  explanation: string;
+}
+
+export async function getSectionExercises(sectionId: string): Promise<{ exercises: ExerciseResponse[] }> {
+  const res = await fetch(`${API_BASE}/exercises/section/${sectionId}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function submitExercise(exerciseId: string, answer: string): Promise<SubmissionResult> {
+  const res = await fetch(`${API_BASE}/exercises/${exerciseId}/submit`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ answer }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+// ─── Review APIs ────────────────────────────────────
+export async function getDueReviews(): Promise<{
+  items: { id: string; concept_id: string; easiness: number; interval_days: number; repetitions: number; review_at: string }[];
+  count: number;
+}> {
+  const res = await fetch(`${API_BASE}/reviews/due`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function completeReview(reviewId: string, quality: number): Promise<unknown> {
+  const res = await fetch(`${API_BASE}/reviews/${reviewId}/complete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ quality }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getReviewStats(): Promise<{ due_today: number; completed_today: number }> {
+  const res = await fetch(`${API_BASE}/reviews/stats`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}

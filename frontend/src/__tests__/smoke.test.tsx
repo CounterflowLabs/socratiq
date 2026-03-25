@@ -59,6 +59,7 @@ describe("Dashboard", () => {
   it("shows empty state when no courses", async () => {
     globalThis.fetch = mockFetch({
       "/api/v1/courses": { items: [], total: 0, skip: 0, limit: 20 },
+      "/api/v1/reviews/stats": { due_today: 0, completed_today: 0 },
     });
 
     const DashboardPage = (await import("@/app/page")).default;
@@ -85,6 +86,7 @@ describe("Dashboard", () => {
         skip: 0,
         limit: 20,
       },
+      "/api/v1/reviews/stats": { due_today: 3, completed_today: 1 },
     });
 
     const DashboardPage = (await import("@/app/page")).default;

@@ -1,17 +1,18 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Brain, Plus, ChevronRight, BookOpen, Loader } from "lucide-react";
+import { Brain, Plus, ChevronRight, BookOpen, Loader, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { listCourses, type CourseResponse } from "@/lib/api";
+import { listCourses, getReviewStats, type CourseResponse } from "@/lib/api";
 import { useCoursesStore } from "@/lib/stores";
 
 export default function DashboardPage() {
   const router = useRouter();
   const { courses, setCourses, loading, setLoading } = useCoursesStore();
+  const [reviewStats, setReviewStats] = useState<{ due_today: number; completed_today: number } | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -19,6 +20,9 @@ export default function DashboardPage() {
       .then((res) => setCourses(res.items))
       .catch(console.error)
       .finally(() => setLoading(false));
+    getReviewStats()
+      .then(setReviewStats)
+      .catch(() => {}); // silently ignore if review API not available
   }, [setCourses, setLoading]);
 
   return (
@@ -29,6 +33,30 @@ export default function DashboardPage() {
           <h1 className="text-xl font-bold text-gray-900">LearnMentor</h1>
           <p className="text-sm text-gray-500 mt-1">AI 驱动的个性化学习平台</p>
         </div>
+
+        {/* Review card */}
+        {reviewStats && (reviewStats.due_today > 0 || reviewStats.completed_today > 0) && (
+          <Card className="p-4 mb-6">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-violet-50 flex items-center justify-center">
+                  <RefreshCw className="w-5 h-5 text-violet-600" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-semibold text-gray-900">今日复习</h3>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    待复习: {reviewStats.due_today} 题 · 已完成: {reviewStats.completed_today} 题
+                  </p>
+                </div>
+              </div>
+              {reviewStats.due_today > 0 && (
+                <Link href="/learn">
+                  <Button size="sm" variant="accent">开始复习</Button>
+                </Link>
+              )}
+            </div>
+          </Card>
+        )}
 
         {/* Active courses header */}
         <div className="flex items-center justify-between mb-4">

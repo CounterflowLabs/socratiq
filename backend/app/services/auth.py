@@ -5,6 +5,8 @@ from uuid import UUID
 
 import bcrypt
 import jwt
+from sqlalchemy import update as sa_update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 class AuthService:
@@ -95,3 +97,31 @@ class AuthService:
             }
         except Exception as e:
             raise ValueError(f"Invalid Google token: {e}")
+
+
+async def maybe_claim_demo_data(new_user_id: UUID, db: AsyncSession) -> bool:
+    """Transfer demo user data to the new user if applicable."""
+    from app.db.models.user import User
+    from app.db.models.source import Source
+    from app.db.models.conversation import Conversation
+
+    DEMO_ID = UUID("00000000-0000-0000-0000-000000000001")
+
+    if new_user_id == DEMO_ID:
+        return False
+
+    demo = await db.get(User, DEMO_ID)
+    if not demo:
+        return False
+
+    # Transfer sources (FK column: created_by)
+    await db.execute(
+        sa_update(Source).where(Source.created_by == DEMO_ID).values(created_by=new_user_id)
+    )
+    # Transfer conversations (FK column: user_id)
+    await db.execute(
+        sa_update(Conversation).where(Conversation.user_id == DEMO_ID).values(user_id=new_user_id)
+    )
+    await db.delete(demo)
+    await db.flush()
+    return True

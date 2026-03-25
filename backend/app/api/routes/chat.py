@@ -21,11 +21,12 @@ from app.models.chat import (
     MessageResponse,
 )
 from app.agent.mentor import MentorAgent
+from app.agent.tools.exercise import ExerciseGenerateTool, ExerciseEvalTool
 from app.agent.tools.knowledge import KnowledgeSearchTool
 from app.agent.tools.profile import ProfileReadTool
 from app.agent.tools.progress import ProgressTrackTool
 from app.services.llm.base import UnifiedMessage
-from app.services.llm.router import ModelRouter
+from app.services.llm.router import ModelRouter, TaskType
 from app.services.rag import RAGService
 
 router = APIRouter(tags=["chat"])
@@ -87,10 +88,13 @@ async def chat(
 
                 # Set up agent
                 rag_service = RAGService(model_router)
+                provider = await model_router.get_provider(TaskType.MENTOR_CHAT)
                 tools = [
                     KnowledgeSearchTool(db=db, rag_service=rag_service, course_id=request.course_id),
                     ProfileReadTool(db=db, user_id=user_id),
                     ProgressTrackTool(db=db, user_id=user_id),
+                    ExerciseGenerateTool(db=db, provider=provider, user_id=user_id),
+                    ExerciseEvalTool(db=db, provider=provider, user_id=user_id),
                 ]
                 agent = MentorAgent(
                     model_router=model_router,

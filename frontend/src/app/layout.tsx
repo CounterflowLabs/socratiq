@@ -6,7 +6,7 @@ import "./globals.css";
 import { Sidebar } from "@/components/sidebar";
 
 // Pages that show the sidebar
-const SIDEBAR_PAGES = ["/", "/courses", "/explore", "/progress", "/settings"];
+const SIDEBAR_PAGES = ["/", "/import", "/settings"];
 
 export default function RootLayout({
   children,

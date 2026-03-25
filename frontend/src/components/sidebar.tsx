@@ -7,9 +7,7 @@ import { clsx } from "clsx";
 
 const items = [
   { id: "/", label: "首页", icon: Home },
-  { id: "/courses", label: "我的课程", icon: BookOpen },
-  { id: "/explore", label: "发现", icon: Search },
-  { id: "/progress", label: "学习统计", icon: BarChart3 },
+  { id: "/import", label: "导入资料", icon: BookOpen },
   { id: "/settings", label: "设置", icon: Settings },
 ];
 

@@ -25,6 +25,15 @@ class Settings(BaseSettings):
     whisper_mode: str = "api"        # "api" = OpenAI Whisper API, "local" = local whisper model
     whisper_model: str = "base"      # local model size: tiny/base/small/medium/large
 
+    # Auth
+    jwt_secret_key: str = "change-me-in-production"
+    jwt_access_expire_minutes: int = 15
+    jwt_refresh_expire_days: int = 7
+    google_client_id: str = ""
+
+    # Observability
+    sentry_dsn: str = ""
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 @lru_cache

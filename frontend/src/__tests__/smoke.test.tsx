@@ -58,7 +58,7 @@ afterEach(() => {
 describe("Dashboard", () => {
   it("shows empty state when no courses", async () => {
     globalThis.fetch = mockFetch({
-      "/api/courses": { items: [], total: 0, skip: 0, limit: 20 },
+      "/api/v1/courses": { items: [], total: 0, skip: 0, limit: 20 },
     });
 
     const DashboardPage = (await import("@/app/page")).default;
@@ -71,7 +71,7 @@ describe("Dashboard", () => {
 
   it("shows course cards when courses exist", async () => {
     globalThis.fetch = mockFetch({
-      "/api/courses": {
+      "/api/v1/courses": {
         items: [
           {
             id: "c1",
@@ -170,14 +170,14 @@ describe("Settings Page", () => {
     ];
 
     globalThis.fetch = vi.fn((url: string) => {
-      if (url.endsWith("/api/model-routes")) {
+      if (url.endsWith("/api/v1/model-routes")) {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve(routesData),
           text: () => Promise.resolve(JSON.stringify(routesData)),
         });
       }
-      if (url.endsWith("/api/models")) {
+      if (url.endsWith("/api/v1/models")) {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve(modelsData),
@@ -203,14 +203,14 @@ describe("Settings Page", () => {
 
   it("shows empty state when no models", async () => {
     globalThis.fetch = vi.fn((url: string) => {
-      if (url.endsWith("/api/model-routes")) {
+      if (url.endsWith("/api/v1/model-routes")) {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve([]),
           text: () => Promise.resolve("[]"),
         });
       }
-      if (url.endsWith("/api/models")) {
+      if (url.endsWith("/api/v1/models")) {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve([]),
@@ -249,7 +249,7 @@ describe("Learn Page", () => {
     }));
 
     globalThis.fetch = mockFetch({
-      "/api/courses/c1": {
+      "/api/v1/courses/c1": {
         id: "c1",
         title: "测试课程",
         description: "desc",
@@ -303,7 +303,7 @@ describe("Path Page", () => {
     }));
 
     globalThis.fetch = mockFetch({
-      "/api/courses/c1": {
+      "/api/v1/courses/c1": {
         id: "c1",
         title: "测试课程",
         description: "课程描述",
@@ -370,7 +370,7 @@ describe("API Client", () => {
 
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
     const [url, options] = (globalThis.fetch as any).mock.calls[0];
-    expect(url).toContain("/api/sources");
+    expect(url).toContain("/api/v1/sources");
     expect(options.method).toBe("POST");
     expect(result.type).toBe("bilibili");
   });

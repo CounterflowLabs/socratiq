@@ -2,17 +2,6 @@
 
 const API_BASE = "http://localhost:8000/api/v1";
 
-function getAuthHeaders(): Record<string, string> {
-  if (typeof window === "undefined") return {};
-  try {
-    const token = localStorage.getItem("access_token");
-    if (token) return { Authorization: `Bearer ${token}` };
-  } catch {
-    // localStorage may not be available in some environments
-  }
-  return {};
-}
-
 // ─── Source APIs ───────────────────────────────────────
 
 export interface SourceResponse {
@@ -39,7 +28,6 @@ export async function createSourceFromURL(
 
   const res = await fetch(`${API_BASE}/sources`, {
     method: "POST",
-    headers: getAuthHeaders(),
     body: form,
   });
   if (!res.ok) throw new Error(await res.text());
@@ -56,7 +44,6 @@ export async function createSourceFromFile(
 
   const res = await fetch(`${API_BASE}/sources`, {
     method: "POST",
-    headers: getAuthHeaders(),
     body: form,
   });
   if (!res.ok) throw new Error(await res.text());
@@ -67,13 +54,13 @@ export async function listSources(): Promise<{
   items: SourceResponse[];
   total: number;
 }> {
-  const res = await fetch(`${API_BASE}/sources`, { headers: getAuthHeaders() });
+  const res = await fetch(`${API_BASE}/sources`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function getSource(id: string): Promise<SourceResponse> {
-  const res = await fetch(`${API_BASE}/sources/${id}`, { headers: getAuthHeaders() });
+  const res = await fetch(`${API_BASE}/sources/${id}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -109,7 +96,7 @@ export async function generateCourse(
 ): Promise<CourseResponse> {
   const res = await fetch(`${API_BASE}/courses/generate`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ source_ids: sourceIds, title }),
   });
   if (!res.ok) throw new Error(await res.text());
@@ -120,13 +107,13 @@ export async function listCourses(): Promise<{
   items: CourseResponse[];
   total: number;
 }> {
-  const res = await fetch(`${API_BASE}/courses`, { headers: getAuthHeaders() });
+  const res = await fetch(`${API_BASE}/courses`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function getCourse(id: string): Promise<CourseDetailResponse> {
-  const res = await fetch(`${API_BASE}/courses/${id}`, { headers: getAuthHeaders() });
+  const res = await fetch(`${API_BASE}/courses/${id}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -188,7 +175,7 @@ export async function listConversations(): Promise<{
   items: ConversationResponse[];
   total: number;
 }> {
-  const res = await fetch(`${API_BASE}/conversations`, { headers: getAuthHeaders() });
+  const res = await fetch(`${API_BASE}/conversations`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -197,8 +184,7 @@ export async function getConversationMessages(
   conversationId: string
 ): Promise<MessageResponse[]> {
   const res = await fetch(
-    `${API_BASE}/conversations/${conversationId}/messages`,
-    { headers: getAuthHeaders() }
+    `${API_BASE}/conversations/${conversationId}/messages`
   );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -224,13 +210,13 @@ export interface ModelRouteResponse {
 }
 
 export async function getModels(): Promise<ModelConfigResponse[]> {
-  const res = await fetch(`${API_BASE}/models`, { headers: getAuthHeaders() });
+  const res = await fetch(`${API_BASE}/models`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function getModelRoutes(): Promise<ModelRouteResponse[]> {
-  const res = await fetch(`${API_BASE}/model-routes`, { headers: getAuthHeaders() });
+  const res = await fetch(`${API_BASE}/model-routes`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -242,7 +228,7 @@ export async function getTaskStatus(taskId: string): Promise<{
   error?: string;
   progress?: unknown;
 }> {
-  const res = await fetch(`${API_BASE}/tasks/${taskId}/status`, { headers: getAuthHeaders() });
+  const res = await fetch(`${API_BASE}/tasks/${taskId}/status`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -256,7 +242,7 @@ export async function createModel(data: {
 }): Promise<ModelConfigResponse> {
   const res = await fetch(`${API_BASE}/models`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
   });
   if (!res.ok) throw new Error(await res.text());
@@ -266,7 +252,6 @@ export async function createModel(data: {
 export async function deleteModel(name: string): Promise<void> {
   const res = await fetch(`${API_BASE}/models/${name}`, {
     method: "DELETE",
-    headers: getAuthHeaders(),
   });
   if (!res.ok) throw new Error(await res.text());
 }
@@ -278,7 +263,6 @@ export async function testModel(name: string): Promise<{
 }> {
   const res = await fetch(`${API_BASE}/models/${name}/test`, {
     method: "POST",
-    headers: getAuthHeaders(),
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -307,7 +291,6 @@ export async function generateDiagnostic(courseId: string): Promise<{
 }> {
   const res = await fetch(`${API_BASE}/courses/${courseId}/diagnostic/generate`, {
     method: "POST",
-    headers: getAuthHeaders(),
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -320,7 +303,7 @@ export async function submitDiagnostic(
 ): Promise<DiagnosticResult> {
   const res = await fetch(`${API_BASE}/courses/${courseId}/diagnostic/submit`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ questions, answers }),
   });
   if (!res.ok) throw new Error(await res.text());
@@ -345,7 +328,7 @@ export interface SubmissionResult {
 }
 
 export async function getSectionExercises(sectionId: string): Promise<{ exercises: ExerciseResponse[] }> {
-  const res = await fetch(`${API_BASE}/exercises/section/${sectionId}`, { headers: getAuthHeaders() });
+  const res = await fetch(`${API_BASE}/exercises/section/${sectionId}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -353,7 +336,7 @@ export async function getSectionExercises(sectionId: string): Promise<{ exercise
 export async function submitExercise(exerciseId: string, answer: string): Promise<SubmissionResult> {
   const res = await fetch(`${API_BASE}/exercises/${exerciseId}/submit`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ answer }),
   });
   if (!res.ok) throw new Error(await res.text());
@@ -365,7 +348,7 @@ export async function getDueReviews(): Promise<{
   items: { id: string; concept_id: string; easiness: number; interval_days: number; repetitions: number; review_at: string }[];
   count: number;
 }> {
-  const res = await fetch(`${API_BASE}/reviews/due`, { headers: getAuthHeaders() });
+  const res = await fetch(`${API_BASE}/reviews/due`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -373,7 +356,7 @@ export async function getDueReviews(): Promise<{
 export async function completeReview(reviewId: string, quality: number): Promise<unknown> {
   const res = await fetch(`${API_BASE}/reviews/${reviewId}/complete`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ quality }),
   });
   if (!res.ok) throw new Error(await res.text());
@@ -381,7 +364,7 @@ export async function completeReview(reviewId: string, quality: number): Promise
 }
 
 export async function getReviewStats(): Promise<{ due_today: number; completed_today: number }> {
-  const res = await fetch(`${API_BASE}/reviews/stats`, { headers: getAuthHeaders() });
+  const res = await fetch(`${API_BASE}/reviews/stats`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -394,7 +377,7 @@ export async function estimateTranslation(sectionId: string, target: string = "z
   estimated_tokens: number;
   estimated_cost_usd: number;
 }> {
-  const res = await fetch(`${API_BASE}/sections/${sectionId}/translate/estimate?target=${target}`, { headers: getAuthHeaders() });
+  const res = await fetch(`${API_BASE}/sections/${sectionId}/translate/estimate?target=${target}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -405,7 +388,6 @@ export async function translateSection(sectionId: string, target: string = "zh")
 }> {
   const res = await fetch(`${API_BASE}/sections/${sectionId}/translate?target=${target}`, {
     method: "POST",
-    headers: getAuthHeaders(),
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -430,7 +412,7 @@ export async function getKnowledgeGraph(courseId: string, maxDepth: number = 2):
   nodes: KnowledgeGraphNode[];
   edges: KnowledgeGraphEdge[];
 }> {
-  const res = await fetch(`${API_BASE}/courses/${courseId}/knowledge-graph?max_depth=${maxDepth}`, { headers: getAuthHeaders() });
+  const res = await fetch(`${API_BASE}/courses/${courseId}/knowledge-graph?max_depth=${maxDepth}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }

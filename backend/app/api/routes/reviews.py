@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db, get_current_user
+from app.api.deps import get_db, get_local_user
 from app.db.models.user import User
 from app.services.spaced_repetition import SpacedRepetitionService
 
@@ -52,7 +52,7 @@ class ReviewStatsResponse(BaseModel):
 @router.get("/due", response_model=DueReviewsResponse)
 async def get_due_reviews(
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_local_user)],
     limit: int = 20,
 ) -> DueReviewsResponse:
     """Get review items due for the current user."""
@@ -82,7 +82,7 @@ async def complete_review(
     review_id: uuid.UUID,
     request: CompleteReviewRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_local_user)],
 ) -> CompleteReviewResponse:
     """Complete a review with a quality rating (0-5). Uses optimistic locking."""
     if not (0 <= request.quality <= 5):
@@ -112,7 +112,7 @@ async def complete_review(
 @router.get("/stats", response_model=ReviewStatsResponse)
 async def get_review_stats(
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_local_user)],
 ) -> ReviewStatsResponse:
     """Get review stats: due today and completed today."""
     srs = SpacedRepetitionService(db)

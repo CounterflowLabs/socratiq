@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import {
   getModels,
   getModelRoutes,
@@ -11,13 +10,7 @@ import {
 } from "@/lib/api";
 import type { ModelConfigResponse, ModelRouteResponse } from "@/lib/api";
 
-interface UserInfo {
-  email: string;
-}
-
 export default function SettingsPage() {
-  const router = useRouter();
-  const [user, setUser] = useState<UserInfo | null>(null);
   const [models, setModels] = useState<ModelConfigResponse[]>([]);
   const [routes, setRoutes] = useState<ModelRouteResponse[]>([]);
   const [loading, setLoading] = useState(true);
@@ -43,26 +36,17 @@ export default function SettingsPage() {
   async function loadData() {
     setLoading(true);
     try {
-      const [m, r, userRes] = await Promise.all([
+      const [m, r] = await Promise.all([
         getModels(),
         getModelRoutes(),
-        fetch("/api/auth/me").then((res) => (res.ok ? res.json() : null)),
       ]);
       setModels(m);
       setRoutes(r);
-      setUser(userRes);
     } catch (e) {
       console.error("Failed to load settings:", e);
     } finally {
       setLoading(false);
     }
-  }
-
-  async function handleLogout() {
-    localStorage.removeItem("access_token");
-    localStorage.removeItem("refresh_token");
-    await fetch("/api/auth/logout", { method: "POST" });
-    router.push("/login");
   }
 
   async function handleTest(name: string) {
@@ -139,28 +123,6 @@ export default function SettingsPage() {
   return (
     <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6">
       <h1 className="text-xl font-bold text-gray-900 mb-6">设置</h1>
-
-      {/* Account */}
-      <div className="bg-white rounded-xl border border-gray-200 p-6 mb-4">
-        <h2 className="text-sm font-semibold text-gray-900 mb-4">账户</h2>
-        <div className="flex items-center gap-4">
-          <div className="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold">
-            {user?.email?.[0]?.toUpperCase() || "?"}
-          </div>
-          <div>
-            <div className="text-sm font-medium text-gray-900">
-              {user?.email || "未登录"}
-            </div>
-            <div className="text-xs text-gray-500">邮箱登录</div>
-          </div>
-        </div>
-        <button
-          onClick={handleLogout}
-          className="mt-4 px-3 py-2 min-h-[44px] text-xs border border-red-200 text-red-600 rounded-md hover:bg-red-50"
-        >
-          退出登录
-        </button>
-      </div>
 
       {/* Model Routes */}
       {routes.length > 0 && (

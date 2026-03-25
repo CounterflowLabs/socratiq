@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     upload_dir: str = "uploads"
 
     # Whisper ASR (fallback when no subtitles available)
-    whisper_mode: str = "api"        # "api" = OpenAI Whisper API, "local" = local whisper model
+    whisper_mode: str = "local"      # "api" = OpenAI Whisper API, "local" = local whisper model
     whisper_model: str = "base"      # local model size: tiny/base/small/medium/large
 
     # Auth

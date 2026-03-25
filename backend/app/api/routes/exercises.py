@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db, get_current_user, get_model_router
+from app.api.deps import get_db, get_local_user, get_model_router
 from app.db.models.exercise import Exercise
 from app.db.models.exercise_submission import ExerciseSubmission
 from app.db.models.user import User
@@ -53,7 +53,7 @@ class ExerciseListResponse(BaseModel):
 async def get_exercise(
     exercise_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_local_user)],
 ) -> ExerciseResponse:
     """Get a single exercise by ID. Answer and correct_index are excluded."""
     exercise = await db.get(Exercise, exercise_id)
@@ -77,7 +77,7 @@ async def submit_answer(
     exercise_id: uuid.UUID,
     request: SubmitAnswerRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_local_user)],
     model_router: Annotated[ModelRouter, Depends(get_model_router)],
 ) -> SubmitAnswerResponse:
     """Submit an answer to an exercise. Grades it and returns the result."""
@@ -139,7 +139,7 @@ async def submit_answer(
 async def list_exercises_for_section(
     section_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_local_user)],
 ) -> ExerciseListResponse:
     """List all exercises for a given section."""
     result = await db.execute(

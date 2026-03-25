@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db, get_current_user, get_model_router
+from app.api.deps import get_db, get_local_user, get_model_router
 from app.db.models.content_chunk import ContentChunk
 from app.db.models.course import Section
 from app.db.models.translation import Translation
@@ -23,7 +23,7 @@ async def estimate_translation(
     section_id: uuid.UUID,
     target: str = "zh",
     db: Annotated[AsyncSession, Depends(get_db)] = ...,
-    user: Annotated[User, Depends(get_current_user)] = ...,
+    user: Annotated[User, Depends(get_local_user)] = ...,
 ) -> dict:
     """Estimate translation cost for a section.
 
@@ -86,7 +86,7 @@ async def translate_section(
     section_id: uuid.UUID,
     target: str = "zh",
     db: Annotated[AsyncSession, Depends(get_db)] = ...,
-    user: Annotated[User, Depends(get_current_user)] = ...,
+    user: Annotated[User, Depends(get_local_user)] = ...,
     model_router: Annotated[ModelRouter, Depends(get_model_router)] = ...,
 ) -> dict:
     """Translate all chunks belonging to a section.

@@ -4,9 +4,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.db.database import engine
-from app.api.routes import auth, health, models, model_routes, tasks, sources, courses, chat, diagnostic, exercises, reviews, knowledge_graph, translations
+from app.api.routes import health, models, model_routes, tasks, sources, courses, chat, diagnostic, exercises, reviews, knowledge_graph, translations
 from app.api.middleware.correlation import CorrelationIdMiddleware
-from app.api.middleware.rate_limit import RateLimitMiddleware
 
 
 @asynccontextmanager
@@ -17,7 +16,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="LearnMentor", version="0.1.0", lifespan=lifespan)
 
-app.add_middleware(RateLimitMiddleware)
 app.add_middleware(CorrelationIdMiddleware)
 app.add_middleware(
     CORSMiddleware,
@@ -27,7 +25,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(auth.router)
 app.include_router(health.router, tags=["health"])
 app.include_router(models.router)
 app.include_router(model_routes.router)
@@ -40,4 +37,3 @@ app.include_router(exercises.router)
 app.include_router(reviews.router)
 app.include_router(knowledge_graph.router)
 app.include_router(translations.router)
-

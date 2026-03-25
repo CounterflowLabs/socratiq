@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db, get_current_user
+from app.api.deps import get_db, get_local_user
 from app.config import get_settings
 from app.db.models.source import Source
 from app.db.models.user import User
@@ -22,7 +22,7 @@ router = APIRouter(prefix="/api/v1/sources", tags=["sources"])
 @router.post("", response_model=SourceResponse, status_code=201)
 async def create_source(
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_local_user)],
     url: str | None = Form(None),
     source_type: str | None = Form(None),
     title: str | None = Form(None),
@@ -91,7 +91,7 @@ async def create_source(
 @router.get("", response_model=SourceListResponse)
 async def list_sources(
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_local_user)],
     skip: int = 0,
     limit: int = 20,
 ) -> SourceListResponse:
@@ -122,7 +122,7 @@ async def list_sources(
 async def get_source(
     source_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_local_user)],
 ) -> SourceResponse:
     """Get a single source by ID."""
     result = await db.execute(

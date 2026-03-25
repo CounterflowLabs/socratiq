@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db, get_current_user
+from app.api.deps import get_db, get_local_user
 from app.config import get_settings
 from app.db.models.model_config import ModelConfig
 from app.db.models.user import User
@@ -27,7 +27,7 @@ def _get_config_manager() -> ModelConfigManager:
 
 @router.get("", response_model=list[ModelConfigResponse])
 async def list_models(
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_local_user)],
     db: AsyncSession = Depends(get_db),
     manager: ModelConfigManager = Depends(_get_config_manager),
 ):
@@ -56,7 +56,7 @@ async def list_models(
 @router.post("", response_model=ModelConfigResponse, status_code=201)
 async def create_model(
     data: ModelConfigCreate,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_local_user)],
     db: AsyncSession = Depends(get_db),
     manager: ModelConfigManager = Depends(_get_config_manager),
 ):
@@ -95,7 +95,7 @@ async def create_model(
 async def update_model(
     name: str,
     data: ModelConfigUpdate,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_local_user)],
     db: AsyncSession = Depends(get_db),
     manager: ModelConfigManager = Depends(_get_config_manager),
 ):
@@ -131,7 +131,7 @@ async def update_model(
 @router.delete("/{name}", status_code=204)
 async def delete_model(
     name: str,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_local_user)],
     db: AsyncSession = Depends(get_db),
     manager: ModelConfigManager = Depends(_get_config_manager),
 ):
@@ -153,7 +153,7 @@ async def delete_model(
 @router.post("/{name}/test", response_model=ModelTestResponse)
 async def test_model(
     name: str,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_local_user)],
     db: AsyncSession = Depends(get_db),
     manager: ModelConfigManager = Depends(_get_config_manager),
 ):

@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import (
 from app.config import get_settings
 from app.db.models.base import Base
 import app.db.models  # noqa: F401 -- register all models
-from app.api.deps import get_db, get_redis, get_model_router
+from app.api.deps import get_db, get_redis, get_model_router, get_local_user, LOCAL_USER_ID
 from app.db.models.user import User
 from app.services.llm.base import LLMResponse, ContentBlock, StreamChunk, LLMProvider
 from app.services.llm.router import ModelRouter
@@ -88,12 +88,11 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
 
 @pytest_asyncio.fixture
 async def demo_user(db_session):
-    """Insert a demo user. Kept for backward compatibility but most tests
-    now register real users via the auth API."""
+    """Insert the local user for offline mode."""
     user = User(
-        id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
-        email="demo@test.com",
-        name="Demo User",
+        id=LOCAL_USER_ID,
+        email="local@learnmentor.local",
+        name="Local User",
     )
     db_session.add(user)
     await db_session.flush()

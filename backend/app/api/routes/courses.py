@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db, get_current_user, get_model_router
+from app.api.deps import get_db, get_local_user, get_model_router
 from app.db.models.course import Course, CourseSource, Section
 from app.models.course import (
     CourseGenerateRequest,
@@ -28,7 +28,7 @@ router = APIRouter(prefix="/api/v1/courses", tags=["courses"])
 async def generate_course(
     request: CourseGenerateRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_local_user)],
     model_router: Annotated[ModelRouter, Depends(get_model_router)],
 ) -> CourseResponse:
     """Generate a course from one or more ingested sources."""
@@ -55,7 +55,7 @@ async def generate_course(
 @router.get("", response_model=CourseListResponse)
 async def list_courses(
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_local_user)],
     skip: int = 0,
     limit: int = 20,
 ) -> CourseListResponse:
@@ -94,7 +94,7 @@ async def list_courses(
 async def get_course(
     course_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_local_user)],
 ) -> CourseDetailResponse:
     """Get a course with its sections."""
     result = await db.execute(

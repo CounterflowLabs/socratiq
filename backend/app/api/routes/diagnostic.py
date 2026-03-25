@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db, get_current_user, get_model_router
+from app.api.deps import get_db, get_local_user, get_model_router
 from app.db.models.concept import Concept, ConceptSource
 from app.db.models.course import Course, CourseSource
 from app.db.models.learning_record import LearningRecord
@@ -32,7 +32,7 @@ class DiagnosticGenerateResponse(BaseModel):
 async def generate_diagnostic(
     course_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_local_user)],
     model_router: Annotated[ModelRouter, Depends(get_model_router)],
     count: int = 5,
 ) -> DiagnosticGenerateResponse:
@@ -112,7 +112,7 @@ async def submit_diagnostic(
     course_id: uuid.UUID,
     body: DiagnosticFullSubmitRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_local_user)],
     model_router: Annotated[ModelRouter, Depends(get_model_router)],
 ) -> DiagnosticResult:
     """Evaluate submitted diagnostic answers and persist a LearningRecord.

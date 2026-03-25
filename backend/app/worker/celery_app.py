@@ -23,5 +23,6 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
 )
 
-# Auto-discover tasks in app.worker.tasks
-celery_app.autodiscover_tasks(["app.worker.tasks"])
+# Explicitly import tasks so they register with Celery
+import app.worker.tasks.content_ingestion  # noqa: F401
+import app.worker.tasks.memory_pruning  # noqa: F401

@@ -12,6 +12,7 @@ from app.db.models.learning_record import LearningRecord
 from app.db.models.conversation import Conversation
 from app.db.models.message import Message
 from app.db.models.model_config import ModelConfig, ModelRouteConfig
+from app.db.models.llm_usage_log import LlmUsageLog
 
 __all__ = [
     "Base",
@@ -31,4 +32,5 @@ __all__ = [
     "Message",
     "ModelConfig",
     "ModelRouteConfig",
+    "LlmUsageLog",
 ]

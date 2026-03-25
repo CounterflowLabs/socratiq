@@ -14,6 +14,7 @@ const goals = [
   { id: "apply", label: "实战应用", icon: Target, desc: "做项目、写代码、能上手" },
 ];
 
+const LOADING_STEPS_YOUTUBE = ["提取 YouTube 视频字幕", "识别核心概念与前置依赖", "评估难度等级", "准备自适应评估题"];
 const LOADING_STEPS_BILIBILI = ["提取 B站视频字幕", "识别核心概念与前置依赖", "评估难度等级", "准备自适应评估题"];
 const LOADING_STEPS_PDF = ["解析 PDF 文档结构", "提取文本与代码块", "识别核心概念与前置依赖", "准备自适应评估题"];
 
@@ -42,7 +43,7 @@ export default function ImportPage() {
   const [goal, setGoal] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [step, setStep] = useState(0);
-  const [sourceType, setSourceType] = useState<"bilibili" | "pdf">("bilibili");
+  const [sourceType, setSourceType] = useState<"bilibili" | "youtube" | "pdf">("bilibili");
   const [dragOver, setDragOver] = useState(false);
   const [pdfName, setPdfName] = useState("");
   const [pdfFile, setPdfFile] = useState<File | null>(null);
@@ -50,9 +51,13 @@ export default function ImportPage() {
   const fileRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const canSubmit = goal && (sourceType === "bilibili" ? url.trim() : pdfName);
+  const canSubmit = goal && (sourceType === "bilibili" || sourceType === "youtube" ? url.trim() : pdfName);
 
-  const loadingSteps = sourceType === "bilibili" ? LOADING_STEPS_BILIBILI : LOADING_STEPS_PDF;
+  const loadingSteps = sourceType === "youtube"
+    ? LOADING_STEPS_YOUTUBE
+    : sourceType === "bilibili"
+    ? LOADING_STEPS_BILIBILI
+    : LOADING_STEPS_PDF;
 
   // Cleanup polling on unmount
   useEffect(() => {
@@ -106,7 +111,7 @@ export default function ImportPage() {
 
     try {
       let source;
-      if (sourceType === "bilibili") {
+      if (sourceType === "bilibili" || sourceType === "youtube") {
         source = await createSourceFromURL(url.trim());
       } else if (pdfFile) {
         source = await createSourceFromFile(pdfFile);
@@ -148,7 +153,7 @@ export default function ImportPage() {
             <Loader className="w-6 h-6 text-blue-600 animate-spin" />
           </div>
           <h2 className="text-lg font-semibold text-gray-900 mb-2">
-            {sourceType === "bilibili" ? "正在分析视频内容..." : "正在分析 PDF 文档..."}
+            {sourceType === "youtube" ? "正在分析 YouTube 视频..." : sourceType === "bilibili" ? "正在分析视频内容..." : "正在分析 PDF 文档..."}
           </h2>
           <p className="text-sm text-gray-500 mb-1">分析完成后，将自动生成学习路径</p>
           <div className="space-y-3 mt-6 text-left bg-gray-50 rounded-xl p-4">
@@ -210,6 +215,15 @@ export default function ImportPage() {
               <Play className="w-4 h-4" /> B站视频
             </button>
             <button
+              onClick={() => setSourceType("youtube")}
+              className={clsx(
+                "flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg border text-sm font-medium transition-all bg-white",
+                sourceType === "youtube" ? "border-blue-500 bg-blue-50 text-blue-700" : "border-gray-200 text-gray-500 hover:border-gray-300"
+              )}
+            >
+              <Play className="w-4 h-4" /> YouTube
+            </button>
+            <button
               onClick={() => setSourceType("pdf")}
               className={clsx(
                 "flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg border text-sm font-medium transition-all bg-white",
@@ -241,6 +255,31 @@ export default function ImportPage() {
                 className="mt-2 text-xs text-blue-600 hover:text-blue-700 bg-transparent border-none cursor-pointer"
               >
                 试试看：3Blue1Brown - 深度学习之数学原理
+              </button>
+            </div>
+          )}
+
+          {/* YouTube URL input */}
+          {sourceType === "youtube" && (
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-gray-700 mb-2">视频链接</label>
+              <div className="flex gap-2">
+                <div className="flex-1 relative">
+                  <Play className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                  <input
+                    type="text"
+                    value={url}
+                    onChange={(e) => setUrl(e.target.value)}
+                    placeholder="https://www.youtube.com/watch?v=..."
+                    className="w-full pl-10 pr-4 py-2.5 rounded-lg border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  />
+                </div>
+              </div>
+              <button
+                onClick={() => setUrl("https://www.youtube.com/watch?v=kCc8FmEb1nY")}
+                className="mt-2 text-xs text-blue-600 hover:text-blue-700 bg-transparent border-none cursor-pointer"
+              >
+                试试看：Karpathy - Let&apos;s build GPT from scratch
               </button>
             </div>
           )}

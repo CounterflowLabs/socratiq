@@ -13,6 +13,8 @@ from app.db.models.conversation import Conversation
 from app.db.models.message import Message
 from app.db.models.model_config import ModelConfig, ModelRouteConfig
 from app.db.models.llm_usage_log import LlmUsageLog
+from app.db.models.exercise_submission import ExerciseSubmission
+from app.db.models.review_item import ReviewItem
 
 __all__ = [
     "Base",
@@ -33,4 +35,6 @@ __all__ = [
     "ModelConfig",
     "ModelRouteConfig",
     "LlmUsageLog",
+    "ExerciseSubmission",
+    "ReviewItem",
 ]

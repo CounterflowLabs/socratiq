@@ -6,7 +6,7 @@ import Link from "next/link";
 import { Brain, Plus, ChevronRight, BookOpen, Loader, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { listCourses, getReviewStats, type CourseResponse } from "@/lib/api";
+import { listCourses, getReviewStats, getSetupStatus, type CourseResponse } from "@/lib/api";
 import { useCoursesStore } from "@/lib/stores";
 
 export default function DashboardPage() {
@@ -15,15 +15,34 @@ export default function DashboardPage() {
   const [reviewStats, setReviewStats] = useState<{ due_today: number; completed_today: number } | null>(null);
 
   useEffect(() => {
-    setLoading(true);
-    listCourses()
-      .then((res) => setCourses(res.items))
-      .catch(console.error)
-      .finally(() => setLoading(false));
-    getReviewStats()
-      .then(setReviewStats)
-      .catch(() => {}); // silently ignore if review API not available
-  }, [setCourses, setLoading]);
+    // Check setup status first; redirect to /setup if no models configured
+    getSetupStatus()
+      .then((status) => {
+        if (!status.has_models) {
+          router.replace("/setup");
+          return;
+        }
+        setLoading(true);
+        listCourses()
+          .then((res) => setCourses(res.items))
+          .catch(console.error)
+          .finally(() => setLoading(false));
+        getReviewStats()
+          .then(setReviewStats)
+          .catch(() => {}); // silently ignore if review API not available
+      })
+      .catch(() => {
+        // If setup status check fails (e.g. backend not running), load courses anyway
+        setLoading(true);
+        listCourses()
+          .then((res) => setCourses(res.items))
+          .catch(console.error)
+          .finally(() => setLoading(false));
+        getReviewStats()
+          .then(setReviewStats)
+          .catch(() => {});
+      });
+  }, [router, setCourses, setLoading]);
 
   return (
     <div className="min-h-screen bg-gray-50">

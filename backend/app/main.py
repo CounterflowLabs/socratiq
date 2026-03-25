@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.db.database import engine
-from app.api.routes import health, models, model_routes, tasks, sources, courses, chat, diagnostic, exercises, reviews, knowledge_graph, translations, labs
+from app.api.routes import health, models, model_routes, tasks, sources, courses, chat, diagnostic, exercises, reviews, knowledge_graph, translations, labs, setup
 from app.api.middleware.correlation import CorrelationIdMiddleware
 
 
@@ -38,3 +38,4 @@ app.include_router(reviews.router)
 app.include_router(knowledge_graph.router)
 app.include_router(translations.router)
 app.include_router(labs.router)
+app.include_router(setup.router)

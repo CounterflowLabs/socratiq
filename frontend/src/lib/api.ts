@@ -393,6 +393,39 @@ export async function translateSection(sectionId: string, target: string = "zh")
   return res.json();
 }
 
+// ─── Setup APIs ─────────────────────────────────────
+
+export async function getSetupStatus(): Promise<{
+  has_models: boolean;
+  ollama_available: boolean;
+  ollama_models: string[];
+}> {
+  const res = await fetch(`${API_BASE}/setup/status`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+// ─── Lab APIs ───────────────────────────────────────
+
+export interface LabResponse {
+  id: string;
+  section_id: string;
+  title: string;
+  description: string;
+  language: string;
+  starter_code: Record<string, string>;
+  test_code: Record<string, string>;
+  run_instructions: string;
+  confidence: number;
+}
+
+export async function getSectionLab(sectionId: string): Promise<LabResponse | null> {
+  const res = await fetch(`${API_BASE}/labs/section/${sectionId}`);
+  if (!res.ok) return null;
+  const data = await res.json();
+  return data || null;
+}
+
 // ─── Knowledge Graph API ────────────────────────────
 export interface KnowledgeGraphNode {
   id: string;

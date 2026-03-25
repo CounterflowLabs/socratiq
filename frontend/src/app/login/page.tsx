@@ -30,6 +30,9 @@ export default function LoginPage() {
         return;
       }
 
+      const tokens = await res.json();
+      localStorage.setItem("access_token", tokens.access_token);
+      localStorage.setItem("refresh_token", tokens.refresh_token);
       router.push("/");
     } catch {
       setError("网络错误，请重试");

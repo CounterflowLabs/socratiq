@@ -19,9 +19,15 @@ export async function* streamSSE(
   body: Record<string, unknown>,
   signal?: AbortSignal
 ): AsyncGenerator<SSEEvent> {
+  const authHeaders: Record<string, string> = {};
+  if (typeof window !== "undefined") {
+    const token = localStorage.getItem("access_token");
+    if (token) authHeaders["Authorization"] = `Bearer ${token}`;
+  }
+
   const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders },
     body: JSON.stringify(body),
     signal,
   });

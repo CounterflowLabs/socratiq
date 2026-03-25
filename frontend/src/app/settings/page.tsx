@@ -59,6 +59,8 @@ export default function SettingsPage() {
   }
 
   async function handleLogout() {
+    localStorage.removeItem("access_token");
+    localStorage.removeItem("refresh_token");
     await fetch("/api/auth/logout", { method: "POST" });
     router.push("/login");
   }

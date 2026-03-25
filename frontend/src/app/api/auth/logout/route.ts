@@ -1,8 +1,5 @@
-import { NextResponse } from "next/server";
-
 export async function POST() {
-  const response = NextResponse.json({ success: true });
-  response.cookies.delete("access_token");
-  response.cookies.delete("refresh_token");
-  return response;
+  const headers = new Headers({ "Content-Type": "application/json" });
+  headers.append("Set-Cookie", "logged_in=; Path=/; Max-Age=0");
+  return new Response(JSON.stringify({ success: true }), { status: 200, headers });
 }

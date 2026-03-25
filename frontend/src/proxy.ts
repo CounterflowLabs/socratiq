@@ -14,7 +14,7 @@ export async function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
-  const hasSession = request.cookies.has("access_token");
+  const hasSession = request.cookies.has("logged_in");
   if (!hasSession) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
@@ -23,5 +23,5 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  matcher: ["/((?!api/v1|api/auth|_next/static|_next/image|favicon.ico).*)"],
 };

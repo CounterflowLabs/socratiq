@@ -25,17 +25,12 @@ export async function POST(req: Request) {
 
     const tokens = await res.json();
 
+    // Set a cookie for proxy.ts auth check (non-HttpOnly so it can be a simple flag)
+    // The actual token is stored in localStorage by the client
     const headers = new Headers({ "Content-Type": "application/json" });
-    headers.append(
-      "Set-Cookie",
-      `access_token=${tokens.access_token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=900`
-    );
-    headers.append(
-      "Set-Cookie",
-      `refresh_token=${tokens.refresh_token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=604800`
-    );
+    headers.append("Set-Cookie", `logged_in=1; Path=/; SameSite=Lax; Max-Age=604800`);
 
-    return new Response(JSON.stringify({ success: true }), { status: 200, headers });
+    return new Response(JSON.stringify(tokens), { status: 200, headers });
   } catch (e: unknown) {
     return new Response(JSON.stringify({ error: String(e) }), {
       status: 500,

@@ -23,6 +23,7 @@ from app.models.chat import (
 from app.agent.mentor import MentorAgent
 from app.agent.tools.exercise import ExerciseGenerateTool, ExerciseEvalTool
 from app.agent.tools.knowledge import KnowledgeSearchTool
+from app.agent.tools.memory import EpisodicMemoryTool, MetacognitiveReflectTool
 from app.agent.tools.profile import ProfileReadTool
 from app.agent.tools.progress import ProgressTrackTool
 from app.services.llm.base import UnifiedMessage
@@ -95,6 +96,8 @@ async def chat(
                     ProgressTrackTool(db=db, user_id=user_id),
                     ExerciseGenerateTool(db=db, provider=provider, user_id=user_id),
                     ExerciseEvalTool(db=db, provider=provider, user_id=user_id),
+                    EpisodicMemoryTool(db=db, user_id=user_id),
+                    MetacognitiveReflectTool(db=db, provider=provider, user_id=user_id),
                 ]
                 agent = MentorAgent(
                     model_router=model_router,

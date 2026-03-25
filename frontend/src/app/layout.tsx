@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { SessionProvider } from "next-auth/react";
 import "./globals.css";
@@ -28,19 +28,42 @@ export default function RootLayout({
 function LayoutInner({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [isDesktop, setIsDesktop] = useState(false);
 
   const showSidebar = SIDEBAR_PAGES.includes(pathname);
+
+  // Close mobile sidebar on route change
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [pathname]);
+
+  // Track desktop breakpoint for margin calculation
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 768px)");
+    setIsDesktop(mq.matches);
+    const handler = (e: MediaQueryListEvent) => setIsDesktop(e.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
 
   if (!showSidebar) {
     return <>{children}</>;
   }
 
+  const marginLeft = isDesktop ? (collapsed ? 64 : 224) : 0;
+
   return (
     <div className="app-layout">
-      <Sidebar collapsed={collapsed} onToggle={() => setCollapsed(!collapsed)} />
+      <Sidebar
+        collapsed={collapsed}
+        onToggle={() => setCollapsed(!collapsed)}
+        mobileOpen={mobileOpen}
+        onMobileToggle={() => setMobileOpen(!mobileOpen)}
+      />
       <main
-        className="main-content"
-        style={{ marginLeft: collapsed ? 64 : 224 }}
+        className="main-content transition-[margin] duration-200"
+        style={{ marginLeft }}
       >
         {children}
       </main>

@@ -139,12 +139,12 @@ function ExerciseInner() {
         />
       </div>
 
-      <div className="max-w-2xl mx-auto px-6 py-8">
+      <div className="max-w-2xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <button
             onClick={() => router.back()}
-            className="text-sm text-gray-500 hover:text-gray-700 flex items-center gap-1"
+            className="text-sm text-gray-500 hover:text-gray-700 flex items-center gap-1 min-h-[44px]"
           >
             <ArrowLeft className="w-4 h-4" /> 返回
           </button>
@@ -187,7 +187,7 @@ function ExerciseInner() {
                   key={idx}
                   onClick={() => !result && setSelectedOption(idx)}
                   disabled={!!result}
-                  className={`w-full text-left px-5 py-4 rounded-xl border text-sm transition-all duration-150 ${optionStyle} disabled:cursor-default`}
+                  className={`w-full text-left px-4 sm:px-5 py-4 min-h-[44px] rounded-xl border text-sm transition-all duration-150 ${optionStyle} disabled:cursor-default`}
                 >
                   <span className="font-medium mr-3 text-gray-400">
                     {String.fromCharCode(65 + idx)}.
@@ -204,7 +204,7 @@ function ExerciseInner() {
               onChange={(e) => setTextAnswer(e.target.value)}
               disabled={!!result}
               placeholder={exercise.type === "code" ? "在此输入代码..." : "在此输入你的答案..."}
-              className={`w-full min-h-[160px] px-4 py-3 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y disabled:bg-gray-50 ${
+              className={`w-full min-h-[120px] sm:min-h-[160px] px-4 py-3 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y disabled:bg-gray-50 ${
                 exercise.type === "code" ? "font-mono" : ""
               }`}
             />

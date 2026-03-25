@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Home, BookOpen, Search, BarChart3, ChevronLeft, ChevronRight, Brain, Settings } from "lucide-react";
+import { Home, BookOpen, Search, BarChart3, ChevronLeft, ChevronRight, Brain, Settings, Menu, X } from "lucide-react";
 import { clsx } from "clsx";
 
 const items = [
@@ -16,70 +16,109 @@ const items = [
 export function Sidebar({
   collapsed,
   onToggle,
+  mobileOpen,
+  onMobileToggle,
 }: {
   collapsed: boolean;
   onToggle: () => void;
+  mobileOpen: boolean;
+  onMobileToggle: () => void;
 }) {
   const pathname = usePathname();
 
   return (
-    <aside
-      className={clsx(
-        "fixed left-0 top-0 h-full bg-white border-r border-gray-200 z-30 transition-all duration-200 flex flex-col",
-        collapsed ? "w-16" : "w-56"
+    <>
+      {/* Mobile hamburger button */}
+      <button
+        onClick={onMobileToggle}
+        className="fixed top-3 left-3 z-50 flex md:hidden items-center justify-center w-11 h-11 rounded-lg bg-white border border-gray-200 shadow-sm text-gray-600 hover:bg-gray-50"
+        aria-label="打开菜单"
+      >
+        <Menu className="w-5 h-5" />
+      </button>
+
+      {/* Mobile overlay backdrop */}
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/40 md:hidden"
+          onClick={onMobileToggle}
+        />
       )}
-    >
-      {/* Logo */}
-      <div className="flex items-center gap-2 px-4 h-14 border-b border-gray-100">
-        <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center flex-shrink-0">
-          <Brain className="w-4 h-4 text-white" />
-        </div>
-        {!collapsed && (
-          <span className="font-semibold text-gray-900 text-sm">
-            LearnMentor
-          </span>
+
+      {/* Sidebar — desktop: always visible; mobile: slide-in overlay */}
+      <aside
+        className={clsx(
+          "fixed left-0 top-0 h-full bg-white border-r border-gray-200 z-50 transition-all duration-200 flex flex-col",
+          // Desktop
+          "hidden md:flex",
+          collapsed ? "md:w-16" : "md:w-56",
+          // Mobile override when open
+          mobileOpen && "!flex w-64"
         )}
-      </div>
-
-      {/* Nav */}
-      <nav className="flex-1 py-2 px-2 space-y-0.5">
-        {items.map((item) => {
-          const Icon = item.icon;
-          const isActive =
-            item.id === "/"
-              ? pathname === "/"
-              : pathname.startsWith(item.id);
-          return (
-            <Link
-              key={item.id}
-              href={item.id}
-              className={clsx(
-                "w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors no-underline",
-                isActive
-                  ? "bg-blue-50 text-blue-700 font-medium"
-                  : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
-              )}
-            >
-              <Icon className="w-4 h-4 flex-shrink-0" />
-              {!collapsed && <span>{item.label}</span>}
-            </Link>
-          );
-        })}
-      </nav>
-
-      {/* Toggle */}
-      <div className="p-2 border-t border-gray-100">
-        <button
-          onClick={onToggle}
-          className="w-full flex items-center justify-center p-2 rounded-lg text-gray-400 hover:bg-gray-50 hover:text-gray-600"
-        >
-          {collapsed ? (
-            <ChevronRight className="w-4 h-4" />
-          ) : (
-            <ChevronLeft className="w-4 h-4" />
+      >
+        {/* Logo + mobile close */}
+        <div className="flex items-center gap-2 px-4 h-14 border-b border-gray-100">
+          <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center flex-shrink-0">
+            <Brain className="w-4 h-4 text-white" />
+          </div>
+          {(!collapsed || mobileOpen) && (
+            <span className="font-semibold text-gray-900 text-sm flex-1">
+              LearnMentor
+            </span>
           )}
-        </button>
-      </div>
-    </aside>
+          {/* Mobile close button */}
+          {mobileOpen && (
+            <button
+              onClick={onMobileToggle}
+              className="flex md:hidden items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+              aria-label="关闭菜单"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+
+        {/* Nav */}
+        <nav className="flex-1 py-2 px-2 space-y-0.5">
+          {items.map((item) => {
+            const Icon = item.icon;
+            const isActive =
+              item.id === "/"
+                ? pathname === "/"
+                : pathname.startsWith(item.id);
+            return (
+              <Link
+                key={item.id}
+                href={item.id}
+                onClick={() => mobileOpen && onMobileToggle()}
+                className={clsx(
+                  "w-full flex items-center gap-3 px-3 py-2.5 min-h-[44px] rounded-lg text-sm transition-colors no-underline",
+                  isActive
+                    ? "bg-blue-50 text-blue-700 font-medium"
+                    : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                )}
+              >
+                <Icon className="w-4 h-4 flex-shrink-0" />
+                {(!collapsed || mobileOpen) && <span>{item.label}</span>}
+              </Link>
+            );
+          })}
+        </nav>
+
+        {/* Toggle — desktop only */}
+        <div className="hidden md:block p-2 border-t border-gray-100">
+          <button
+            onClick={onToggle}
+            className="w-full flex items-center justify-center p-2 rounded-lg text-gray-400 hover:bg-gray-50 hover:text-gray-600"
+          >
+            {collapsed ? (
+              <ChevronRight className="w-4 h-4" />
+            ) : (
+              <ChevronLeft className="w-4 h-4" />
+            )}
+          </button>
+        </div>
+      </aside>
+    </>
   );
 }

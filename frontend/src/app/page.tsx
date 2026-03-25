@@ -27,7 +27,7 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <div className="max-w-4xl mx-auto px-6 py-6">
+      <div className="max-w-4xl mx-auto px-4 sm:px-6 pt-14 md:pt-6 pb-6">
         {/* Greeting */}
         <div className="mb-6">
           <h1 className="text-xl font-bold text-gray-900">LearnMentor</h1>

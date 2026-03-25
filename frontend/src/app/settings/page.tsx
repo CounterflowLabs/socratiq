@@ -112,7 +112,7 @@ export default function SettingsPage() {
 
   if (loading) {
     return (
-      <div className="max-w-3xl mx-auto px-6 py-6">
+      <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6">
         <h1 className="text-xl font-bold text-gray-900 mb-6">设置</h1>
         <div className="text-sm text-gray-500">加载中...</div>
       </div>
@@ -120,7 +120,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="max-w-3xl mx-auto px-6 py-6">
+    <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6">
       <h1 className="text-xl font-bold text-gray-900 mb-6">设置</h1>
 
       {/* Account */}
@@ -139,7 +139,7 @@ export default function SettingsPage() {
         </div>
         <button
           onClick={() => signOut({ callbackUrl: "/login" })}
-          className="mt-4 px-3 py-1.5 text-xs border border-red-200 text-red-600 rounded-md hover:bg-red-50"
+          className="mt-4 px-3 py-2 min-h-[44px] text-xs border border-red-200 text-red-600 rounded-md hover:bg-red-50"
         >
           退出登录
         </button>
@@ -310,13 +310,13 @@ export default function SettingsPage() {
                   <button
                     onClick={() => handleTest(m.name)}
                     disabled={testing === m.name}
-                    className="px-3 py-1 text-xs rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                    className="px-3 py-2 min-h-[44px] text-xs rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
                   >
                     {testing === m.name ? "测试中..." : "测试连通性"}
                   </button>
                   <button
                     onClick={() => handleDelete(m.name)}
-                    className="px-3 py-1 text-xs rounded-md border border-red-200 text-red-600 hover:bg-red-50"
+                    className="px-3 py-2 min-h-[44px] text-xs rounded-md border border-red-200 text-red-600 hover:bg-red-50"
                   >
                     删除
                   </button>

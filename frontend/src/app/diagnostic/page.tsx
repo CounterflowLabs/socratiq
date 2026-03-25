@@ -211,7 +211,7 @@ function DiagnosticInner() {
         />
       </div>
 
-      <div className="max-w-2xl mx-auto px-6 py-8">
+      <div className="max-w-2xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
         {/* Header */}
         <div className="flex items-center justify-between mb-8">
           <span className="text-sm font-medium text-gray-500">
@@ -234,7 +234,7 @@ function DiagnosticInner() {
               key={idx}
               onClick={() => handleSelect(idx)}
               disabled={selected !== null}
-              className={`w-full text-left px-5 py-4 rounded-xl border text-sm transition-all duration-150 ${
+              className={`w-full text-left px-5 py-4 min-h-[44px] rounded-xl border text-sm transition-all duration-150 ${
                 selected === idx
                   ? "border-blue-500 bg-blue-50 text-blue-700"
                   : "border-gray-200 bg-white text-gray-700 hover:border-blue-300 hover:bg-blue-50/50"

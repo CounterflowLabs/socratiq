@@ -1,10 +1,12 @@
-import { auth } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
+import { cookies } from "next/headers";
 
 const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:8000";
 
 async function proxyRequest(req: NextRequest) {
-  const session = await auth();
+  const cookieStore = await cookies();
+  const token = cookieStore.get("access_token")?.value;
+
   const path = req.nextUrl.pathname;
   const search = req.nextUrl.search;
   const url = `${BACKEND_URL}${path}${search}`;
@@ -12,33 +14,22 @@ async function proxyRequest(req: NextRequest) {
   const headers: Record<string, string> = {};
   const ct = req.headers.get("content-type");
   if (ct) headers["Content-Type"] = ct;
-  if ((session as any)?.accessToken) {
-    headers["Authorization"] = `Bearer ${(session as any).accessToken}`;
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
   }
 
-  const body =
-    req.method !== "GET" && req.method !== "HEAD"
-      ? await req.arrayBuffer()
-      : undefined;
+  const body = req.method !== "GET" && req.method !== "HEAD"
+    ? await req.arrayBuffer()
+    : undefined;
 
   try {
-    const res = await fetch(url, {
-      method: req.method,
-      headers,
-      body,
-    });
-
+    const res = await fetch(url, { method: req.method, headers, body });
     return new NextResponse(res.body, {
       status: res.status,
-      headers: {
-        "Content-Type": res.headers.get("Content-Type") || "application/json",
-      },
+      headers: { "Content-Type": res.headers.get("Content-Type") || "application/json" },
     });
   } catch {
-    return NextResponse.json(
-      { detail: "Backend unavailable" },
-      { status: 502 },
-    );
+    return NextResponse.json({ detail: "Backend unavailable" }, { status: 502 });
   }
 }
 

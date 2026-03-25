@@ -22,14 +22,3 @@ vi.mock("next/link", () => ({
   default: ({ children, href, ...props }: any) =>
     React.createElement("a", { href, ...props }, children),
 }));
-
-// Mock next-auth/react
-vi.mock("next-auth/react", () => ({
-  useSession: () => ({
-    data: { user: { email: "test@test.com" }, accessToken: "mock-token" },
-    status: "authenticated",
-  }),
-  signIn: vi.fn(),
-  signOut: vi.fn(),
-  SessionProvider: ({ children }: any) => children,
-}));

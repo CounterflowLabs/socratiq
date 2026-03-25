@@ -1,11 +1,21 @@
-import { auth } from "@/lib/auth";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
 export async function proxy(request: NextRequest) {
-  const session = await auth();
+  const { pathname } = request.nextUrl;
 
-  if (!session && !request.nextUrl.pathname.startsWith("/login")) {
+  if (
+    pathname.startsWith("/login") ||
+    pathname.startsWith("/api/auth") ||
+    pathname.startsWith("/api/v1/auth") ||
+    pathname.startsWith("/_next") ||
+    pathname === "/favicon.ico"
+  ) {
+    return NextResponse.next();
+  }
+
+  const hasSession = request.cookies.has("access_token");
+  if (!hasSession) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
 
@@ -13,7 +23,5 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: [
-    "/((?!login|api/auth|_next/static|_next/image|favicon.ico).*)",
-  ],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
 };

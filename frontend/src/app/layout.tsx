@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
-import { SessionProvider } from "next-auth/react";
 import "./globals.css";
 import { Sidebar } from "@/components/sidebar";
 
@@ -17,9 +16,7 @@ export default function RootLayout({
   return (
     <html lang="zh">
       <body>
-        <SessionProvider>
-          <LayoutInner>{children}</LayoutInner>
-        </SessionProvider>
+        <LayoutInner>{children}</LayoutInner>
       </body>
     </html>
   );

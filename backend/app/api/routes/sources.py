@@ -57,7 +57,7 @@ async def create_source(
     else:
         if not source_type:
             source_type = _detect_source_type(url)
-        if source_type not in ("bilibili",):
+        if source_type not in ("bilibili", "youtube"):
             raise HTTPException(400, f"Unsupported source type: {source_type}")
 
     source = Source(
@@ -123,6 +123,8 @@ async def get_source(
 def _detect_source_type(url: str | None) -> str:
     if not url:
         raise HTTPException(400, "URL is required for non-file sources")
+    if "youtube.com" in url or "youtu.be" in url:
+        return "youtube"
     if "bilibili.com" in url or "b23.tv" in url:
         return "bilibili"
     raise HTTPException(400, f"Cannot detect source type from URL: {url}")

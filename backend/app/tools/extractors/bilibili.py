@@ -1,5 +1,6 @@
 """Bilibili video subtitle extractor."""
 
+import logging
 import re
 
 from bilibili_api import video, Credential
@@ -10,6 +11,9 @@ from app.tools.extractors.base import (
     ExtractionResult,
     RawContentChunk,
 )
+from app.tools.extractors.utils import group_segments
+
+logger = logging.getLogger(__name__)
 
 
 class BilibiliExtractor(ContentExtractor):
@@ -24,15 +28,20 @@ class BilibiliExtractor(ContentExtractor):
     subtitle access to logged-in users.
     """
 
-    def __init__(self, credential: Credential | None = None):
+    def __init__(self, credential: Credential | None = None,
+                 whisper_mode: str = "api", whisper_model: str = "base"):
         """Initialize with optional Bilibili credential.
 
         Args:
             credential: bilibili_api.Credential for authenticated access.
                 Created from SESSDATA + bili_jct + buvid3 cookies.
                 If None, only publicly accessible subtitles work.
+            whisper_mode: Whisper ASR mode ("api" or "local").
+            whisper_model: Whisper model name for local mode.
         """
         self.credential = credential
+        self._whisper_mode = whisper_mode
+        self._whisper_model = whisper_model
 
     def supported_source_type(self) -> str:
         return "bilibili"
@@ -73,50 +82,55 @@ class BilibiliExtractor(ContentExtractor):
         subtitle_info = await v.get_subtitle(cid=cid)
         subtitles = subtitle_info.get("subtitles", [])
 
-        if not subtitles:
-            raise ExtractionError(
-                "No subtitles available for this video. "
-                "Try a video with CC or AI-generated subtitles.",
-                source_type="bilibili",
-                details={"bvid": bvid, "has_subtitle": False},
-            )
-
-        # 3. Pick best subtitle (prefer CC over AI-generated)
-        best_subtitle = self._pick_best_subtitle(subtitles)
-
-        # 4. Fetch subtitle content (JSON with timestamp segments)
-        subtitle_url = best_subtitle["subtitle_url"]
-        if subtitle_url.startswith("//"):
-            subtitle_url = "https:" + subtitle_url
-
-        import httpx
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(subtitle_url)
-            resp.raise_for_status()
-            subtitle_data = resp.json()
-
-        # 5. Convert to RawContentChunks
-        chunks = self._group_subtitle_segments(
-            segments=subtitle_data.get("body", []),
-            source_type="bilibili",
-            bvid=bvid,
-            window_seconds=60,
-        )
-
         media_url = f"https://www.bilibili.com/video/{bvid}"
+
+        if not subtitles:
+            logger.info(f"No subtitles for {bvid}, falling back to Whisper ASR")
+            from app.tools.extractors.asr import WhisperService
+            whisper = WhisperService(mode=self._whisper_mode, model=self._whisper_model)
+            segments = await whisper.transcribe(source)
+            subtitle_source = "whisper"
+            chunks = group_segments(
+                segments=segments, source_type="bilibili",
+                media_url=media_url, window_seconds=60,
+            )
+        else:
+            # 3. Pick best subtitle (prefer CC over AI-generated)
+            best_subtitle = self._pick_best_subtitle(subtitles)
+
+            # 4. Fetch subtitle content (JSON with timestamp segments)
+            subtitle_url = best_subtitle["subtitle_url"]
+            if subtitle_url.startswith("//"):
+                subtitle_url = "https:" + subtitle_url
+
+            import httpx
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(subtitle_url)
+                resp.raise_for_status()
+                subtitle_data = resp.json()
+
+            subtitle_source = best_subtitle.get("lan", "unknown")
+            chunks = group_segments(
+                segments=subtitle_data.get("body", []),
+                source_type="bilibili",
+                media_url=media_url, window_seconds=60,
+            )
 
         return ExtractionResult(
             title=title,
             chunks=chunks,
             metadata={
+                "platform": "bilibili",
+                "video_id": bvid,
                 "bvid": bvid,
                 "cid": cid,
+                "title": title,
+                "author": info.get("owner", {}).get("name", ""),
                 "duration": duration,
-                "uploader": info.get("owner", {}).get("name", ""),
+                "subtitle_source": subtitle_source,
+                "media_url": media_url,
                 "page": page,
                 "page_count": len(pages),
-                "subtitle_type": best_subtitle.get("lan", "unknown"),
-                "media_url": media_url,
             },
         )
 
@@ -170,73 +184,3 @@ class BilibiliExtractor(ContentExtractor):
         # Fallback
         return cc_subs[0] if cc_subs else ai_subs[0] if ai_subs else subtitles[0]
 
-    @staticmethod
-    def _group_subtitle_segments(
-        segments: list[dict],
-        source_type: str,
-        bvid: str,
-        window_seconds: int = 60,
-    ) -> list[RawContentChunk]:
-        """Group subtitle segments into time-windowed chunks.
-
-        Each Bilibili subtitle segment is typically 2-5 seconds.
-        We group them into ~60-second windows to create meaningful chunks
-        for LLM analysis.
-
-        Args:
-            segments: List of {"from": float, "to": float, "content": str}
-            source_type: "bilibili"
-            bvid: Video BV号 for media_url
-            window_seconds: Target window size in seconds (default 60)
-
-        Returns:
-            List of RawContentChunk, each covering ~window_seconds of video.
-        """
-        if not segments:
-            return []
-
-        chunks = []
-        current_texts: list[str] = []
-        window_start = segments[0].get("from", 0)
-
-        for seg in segments:
-            seg_start = seg.get("from", 0)
-            seg_text = seg.get("content", "").strip()
-
-            if not seg_text:
-                continue
-
-            # Start new window if we've exceeded the time threshold
-            if seg_start - window_start >= window_seconds and current_texts:
-                chunks.append(
-                    RawContentChunk(
-                        source_type=source_type,
-                        raw_text="\n".join(current_texts),
-                        metadata={
-                            "start_time": window_start,
-                            "end_time": seg_start,
-                        },
-                        media_url=f"https://www.bilibili.com/video/{bvid}",
-                    )
-                )
-                current_texts = []
-                window_start = seg_start
-
-            current_texts.append(seg_text)
-
-        # Flush remaining
-        if current_texts:
-            last_end = segments[-1].get("to", segments[-1].get("from", 0))
-            chunks.append(
-                RawContentChunk(
-                    source_type=source_type,
-                    raw_text="\n".join(current_texts),
-                    metadata={
-                        "start_time": window_start,
-                        "end_time": last_end,
-                    },
-                    media_url=f"https://www.bilibili.com/video/{bvid}",
-                )
-            )
-
-        return chunks

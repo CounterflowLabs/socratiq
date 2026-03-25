@@ -175,11 +175,15 @@ def _create_extractor(source):
     """Create the appropriate extractor for a source."""
     from app.tools.extractors import get_extractor
     from app.config import get_settings
-
     settings = get_settings()
-
-    if source.type == "bilibili":
-        kwargs = {}
+    whisper_kwargs = {
+        "whisper_mode": settings.whisper_mode,
+        "whisper_model": settings.whisper_model,
+    }
+    if source.type == "youtube":
+        return get_extractor("youtube", **whisper_kwargs)
+    elif source.type == "bilibili":
+        kwargs = {**whisper_kwargs}
         sessdata = getattr(settings, "bilibili_sessdata", None)
         if sessdata:
             from bilibili_api import Credential

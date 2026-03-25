@@ -34,6 +34,8 @@ dependencies = [
     "bilibili-api-python>=16.0",
     "pymupdf>=1.24",
     "python-multipart",
+    "youtube-transcript-api>=0.6.1",
+    "yt-dlp>=2024.1",
 
     # Agent + SSE (Sub-project C)
     "sse-starlette",
@@ -46,6 +48,9 @@ dev = [
     "pytest-asyncio",
     "testcontainers[postgres]",
     "fakeredis[lua]",
+]
+whisper = [
+    "openai-whisper>=20231117",
 ]
 
 [tool.pytest.ini_options]

@@ -3,10 +3,12 @@
 from app.tools.extractors.base import ContentExtractor, ExtractionError, ExtractionResult, RawContentChunk
 from app.tools.extractors.bilibili import BilibiliExtractor
 from app.tools.extractors.pdf import PDFExtractor
+from app.tools.extractors.youtube import YouTubeExtractor
 
 EXTRACTORS: dict[str, type[ContentExtractor]] = {
     "bilibili": BilibiliExtractor,
     "pdf": PDFExtractor,
+    "youtube": YouTubeExtractor,
 }
 
 
@@ -14,7 +16,7 @@ def get_extractor(source_type: str, **kwargs) -> ContentExtractor:
     """Get an extractor instance for the given source type.
 
     Args:
-        source_type: One of "bilibili", "pdf".
+        source_type: One of "bilibili", "pdf", "youtube".
         **kwargs: Passed to the extractor constructor.
 
     Returns:
@@ -36,5 +38,6 @@ __all__ = [
     "RawContentChunk",
     "BilibiliExtractor",
     "PDFExtractor",
+    "YouTubeExtractor",
     "get_extractor",
 ]

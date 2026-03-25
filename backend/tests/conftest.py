@@ -1,17 +1,28 @@
 """Test configuration and fixtures."""
 
 import asyncio
+import uuid
 from collections.abc import AsyncGenerator
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy import event
+from sqlalchemy.ext.asyncio import (
+    AsyncConnection,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from app.config import get_settings
 from app.db.models.base import Base
-import app.db.models  # noqa: F401 — register all models
-from app.api.deps import get_db, get_redis
+import app.db.models  # noqa: F401 -- register all models
+from app.api.deps import get_db, get_redis, get_model_router
+from app.db.models.user import User
+from app.services.llm.base import LLMResponse, ContentBlock, StreamChunk, LLMProvider
+from app.services.llm.router import ModelRouter
 from app.main import app
 
 
@@ -19,8 +30,9 @@ from app.main import app
 async def db_session() -> AsyncGenerator[AsyncSession, None]:
     """Create a test database session using the dev database.
 
-    Uses the real database from settings. For CI, use testcontainers.
-    Each test gets a transaction that is rolled back after the test.
+    Uses a connection-level transaction + SAVEPOINT so that route handlers
+    can call ``await session.commit()`` without actually committing; the
+    outer transaction is always rolled back at the end of the test.
     """
     settings = get_settings()
     engine = create_async_engine(settings.database_url)
@@ -28,13 +40,24 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    # Open a connection and begin a transaction that we will roll back
+    connection = await engine.connect()
+    transaction = await connection.begin()
 
-    async with session_factory() as session:
-        async with session.begin():
-            yield session
-            await session.rollback()
+    # Bind a session to this connection; every commit becomes a SAVEPOINT
+    session = AsyncSession(
+        bind=connection,
+        expire_on_commit=False,
+        join_transaction_mode="create_savepoint",
+    )
 
+    yield session
+
+    # Teardown: roll back the outer transaction so nothing persists
+    await session.close()
+    if transaction.is_active:
+        await transaction.rollback()
+    await connection.close()
     await engine.dispose()
 
 
@@ -61,3 +84,16 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
         yield ac
 
     app.dependency_overrides.clear()
+
+
+@pytest_asyncio.fixture
+async def demo_user(db_session):
+    """Insert the demo user needed for chat/conversation endpoints."""
+    user = User(
+        id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
+        email="demo@test.com",
+        name="Demo User",
+    )
+    db_session.add(user)
+    await db_session.flush()
+    return user

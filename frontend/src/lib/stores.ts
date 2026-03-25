@@ -70,6 +70,38 @@ export const useSourcesStore = create<SourcesStore>((set) => ({
     })),
 }));
 
+// ─── Tasks Store (background ingestion tasks) ────────
+
+export interface PendingTask {
+  taskId: string;
+  sourceId: string;
+  title: string;
+  sourceType: string;
+  state: string; // PENDING, extracting, analyzing, generating_lessons, generating_labs, storing, embedding, SUCCESS, FAILURE
+  error?: string;
+  courseId?: string; // set when course generated
+}
+
+interface TasksStore {
+  tasks: PendingTask[];
+  addTask: (t: PendingTask) => void;
+  updateTask: (taskId: string, patch: Partial<PendingTask>) => void;
+  removeTask: (taskId: string) => void;
+}
+
+export const useTasksStore = create<TasksStore>((set) => ({
+  tasks: [],
+  addTask: (t) => set((state) => ({ tasks: [t, ...state.tasks] })),
+  updateTask: (taskId, patch) =>
+    set((state) => ({
+      tasks: state.tasks.map((t) =>
+        t.taskId === taskId ? { ...t, ...patch } : t
+      ),
+    })),
+  removeTask: (taskId) =>
+    set((state) => ({ tasks: state.tasks.filter((t) => t.taskId !== taskId) })),
+}));
+
 // ─── Courses Store ────────────────────────────────────
 
 interface CoursesStore {

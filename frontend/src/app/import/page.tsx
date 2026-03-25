@@ -1,12 +1,12 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { Brain, Sparkles, Eye, Target, FileText, Upload, CheckCircle, Loader, Play, X, AlertCircle } from "lucide-react";
+import { Brain, Sparkles, Eye, Target, FileText, Upload, Loader, Play, X, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { clsx } from "clsx";
-import { createSourceFromURL, createSourceFromFile, getTaskStatus, generateCourse } from "@/lib/api";
-import { useSourcesStore } from "@/lib/stores";
+import { createSourceFromURL, createSourceFromFile } from "@/lib/api";
+import { useSourcesStore, useTasksStore } from "@/lib/stores";
 
 const goals = [
   { id: "overview", label: "快速了解大意", icon: Eye, desc: "用最短时间抓住核心思想" },
@@ -14,99 +14,25 @@ const goals = [
   { id: "apply", label: "实战应用", icon: Target, desc: "做项目、写代码、能上手" },
 ];
 
-const LOADING_STEPS_YOUTUBE = ["提取 YouTube 视频字幕", "识别核心概念与前置依赖", "评估难度等级", "准备自适应评估题"];
-const LOADING_STEPS_BILIBILI = ["提取 B站视频字幕", "识别核心概念与前置依赖", "评估难度等级", "准备自适应评估题"];
-const LOADING_STEPS_PDF = ["解析 PDF 文档结构", "提取文本与代码块", "识别核心概念与前置依赖", "准备自适应评估题"];
-
-/** Map backend task status strings to step indices. */
-function taskStateToStep(state: string): number {
-  switch (state) {
-    case "PENDING":
-    case "extracting":
-      return 0;
-    case "analyzing":
-      return 1;
-    case "storing":
-      return 2;
-    case "embedding":
-    case "SUCCESS":
-      return 3;
-    default:
-      return 0;
-  }
-}
 
 export default function ImportPage() {
   const router = useRouter();
   const addSource = useSourcesStore((s) => s.addSource);
+  const addTask = useTasksStore((s) => s.addTask);
   const [url, setUrl] = useState("");
   const [goal, setGoal] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [step, setStep] = useState(0);
   const [sourceType, setSourceType] = useState<"bilibili" | "youtube" | "pdf">("bilibili");
   const [dragOver, setDragOver] = useState(false);
   const [pdfName, setPdfName] = useState("");
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
   const canSubmit = goal && (sourceType === "bilibili" || sourceType === "youtube" ? url.trim() : pdfName);
-
-  const loadingSteps = sourceType === "youtube"
-    ? LOADING_STEPS_YOUTUBE
-    : sourceType === "bilibili"
-    ? LOADING_STEPS_BILIBILI
-    : LOADING_STEPS_PDF;
-
-  // Cleanup polling on unmount
-  useEffect(() => {
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
-  }, []);
-
-  const pollTaskAndGenerateCourse = useCallback(
-    (taskId: string, sourceId: string) => {
-      pollRef.current = setInterval(async () => {
-        try {
-          const status = await getTaskStatus(taskId);
-          const mappedStep = taskStateToStep(status.state);
-          setStep(mappedStep);
-
-          if (status.state === "SUCCESS") {
-            if (pollRef.current) clearInterval(pollRef.current);
-            pollRef.current = null;
-
-            // Generate a course from the processed source
-            try {
-              const course = await generateCourse([sourceId]);
-              router.push(`/path?courseId=${course.id}`);
-            } catch (err) {
-              setErrorMsg(err instanceof Error ? err.message : "课程生成失败");
-              setLoading(false);
-            }
-          } else if (status.state === "FAILURE") {
-            if (pollRef.current) clearInterval(pollRef.current);
-            pollRef.current = null;
-            setErrorMsg(status.error || "任务处理失败");
-            setLoading(false);
-          }
-        } catch (err) {
-          if (pollRef.current) clearInterval(pollRef.current);
-          pollRef.current = null;
-          setErrorMsg(err instanceof Error ? err.message : "获取任务状态失败");
-          setLoading(false);
-        }
-      }, 2000);
-    },
-    [router]
-  );
 
   const handleImport = async () => {
     if (!canSubmit) return;
     setLoading(true);
-    setStep(0);
     setErrorMsg(null);
 
     try {
@@ -121,16 +47,21 @@ export default function ImportPage() {
         return;
       }
 
-      // Store the source in Zustand
       addSource(source);
 
       if (source.task_id) {
-        // Poll for task completion, then generate course
-        pollTaskAndGenerateCourse(source.task_id, source.id);
+        // Add to task store and redirect — Dashboard will show progress
+        addTask({
+          taskId: source.task_id,
+          sourceId: source.id,
+          title: source.title || url.trim() || pdfName || "导入中...",
+          sourceType,
+          state: "PENDING",
+        });
+        router.push("/");
       } else {
-        // No async task — source is already ready, generate course directly
-        const course = await generateCourse([source.id]);
-        router.push(`/path?courseId=${course.id}`);
+        // Source ready immediately, go to dashboard
+        router.push("/");
       }
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : "导入失败，请检查链接或文件后重试");
@@ -144,40 +75,6 @@ export default function ImportPage() {
       setPdfFile(file);
     }
   };
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-white flex items-center justify-center">
-        <div className="text-center max-w-md">
-          <div className="w-12 h-12 rounded-full bg-blue-50 flex items-center justify-center mx-auto mb-4">
-            <Loader className="w-6 h-6 text-blue-600 animate-spin" />
-          </div>
-          <h2 className="text-lg font-semibold text-gray-900 mb-2">
-            {sourceType === "youtube" ? "正在分析 YouTube 视频..." : sourceType === "bilibili" ? "正在分析视频内容..." : "正在分析 PDF 文档..."}
-          </h2>
-          <p className="text-sm text-gray-500 mb-1">分析完成后，将自动生成学习路径</p>
-          <div className="space-y-3 mt-6 text-left bg-gray-50 rounded-xl p-4">
-            {loadingSteps.map((s, i) => (
-              <div key={i} className="flex items-center gap-2 text-sm">
-                {i < step ? (
-                  <CheckCircle className="w-4 h-4 text-green-500" />
-                ) : i === step ? (
-                  <Loader className="w-4 h-4 text-blue-500 animate-spin" />
-                ) : (
-                  <div className="w-4 h-4 rounded-full border border-gray-300" />
-                )}
-                <span className={clsx(
-                  i < step ? "text-gray-500" : i === step ? "text-gray-900 font-medium" : "text-gray-400"
-                )}>
-                  {s}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-white flex flex-col">

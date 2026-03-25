@@ -82,7 +82,72 @@ async def _ingest_source_async(task, source_id: str) -> dict:
                 f"{len(analysis.chunks)} chunks"
             )
 
-            # === STEP 3: STORE ===
+            # === STEP 3: GENERATE LESSONS ===
+            await _update_status(db, sid, "generating_lessons")
+            task.update_state(state="PROGRESS", meta={"stage": "generating_lessons"})
+
+            from app.services.lesson_generator import LessonGenerator
+            from app.services.llm.router import TaskType
+            lesson_provider = await model_router.get_provider(TaskType.CONTENT_ANALYSIS)
+            lesson_gen = LessonGenerator(lesson_provider)
+
+            # Group chunks by page_index (for playlists) or treat as single group
+            page_groups: dict[int, list] = {}
+            for chunk in analysis.chunks:
+                page_idx = chunk.metadata.get("page_index", 0)
+                page_groups.setdefault(page_idx, []).append(chunk)
+
+            lesson_by_page: dict[int, object] = {}
+            for page_idx in sorted(page_groups.keys()):
+                page_chunks = page_groups[page_idx]
+                chunk_texts = [c.raw_text for c in page_chunks]
+                # Use page_title if available, otherwise fall back to source title
+                page_title = page_chunks[0].metadata.get("page_title") or source.title or "Untitled"
+                lesson_content = await lesson_gen.generate(chunk_texts, page_title)
+                lesson_by_page[page_idx] = lesson_content
+                logger.info(
+                    f"Generated lesson for page {page_idx}: "
+                    f"{len(lesson_content.sections)} sections"
+                )
+
+            # === STEP 4: GENERATE LABS ===
+            await _update_status(db, sid, "generating_labs")
+            task.update_state(state="PROGRESS", meta={"stage": "generating_labs"})
+
+            from app.services.lab_generator import LabGenerator
+            from app.db.models.lab import Lab
+            lab_gen = LabGenerator(lesson_provider)
+
+            # Collect labs keyed by page_index for later linking to sections
+            labs_by_page: dict[int, dict | None] = {}
+            for page_idx, lesson_content in lesson_by_page.items():
+                # Gather all code snippets across sections
+                all_snippets = []
+                for section in lesson_content.sections:
+                    all_snippets.extend(section.code_snippets)
+
+                if not all_snippets:
+                    labs_by_page[page_idx] = None
+                    continue
+
+                # Infer dominant language from snippets
+                lang_counts: dict[str, int] = {}
+                for s in all_snippets:
+                    lang_counts[s.language] = lang_counts.get(s.language, 0) + 1
+                language = max(lang_counts, key=lang_counts.__getitem__)
+
+                lab_result = await lab_gen.generate(
+                    code_snippets=all_snippets,
+                    lesson_context=lesson_content.summary,
+                    language=language,
+                )
+                labs_by_page[page_idx] = lab_result
+                if lab_result:
+                    logger.info(f"Generated lab for page {page_idx}: {lab_result.get('title')}")
+                else:
+                    logger.info(f"No lab generated for page {page_idx} (low confidence or error)")
+
+            # === STEP 5: STORE ===
             await _update_status(db, sid, "storing")
             task.update_state(state="PROGRESS", meta={"stage": "storing"})
 
@@ -139,11 +204,22 @@ async def _ingest_source_async(task, source_id: str) -> dict:
                 "chunk_count": len(analysis.chunks),
                 "estimated_study_minutes": analysis.estimated_study_minutes,
                 "suggested_prerequisites": analysis.suggested_prerequisites,
+                # Structured lesson content per page group (used by CourseGenerator)
+                "lesson_by_page": {
+                    str(page_idx): lesson.model_dump()
+                    for page_idx, lesson in lesson_by_page.items()
+                },
+                # Generated lab data per page group (used by CourseGenerator)
+                "labs_by_page": {
+                    str(page_idx): lab_data
+                    for page_idx, lab_data in labs_by_page.items()
+                    if lab_data is not None
+                },
             }
             await db.flush()
             logger.info(f"Stored {len(chunk_ids)} chunks and {len(concept_ids)} concepts")
 
-            # === STEP 4: EMBED ===
+            # === STEP 6: EMBED ===
             await _update_status(db, sid, "embedding")
             task.update_state(state="PROGRESS", meta={"stage": "embedding"})
 
@@ -152,7 +228,7 @@ async def _ingest_source_async(task, source_id: str) -> dict:
             await embedding_service.embed_and_store_concepts(db, concept_ids, concept_texts)
             logger.info(f"Embedded {len(chunk_ids)} chunks and {len(concept_ids)} concepts")
 
-            # === STEP 5: DONE ===
+            # === STEP 7: DONE ===
             await _update_status(db, sid, "ready")
             await db.commit()
 
@@ -161,6 +237,8 @@ async def _ingest_source_async(task, source_id: str) -> dict:
                 "title": source.title,
                 "chunks_created": len(chunk_ids),
                 "concepts_created": len(concept_ids),
+                "lessons_generated": len(lesson_by_page),
+                "labs_generated": sum(1 for v in labs_by_page.values() if v is not None),
                 "status": "ready",
             }
 

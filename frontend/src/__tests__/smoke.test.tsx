@@ -282,8 +282,10 @@ describe("Learn Page", () => {
 
     await waitFor(
       () => {
-        const chatInput = screen.getByPlaceholderText("向导师提问...");
-        expect(chatInput).toBeInTheDocument();
+        // The learn page should show the course title and tab bar
+        expect(screen.getByText("测试课程")).toBeInTheDocument();
+        // Tab bar should include the tutor tab
+        expect(screen.getByText("导师")).toBeInTheDocument();
       },
       { timeout: 3000 }
     );

@@ -2,10 +2,9 @@
 
 import { useState } from "react";
 import { usePathname } from "next/navigation";
-import type { Metadata } from "next";
+import { SessionProvider } from "next-auth/react";
 import "./globals.css";
 import { Sidebar } from "@/components/sidebar";
-import { clsx } from "clsx";
 
 // Pages that show the sidebar
 const SIDEBAR_PAGES = ["/", "/courses", "/explore", "/progress", "/settings"];
@@ -18,7 +17,9 @@ export default function RootLayout({
   return (
     <html lang="zh">
       <body>
-        <LayoutInner>{children}</LayoutInner>
+        <SessionProvider>
+          <LayoutInner>{children}</LayoutInner>
+        </SessionProvider>
       </body>
     </html>
   );

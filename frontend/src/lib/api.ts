@@ -1,6 +1,6 @@
 /** API client for LearnMentor backend. */
 
-const API_BASE = "/api";
+const API_BASE = "/api/v1";
 
 // ─── Source APIs ───────────────────────────────────────
 

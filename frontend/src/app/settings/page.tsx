@@ -1,10 +1,18 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getModels, getModelRoutes, deleteModel, testModel } from "@/lib/api";
+import { useSession, signOut } from "next-auth/react";
+import {
+  getModels,
+  getModelRoutes,
+  deleteModel,
+  testModel,
+  createModel,
+} from "@/lib/api";
 import type { ModelConfigResponse, ModelRouteResponse } from "@/lib/api";
 
 export default function SettingsPage() {
+  const { data: session } = useSession();
   const [models, setModels] = useState<ModelConfigResponse[]>([]);
   const [routes, setRoutes] = useState<ModelRouteResponse[]>([]);
   const [loading, setLoading] = useState(true);
@@ -12,6 +20,16 @@ export default function SettingsPage() {
   const [testResult, setTestResult] = useState<
     Record<string, { success: boolean; message: string }>
   >({});
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [newModel, setNewModel] = useState({
+    name: "",
+    provider_type: "anthropic",
+    model_id: "",
+    api_key: "",
+    base_url: "",
+  });
+  const [addError, setAddError] = useState("");
+  const [adding, setAdding] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -54,6 +72,34 @@ export default function SettingsPage() {
     }
   }
 
+  async function handleAddModel(e: React.FormEvent) {
+    e.preventDefault();
+    setAddError("");
+    setAdding(true);
+    try {
+      const created = await createModel({
+        name: newModel.name,
+        provider_type: newModel.provider_type,
+        model_id: newModel.model_id,
+        api_key: newModel.api_key || undefined,
+        base_url: newModel.base_url || undefined,
+      });
+      setModels((prev) => [...prev, created]);
+      setNewModel({
+        name: "",
+        provider_type: "anthropic",
+        model_id: "",
+        api_key: "",
+        base_url: "",
+      });
+      setShowAddForm(false);
+    } catch (err) {
+      setAddError(err instanceof Error ? err.message : "添加失败");
+    } finally {
+      setAdding(false);
+    }
+  }
+
   function getRouteLabel(taskType: string): string {
     const map: Record<string, string> = {
       mentor_chat: "主交互",
@@ -76,6 +122,28 @@ export default function SettingsPage() {
   return (
     <div className="max-w-3xl mx-auto px-6 py-6">
       <h1 className="text-xl font-bold text-gray-900 mb-6">设置</h1>
+
+      {/* Account */}
+      <div className="bg-white rounded-xl border border-gray-200 p-6 mb-4">
+        <h2 className="text-sm font-semibold text-gray-900 mb-4">账户</h2>
+        <div className="flex items-center gap-4">
+          <div className="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold">
+            {session?.user?.email?.[0]?.toUpperCase() || "?"}
+          </div>
+          <div>
+            <div className="text-sm font-medium text-gray-900">
+              {session?.user?.email || "未登录"}
+            </div>
+            <div className="text-xs text-gray-500">邮箱登录</div>
+          </div>
+        </div>
+        <button
+          onClick={() => signOut({ callbackUrl: "/login" })}
+          className="mt-4 px-3 py-1.5 text-xs border border-red-200 text-red-600 rounded-md hover:bg-red-50"
+        >
+          退出登录
+        </button>
+      </div>
 
       {/* Model Routes */}
       {routes.length > 0 && (
@@ -103,12 +171,110 @@ export default function SettingsPage() {
 
       {/* Models */}
       <div className="bg-white rounded-xl border border-gray-200 p-6">
-        <h2 className="text-sm font-semibold text-gray-900 mb-4">
-          已配置模型
-        </h2>
-        {models.length === 0 ? (
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-sm font-semibold text-gray-900">已配置模型</h2>
+          <button
+            onClick={() => setShowAddForm(!showAddForm)}
+            className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-md hover:bg-blue-700"
+          >
+            {showAddForm ? "取消" : "添加模型"}
+          </button>
+        </div>
+
+        {/* Add Model Form */}
+        {showAddForm && (
+          <form
+            onSubmit={handleAddModel}
+            className="mb-4 p-4 rounded-lg border border-blue-200 bg-blue-50 space-y-3"
+          >
+            <div>
+              <label className="block text-xs text-gray-600 mb-1">
+                名称
+              </label>
+              <input
+                type="text"
+                value={newModel.name}
+                onChange={(e) =>
+                  setNewModel({ ...newModel, name: e.target.value })
+                }
+                placeholder="例如 my-claude-sonnet"
+                required
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-600 mb-1">
+                Provider 类型
+              </label>
+              <select
+                value={newModel.provider_type}
+                onChange={(e) =>
+                  setNewModel({ ...newModel, provider_type: e.target.value })
+                }
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="anthropic">Anthropic</option>
+                <option value="openai">OpenAI</option>
+                <option value="openai_compatible">OpenAI 兼容</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-600 mb-1">
+                模型 ID
+              </label>
+              <input
+                type="text"
+                value={newModel.model_id}
+                onChange={(e) =>
+                  setNewModel({ ...newModel, model_id: e.target.value })
+                }
+                placeholder="例如 claude-sonnet-4-20250514"
+                required
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-600 mb-1">
+                API Key（可选）
+              </label>
+              <input
+                type="password"
+                value={newModel.api_key}
+                onChange={(e) =>
+                  setNewModel({ ...newModel, api_key: e.target.value })
+                }
+                placeholder="sk-..."
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-600 mb-1">
+                Base URL（可选，用于 OpenAI 兼容 Provider）
+              </label>
+              <input
+                type="text"
+                value={newModel.base_url}
+                onChange={(e) =>
+                  setNewModel({ ...newModel, base_url: e.target.value })
+                }
+                placeholder="https://api.deepseek.com/v1"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            {addError && <p className="text-xs text-red-500">{addError}</p>}
+            <button
+              type="submit"
+              disabled={adding}
+              className="px-4 py-2 text-xs bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
+            >
+              {adding ? "添加中..." : "保存"}
+            </button>
+          </form>
+        )}
+
+        {models.length === 0 && !showAddForm ? (
           <p className="text-sm text-gray-500">
-            暂无模型配置。请通过 API 添加模型。
+            暂无模型配置。点击「添加模型」开始配置。
           </p>
         ) : (
           <div className="space-y-4">

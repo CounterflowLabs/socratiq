@@ -23,6 +23,17 @@ class DiagnosticSubmitRequest(BaseModel):
     answers: list[DiagnosticAnswer]
 
 
+class DiagnosticFullSubmitRequest(BaseModel):
+    """Submit request that includes the original questions and student answers.
+
+    Used by the diagnostic submit endpoint since questions are not stored
+    server-side between generate and submit.
+    """
+
+    questions: list[dict]  # [{id, correct_index, concept_name, ...}]
+    answers: list[DiagnosticAnswer]
+
+
 class DiagnosticResult(BaseModel):
     level: str
     mastered_concepts: list[str]

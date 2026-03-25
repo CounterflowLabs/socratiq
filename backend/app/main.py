@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.db.database import engine
-from app.api.routes import auth, health, models, model_routes, tasks, sources, courses, chat
+from app.api.routes import auth, health, models, model_routes, tasks, sources, courses, chat, diagnostic
 from app.api.middleware.correlation import CorrelationIdMiddleware
 from app.api.middleware.rate_limit import RateLimitMiddleware
 
@@ -35,4 +35,5 @@ app.include_router(tasks.router)
 app.include_router(sources.router)
 app.include_router(courses.router)
 app.include_router(chat.router)
+app.include_router(diagnostic.router)
 

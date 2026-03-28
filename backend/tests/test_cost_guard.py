@@ -1,6 +1,9 @@
 """Tests for LLM cost guard."""
+import uuid
 import pytest
 from uuid import uuid4
+from unittest.mock import AsyncMock
+
 from app.services.cost_guard import CostGuard
 from app.db.models.user import User
 
@@ -43,3 +46,39 @@ class TestCostGuard:
 
         allowed = await guard.check_budget(user.id, "diagnostic")
         assert allowed is False
+
+
+class TestCostGuardLogUsage:
+    @pytest.mark.asyncio
+    async def test_log_usage_stores_duration_ms(self):
+        mock_db = AsyncMock()
+        guard = CostGuard(mock_db)
+
+        await guard.log_usage(
+            user_id=uuid.uuid4(),
+            task_type="content_analysis",
+            model_name="claude-sonnet",
+            tokens_in=100,
+            tokens_out=200,
+            duration_ms=1500,
+        )
+
+        mock_db.add.assert_called_once()
+        log_obj = mock_db.add.call_args[0][0]
+        assert log_obj.duration_ms == 1500
+
+    @pytest.mark.asyncio
+    async def test_log_usage_duration_ms_defaults_to_none(self):
+        mock_db = AsyncMock()
+        guard = CostGuard(mock_db)
+
+        await guard.log_usage(
+            user_id=uuid.uuid4(),
+            task_type="content_analysis",
+            model_name="claude-sonnet",
+            tokens_in=100,
+            tokens_out=200,
+        )
+
+        log_obj = mock_db.add.call_args[0][0]
+        assert log_obj.duration_ms is None

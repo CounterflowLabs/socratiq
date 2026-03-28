@@ -49,6 +49,16 @@ export default function SourcesPage() {
     loadSources();
   }, []);
 
+  // Auto-refresh while any source is still processing
+  useEffect(() => {
+    const hasActive = sources.some((s) => !["ready", "error"].includes(s.status));
+    if (!hasActive) return;
+    const interval = setInterval(() => {
+      listSources().then((res) => { setSources(res.items); setTotal(res.total); }).catch(() => {});
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [sources]);
+
   async function loadSources() {
     setLoading(true);
     try {
@@ -127,7 +137,12 @@ export default function SourcesPage() {
                     )}
                     {!["ready", "error"].includes(source.status) && (
                       <Button size="sm" variant="ghost" onClick={async () => {
-                        try { await cancelSource(source.id); loadSources(); } catch {}
+                        try {
+                          await cancelSource(source.id);
+                        } catch (e) {
+                          console.error("Cancel failed:", e);
+                        }
+                        loadSources();
                       }}>
                         <X className="w-3.5 h-3.5" /> 取消
                       </Button>

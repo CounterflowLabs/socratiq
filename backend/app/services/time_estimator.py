@@ -17,7 +17,7 @@ DEFAULT_EMBED_LATENCY_S = 5
 # DB store overhead (seconds)
 DEFAULT_STORE_OVERHEAD_S = 5
 # Content analyzer batch char limit (mirrors content_analyzer.py)
-ANALYZER_BATCH_CHARS = 6000
+ANALYZER_BATCH_CHARS = 3000
 # Embedding batch size (mirrors embedding.py)
 EMBED_BATCH_SIZE = 50
 

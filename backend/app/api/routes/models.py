@@ -218,6 +218,7 @@ async def test_model(
             success=result["success"],
             message=result["message"],
             model=result.get("model"),
+            output=result.get("output"),
         )
     except LLMError as e:
         return ModelTestResponse(success=False, message=str(e))

@@ -162,7 +162,7 @@ async def create_source(
             generate_course_task.s(goal=goal, user_id=str(user.id)),
         )
         result = pipeline.delay()
-        source.celery_task_id = result.id
+        source.celery_task_id = result.parent.id if result.parent else result.id
     elif ref_source:
         # Ref still processing — Redis subscriber will dispatch chain when ready
         source.metadata_ = {**source.metadata_, "pending_goal": goal, "pending_user_id": str(user.id)}
@@ -172,7 +172,7 @@ async def create_source(
             generate_course_task.s(goal=goal, user_id=str(user.id)),
         )
         result = pipeline.delay()
-        source.celery_task_id = result.id
+        source.celery_task_id = result.parent.id if result.parent else result.id
 
     await db.commit()
     await db.refresh(source)
@@ -251,14 +251,23 @@ async def cancel_source(
     if source.status in ("ready", "error"):
         raise HTTPException(400, "Source is not in progress")
 
-    # Revoke Celery task
-    if source.celery_task_id:
-        AsyncResult(source.celery_task_id, app=celery_app).revoke(terminate=True)
-
+    # Mark as cancelled in DB first (this is the source of truth)
     source.status = "error"
     source.metadata_ = {**source.metadata_, "error": "用户取消"}
     await db.commit()
     await db.refresh(source)
+
+    # Best-effort revoke Celery task (non-blocking, non-critical)
+    if source.celery_task_id:
+        try:
+            import asyncio
+            task_id = source.celery_task_id
+            await asyncio.to_thread(
+                lambda: AsyncResult(task_id, app=celery_app).revoke(terminate=True)
+            )
+        except Exception:
+            pass  # Task may already be done or lost
+
     return _source_to_response(source)
 
 

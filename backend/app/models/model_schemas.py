@@ -83,3 +83,4 @@ class ModelTestResponse(BaseModel):
     success: bool
     message: str
     model: str | None = None
+    output: str | None = None

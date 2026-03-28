@@ -13,8 +13,8 @@ logger = logging.getLogger(__name__)
     name="content_ingestion.ingest_source",
     max_retries=2,
     default_retry_delay=30,
-    soft_time_limit=600,
-    time_limit=660,
+    soft_time_limit=1800,
+    time_limit=1860,
 )
 def ingest_source(self, source_id: str) -> dict:
     """Main content ingestion pipeline task.
@@ -319,8 +319,13 @@ async def _ingest_source_async(task, source_id: str) -> dict:
 
             except Exception as e:
                 logger.error(f"Ingestion failed for source {source_id}: {e}", exc_info=True)
-                await _update_status(db, sid, "error", error_message=str(e))
-                await db.commit()
+                # Use a fresh session to update error status — the main session
+                # may be in a broken transaction state after the failure.
+                try:
+                    async with worker_session_factory() as err_db:
+                        await _update_status(err_db, sid, "error", error_message=str(e))
+                except Exception as err_e:
+                    logger.error(f"Failed to update error status for {source_id}: {err_e}")
                 _publish_source_done(source, "error")
                 raise
     finally:

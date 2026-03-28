@@ -134,12 +134,13 @@ class LLMProvider(ABC):
         raise NotImplementedError(f"{type(self).__name__} does not support embeddings")
 
     async def test_connectivity(self) -> dict:
-        """Test provider connectivity. Returns dict with success, message, model."""
+        """Test provider connectivity. Returns dict with success, message, model, output."""
         response = await self.chat(
             [UnifiedMessage(role="user", content="Say 'hello' in one word.")],
             max_tokens=10,
         )
-        return {"success": True, "message": "Connection successful", "model": response.model}
+        output = "".join(b.text or "" for b in response.content if b.type == "text").strip()
+        return {"success": True, "message": "Connection successful", "model": response.model, "output": output}
 
 
 class EmbeddingProvider(LLMProvider):
@@ -164,4 +165,5 @@ class EmbeddingProvider(LLMProvider):
             "success": True,
             "message": f"Connection successful (embedding dim={len(embeddings[0])})",
             "model": self.model_id(),
+            "output": f"dim={len(embeddings[0])}, sample={embeddings[0][:3]}",
         }

@@ -38,7 +38,7 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [testing, setTesting] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<
-    Record<string, { success: boolean; message: string }>
+    Record<string, { success: boolean; message: string; output?: string }>
   >({});
   const [showAddForm, setShowAddForm] = useState(false);
   const [newModel, setNewModel] = useState({
@@ -634,7 +634,12 @@ export default function SettingsPage() {
                   <div
                     className={`mt-2 text-xs px-2 py-1 rounded ${testResult[m.name].success ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}
                   >
-                    {testResult[m.name].message}
+                    <div>{testResult[m.name].message}</div>
+                    {testResult[m.name].output && (
+                      <div className="mt-1 font-mono text-[11px] opacity-75">
+                        输出: {testResult[m.name].output}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

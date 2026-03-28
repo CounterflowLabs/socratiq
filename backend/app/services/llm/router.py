@@ -1,4 +1,4 @@
-"""Model router: routes task types to LLM provider instances with caching."""
+"""Model router: routes task types to LLM provider instances via tier mapping."""
 
 import time
 from enum import Enum
@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.services.llm.base import LLMError, LLMProvider
 from app.services.llm.config import ModelConfigManager
 from app.services.llm.anthropic import AnthropicProvider
-from app.services.llm.openai_compat import OpenAICompatProvider
+from app.services.llm.openai_compat import OpenAICompatProvider, OpenAICompatEmbeddingProvider
 
 
 class TaskType(str, Enum):
@@ -18,8 +18,24 @@ class TaskType(str, Enum):
     EMBEDDING = "embedding"
 
 
+class ModelTier(str, Enum):
+    PRIMARY = "primary"
+    LIGHT = "light"
+    STRONG = "strong"
+    EMBEDDING = "embedding"
+
+
+# Internal mapping: which tier handles which task type
+TASK_TIER_MAP: dict[TaskType, ModelTier] = {
+    TaskType.MENTOR_CHAT: ModelTier.PRIMARY,
+    TaskType.CONTENT_ANALYSIS: ModelTier.LIGHT,
+    TaskType.EVALUATION: ModelTier.STRONG,
+    TaskType.EMBEDDING: ModelTier.EMBEDDING,
+}
+
+
 class ModelRouter:
-    """Routes task types to LLM provider instances."""
+    """Routes task types to LLM provider instances via tier-based resolution."""
 
     def __init__(
         self,
@@ -47,7 +63,19 @@ class ModelRouter:
         supports_tool_use: bool,
         supports_streaming: bool,
         max_tokens_limit: int,
+        model_type: str = "chat",
     ) -> LLMProvider:
+        # Embedding models get a dedicated provider class
+        if model_type == "embedding":
+            if provider_type == "openai_compatible":
+                return OpenAICompatEmbeddingProvider(
+                    model=model_id,
+                    api_key=api_key,
+                    base_url=base_url,
+                )
+            else:
+                raise LLMError(f"Provider type '{provider_type}' does not support embedding models")
+
         if provider_type == "anthropic":
             if not api_key:
                 raise LLMError("Anthropic provider requires an API key")
@@ -68,34 +96,58 @@ class ModelRouter:
         else:
             raise LLMError(f"Unknown provider type: {provider_type}")
 
-    async def get_provider(self, task_type: TaskType) -> LLMProvider:
-        """Get an LLM provider for the given task type."""
-        cache_key = f"route:{task_type.value}"
-        if self._is_cache_valid(cache_key):
-            return self._cache[cache_key][0]
-
+    async def _resolve_tier(self, tier: ModelTier) -> tuple[str, str | None, str | None, bool, bool, int]:
+        """Resolve a tier to model config fields. Falls back from STRONG -> PRIMARY."""
         async with self._session_factory() as db:
-            routes = await self._config_manager.get_route_configs(db)
-            route = next((r for r in routes if r.task_type == task_type.value), None)
-            if not route:
-                raise LLMError(f"No model configured for task type: {task_type.value}")
+            configs = await self._config_manager.get_tier_configs(db)
+            config = next((c for c in configs if c.tier == tier.value), None)
 
-            model = await self._config_manager.get_model_by_name(db, route.model_name)
+            # Strong tier falls back to primary when not configured
+            if not config and tier == ModelTier.STRONG:
+                config = next((c for c in configs if c.tier == ModelTier.PRIMARY.value), None)
+
+            if not config:
+                raise LLMError(f"No model configured for tier: {tier.value}")
+
+            model = await self._config_manager.get_model_by_name(db, config.model_name)
             if not model:
-                raise LLMError(f"Model '{route.model_name}' not found")
+                raise LLMError(f"Model '{config.model_name}' not found")
             if not model.is_active:
-                raise LLMError(f"Model '{route.model_name}' is not active")
+                raise LLMError(f"Model '{config.model_name}' is not active")
 
             api_key = self._config_manager.get_decrypted_api_key(model)
 
+        return (
+            model.provider_type,
+            model.model_id,
+            api_key,
+            model.base_url,
+            model.supports_tool_use,
+            model.supports_streaming,
+            model.max_tokens_limit,
+            getattr(model, "model_type", "chat"),
+        )
+
+    async def get_provider(self, task_type: TaskType) -> LLMProvider:
+        """Get an LLM provider for the given task type (resolved via tier mapping)."""
+        tier = TASK_TIER_MAP[task_type]
+        cache_key = f"tier:{tier.value}"
+
+        if self._is_cache_valid(cache_key):
+            return self._cache[cache_key][0]
+
+        (provider_type, model_id, api_key, base_url,
+         supports_tool_use, supports_streaming, max_tokens_limit, model_type) = await self._resolve_tier(tier)
+
         provider = self._create_provider(
-            provider_type=model.provider_type,
-            model_id=model.model_id,
+            provider_type=provider_type,
+            model_id=model_id,
             api_key=api_key,
-            base_url=model.base_url,
-            supports_tool_use=model.supports_tool_use,
-            supports_streaming=model.supports_streaming,
-            max_tokens_limit=model.max_tokens_limit,
+            base_url=base_url,
+            supports_tool_use=supports_tool_use,
+            supports_streaming=supports_streaming,
+            max_tokens_limit=max_tokens_limit,
+            model_type=model_type,
         )
         self._cache[cache_key] = (provider, time.time())
         return provider

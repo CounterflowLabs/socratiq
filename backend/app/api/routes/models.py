@@ -196,7 +196,15 @@ async def test_model(
     api_key = manager.get_decrypted_api_key(model)
 
     try:
-        if model.provider_type == "anthropic":
+        from app.services.llm.openai_compat import OpenAICompatEmbeddingProvider
+
+        if model.model_type == "embedding":
+            provider = OpenAICompatEmbeddingProvider(
+                model=model.model_id,
+                api_key=api_key,
+                base_url=model.base_url,
+            )
+        elif model.provider_type == "anthropic":
             provider = AnthropicProvider(model=model.model_id, api_key=api_key or "")
         else:
             provider = OpenAICompatProvider(
@@ -205,14 +213,11 @@ async def test_model(
                 base_url=model.base_url,
             )
 
-        response = await provider.chat(
-            [UnifiedMessage(role="user", content="Say 'hello' in one word.")],
-            max_tokens=10,
-        )
+        result = await provider.test_connectivity()
         return ModelTestResponse(
-            success=True,
-            message="Connection successful",
-            model=response.model,
+            success=result["success"],
+            message=result["message"],
+            model=result.get("model"),
         )
     except LLMError as e:
         return ModelTestResponse(success=False, message=str(e))

@@ -11,6 +11,7 @@ import openai
 
 from app.services.llm.base import (
     ContentBlock,
+    EmbeddingProvider,
     LLMAuthError,
     LLMError,
     LLMProvider,
@@ -279,6 +280,40 @@ class OpenAICompatProvider(LLMProvider):
 
     def model_id(self) -> str:
         """The model identifier for this provider instance."""
+        return self._model
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        """Compute embeddings using the OpenAI embeddings API."""
+        response = await self._client.embeddings.create(
+            model=self._model,
+            input=texts,
+        )
+        return [item.embedding for item in response.data]
+
+
+class OpenAICompatEmbeddingProvider(EmbeddingProvider):
+    """OpenAI-compatible embedding-only provider.
+
+    Inherits from EmbeddingProvider: chat methods raise LLMError,
+    test_connectivity uses embed.
+    """
+
+    def __init__(
+        self,
+        model: str,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        timeout: float = 60.0,
+    ) -> None:
+        self._model = model
+        self._client = openai.AsyncOpenAI(
+            api_key=api_key or "not-needed",
+            base_url=base_url,
+            timeout=timeout,
+            max_retries=3,
+        )
+
+    def model_id(self) -> str:
         return self._model
 
     async def embed(self, texts: list[str]) -> list[list[float]]:

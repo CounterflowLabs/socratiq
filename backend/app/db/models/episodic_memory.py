@@ -20,7 +20,7 @@ class EpisodicMemory(BaseMixin, Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     context: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default="{}", nullable=False)
     importance: Mapped[float] = mapped_column(Numeric(3, 2), default=0.5)
-    embedding = mapped_column(Vector(1536), nullable=True)
+    embedding = mapped_column(Vector(), nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(nullable=True)
 
     __table_args__ = (

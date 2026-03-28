@@ -67,7 +67,7 @@ export default function SourcesPage() {
       <div className="max-w-4xl mx-auto px-4 sm:px-6 pt-14 md:pt-6 pb-6">
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h1 className="text-xl font-bold text-gray-900">资料库</h1>
+            <h1 className="text-xl font-bold text-gray-900">导入历史</h1>
             <p className="text-sm text-gray-500 mt-1">
               {total > 0 ? `共 ${total} 个资源` : "暂无导入的资源"}
             </p>

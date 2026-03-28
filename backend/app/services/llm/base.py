@@ -132,3 +132,36 @@ class LLMProvider(ABC):
         Providers that support embeddings should override this.
         """
         raise NotImplementedError(f"{type(self).__name__} does not support embeddings")
+
+    async def test_connectivity(self) -> dict:
+        """Test provider connectivity. Returns dict with success, message, model."""
+        response = await self.chat(
+            [UnifiedMessage(role="user", content="Say 'hello' in one word.")],
+            max_tokens=10,
+        )
+        return {"success": True, "message": "Connection successful", "model": response.model}
+
+
+class EmbeddingProvider(LLMProvider):
+    """Base class for embedding-only providers. Chat methods raise errors."""
+
+    async def chat(self, messages, **kwargs) -> LLMResponse:
+        raise LLMError(f"{type(self).__name__} is an embedding model and does not support chat")
+
+    async def chat_stream(self, messages, **kwargs):
+        raise LLMError(f"{type(self).__name__} is an embedding model and does not support chat")
+
+    def supports_tool_use(self) -> bool:
+        return False
+
+    def supports_streaming(self) -> bool:
+        return False
+
+    async def test_connectivity(self) -> dict:
+        """Test embedding connectivity."""
+        embeddings = await self.embed(["hello"])
+        return {
+            "success": True,
+            "message": f"Connection successful (embedding dim={len(embeddings[0])})",
+            "model": self.model_id(),
+        }

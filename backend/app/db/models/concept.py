@@ -18,7 +18,7 @@ class Concept(BaseMixin, Base):
     prerequisites: Mapped[list] = mapped_column(
         ARRAY(PG_UUID(as_uuid=True)), server_default="{}"
     )
-    embedding = mapped_column(Vector(1536), nullable=True)
+    embedding = mapped_column(Vector(), nullable=True)
 
 
 class ConceptSource(Base):

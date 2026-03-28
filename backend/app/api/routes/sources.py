@@ -56,7 +56,7 @@ async def create_source(
         file_path.write_bytes(content)
 
         metadata = {
-            "file_path": str(file_path.resolve()),
+            "file_path": f"{file_id}.pdf",
             "original_filename": file.filename,
             "file_size": len(content),
         }
@@ -66,18 +66,49 @@ async def create_source(
         if source_type not in ("bilibili", "youtube"):
             raise HTTPException(400, f"Unsupported source type: {source_type}")
 
-    # --- Validate required model tiers are configured ---
+    # --- Validate required model tiers are correctly configured ---
     from app.services.llm.config import ModelConfigManager
+    from app.db.models.model_config import ModelConfig as ModelConfigModel
     tier_manager = ModelConfigManager(get_settings().llm_encryption_key)
     existing_tiers = await tier_manager.get_tier_configs(db)
-    configured_tiers = {c.tier for c in existing_tiers}
-    missing = []
+    configured_tiers = {c.tier: c.model_name for c in existing_tiers}
+    problems = []
     if "light" not in configured_tiers:
-        missing.append("轻量任务模型 (light)")
+        problems.append("轻量任务模型 (light) 未配置")
     if "embedding" not in configured_tiers:
-        missing.append("向量计算模型 (embedding)")
-    if missing:
-        raise HTTPException(400, f"请先在设置页面配置以下模型: {', '.join(missing)}")
+        problems.append("向量计算模型 (embedding) 未配置")
+    else:
+        # Verify the embedding tier actually has an embedding-type model
+        embed_model = (await db.execute(
+            select(ModelConfigModel).where(ModelConfigModel.name == configured_tiers["embedding"])
+        )).scalar_one_or_none()
+        if embed_model and embed_model.model_type != "embedding":
+            problems.append(f"向量计算 tier 绑定了对话模型 '{embed_model.name}'，请在设置页面更换为向量模型")
+    # Verify that configured models have API keys (for remote providers)
+    for tier_name, model_name in configured_tiers.items():
+        model_obj = (await db.execute(
+            select(ModelConfigModel).where(ModelConfigModel.name == model_name)
+        )).scalar_one_or_none()
+        if model_obj and model_obj.provider_type != "openai_compatible":
+            # Non-local providers need API key
+            if not model_obj.api_key_encrypted:
+                tier_label = {"primary": "主交互", "light": "轻量任务", "strong": "复杂推理", "embedding": "向量计算"}.get(tier_name, tier_name)
+                problems.append(f"{tier_label}模型 '{model_name}' 未配置 API Key")
+
+    # For video sources, check Whisper ASR config
+    if source_type in ("youtube", "bilibili"):
+        from app.db.models.whisper_config import WhisperConfig as WhisperConfigModel
+        whisper_result = await db.execute(
+            select(WhisperConfigModel).where(WhisperConfigModel.user_id == user.id)
+        )
+        whisper_config = whisper_result.scalar_one_or_none()
+        whisper_has_key = bool(whisper_config and whisper_config.api_key_encrypted)
+        env_has_key = bool(get_settings().whisper_api_key and get_settings().whisper_api_key != "gsk_填入你的Groq_Key")
+        if not whisper_has_key and not env_has_key:
+            problems.append("语音识别 (Whisper) API Key 未配置，请在设置页面配置")
+
+    if problems:
+        raise HTTPException(400, f"配置问题: {'; '.join(problems)}")
 
     # --- Compute content_key ---
     file_content_bytes = content if file else None
@@ -238,6 +269,26 @@ async def retry_source(
     user: Annotated[User, Depends(get_local_user)],
 ) -> SourceResponse:
     """Retry a failed source ingestion."""
+    # Validate required model tiers (same check as create_source)
+    from app.services.llm.config import ModelConfigManager
+    from app.db.models.model_config import ModelConfig as ModelConfigModel
+    tier_manager = ModelConfigManager(get_settings().llm_encryption_key)
+    existing_tiers = await tier_manager.get_tier_configs(db)
+    configured_tiers = {c.tier: c.model_name for c in existing_tiers}
+    problems = []
+    if "light" not in configured_tiers:
+        problems.append("轻量任务模型 (light) 未配置")
+    if "embedding" not in configured_tiers:
+        problems.append("向量计算模型 (embedding) 未配置")
+    else:
+        embed_model = (await db.execute(
+            select(ModelConfigModel).where(ModelConfigModel.name == configured_tiers["embedding"])
+        )).scalar_one_or_none()
+        if embed_model and embed_model.model_type != "embedding":
+            problems.append(f"向量计算 tier 绑定了对话模型 '{embed_model.name}'，请在设置页面更换为向量模型")
+    if problems:
+        raise HTTPException(400, f"模型配置问题: {'; '.join(problems)}")
+
     result = await db.execute(
         select(Source).where(Source.id == source_id, Source.created_by == user.id)
     )

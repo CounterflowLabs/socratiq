@@ -8,7 +8,7 @@ import { clsx } from "clsx";
 const items = [
   { id: "/", label: "首页", icon: Home },
   { id: "/import", label: "导入资料", icon: Search },
-  { id: "/sources", label: "资料库", icon: Database },
+  { id: "/sources", label: "导入历史", icon: Database },
   { id: "/settings", label: "设置", icon: Settings },
 ];
 

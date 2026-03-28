@@ -13,9 +13,19 @@ logger = logging.getLogger(__name__)
 class YouTubeExtractor(ContentExtractor):
     """Extract subtitles from YouTube videos."""
 
-    def __init__(self, whisper_mode: str = "api", whisper_model: str = "base"):
+    def __init__(
+        self,
+        whisper_mode: str = "api",
+        whisper_model: str = "base",
+        whisper_api_key: str = "",
+        whisper_api_base_url: str = "https://api.groq.com/openai/v1",
+        whisper_api_model: str = "whisper-large-v3",
+    ):
         self._whisper_mode = whisper_mode
         self._whisper_model = whisper_model
+        self._whisper_api_key = whisper_api_key
+        self._whisper_api_base_url = whisper_api_base_url
+        self._whisper_api_model = whisper_api_model
 
     def supported_source_type(self) -> str:
         return "youtube"
@@ -33,7 +43,13 @@ class YouTubeExtractor(ContentExtractor):
                 raise ValueError("Empty transcript")
         except Exception as e:
             logger.info(f"No transcript for {video_id}, falling back to Whisper: {e}")
-            whisper = WhisperService(mode=self._whisper_mode, model=self._whisper_model)
+            whisper = WhisperService(
+                mode=self._whisper_mode,
+                model=self._whisper_model,
+                api_key=self._whisper_api_key,
+                api_base_url=self._whisper_api_base_url,
+                api_model=self._whisper_api_model,
+            )
             segments = await whisper.transcribe(url)
             subtitle_source = "whisper"
 

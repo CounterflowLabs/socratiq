@@ -74,8 +74,9 @@ export default function DashboardPage() {
   useEffect(() => {
     listActiveSources()
       .then((sources) => {
+        const currentTaskIds = new Set(useTasksStore.getState().tasks.map((t) => t.taskId));
         for (const s of sources) {
-          if (s.task_id && !tasks.find((t) => t.taskId === s.task_id)) {
+          if (s.task_id && !currentTaskIds.has(s.task_id)) {
             addTask({
               taskId: s.task_id,
               sourceId: s.id,
@@ -86,7 +87,7 @@ export default function DashboardPage() {
           }
         }
       })
-      .catch(() => {}); // silently ignore if backend unavailable
+      .catch(() => {});
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Run once on mount only
 
@@ -177,7 +178,10 @@ export default function DashboardPage() {
                   <div className="flex-1 min-w-0">
                     <h3 className="text-sm font-medium text-gray-900 truncate">{task.title}</h3>
                     {task.state === "FAILURE" && task.error ? (
-                      <p className="text-xs text-red-600 mt-0.5">{task.error}</p>
+                      <div className="mt-1 p-2 rounded-md bg-red-50 border border-red-100">
+                        <p className="text-xs text-red-600">{task.error}</p>
+                        <p className="text-xs text-gray-400 mt-1">可前往导入历史查看详情或重试</p>
+                      </div>
                     ) : (
                       <p className="text-xs text-gray-500 mt-0.5">
                         {taskStateLabel(task.state)}
@@ -198,12 +202,20 @@ export default function DashboardPage() {
                     </button>
                   )}
                   {task.state === "FAILURE" && (
-                    <button
-                      onClick={() => removeTask(task.taskId)}
-                      className="px-3 py-1.5 text-xs text-gray-500 hover:text-gray-700 flex-shrink-0"
-                    >
-                      关闭
-                    </button>
+                    <div className="flex gap-2 flex-shrink-0">
+                      <button
+                        onClick={() => router.push("/sources")}
+                        className="px-3 py-1.5 text-xs font-medium text-blue-600 hover:text-blue-700"
+                      >
+                        导入历史
+                      </button>
+                      <button
+                        onClick={() => removeTask(task.taskId)}
+                        className="px-3 py-1.5 text-xs text-gray-500 hover:text-gray-700"
+                      >
+                        关闭
+                      </button>
+                    </div>
                   )}
                 </div>
               </Card>

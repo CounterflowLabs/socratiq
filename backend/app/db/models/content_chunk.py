@@ -33,7 +33,7 @@ class ContentChunk(BaseMixin, Base):
         ForeignKey("sections.id"), nullable=True
     )
     text: Mapped[str] = mapped_column(Text, nullable=False)
-    embedding = mapped_column(Vector(1536), nullable=True)
+    embedding = mapped_column(Vector(), nullable=True)
     metadata_: Mapped[dict[str, Any]] = mapped_column(
         "metadata_", JSONB, server_default=sa_text("'{}'"), nullable=False
     )

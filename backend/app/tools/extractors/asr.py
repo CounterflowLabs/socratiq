@@ -7,11 +7,21 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 class WhisperService:
-    """Audio-to-text transcription via OpenAI Whisper."""
+    """Audio-to-text transcription via Whisper-compatible API or local model."""
 
-    def __init__(self, mode: str = "api", model: str = "base"):
+    def __init__(
+        self,
+        mode: str = "api",
+        model: str = "base",
+        api_key: str = "",
+        api_base_url: str = "https://api.groq.com/openai/v1",
+        api_model: str = "whisper-large-v3",
+    ):
         self._mode = mode
         self._model = model
+        self._api_key = api_key
+        self._api_base_url = api_base_url
+        self._api_model = api_model
 
     async def transcribe(self, url: str) -> list[dict]:
         """Download audio from URL and transcribe to timed segments."""
@@ -25,11 +35,11 @@ class WhisperService:
             audio_path.unlink(missing_ok=True)
 
     async def _download_audio(self, url: str) -> Path:
-        """Download audio via yt-dlp."""
+        """Download audio via yt-dlp as mp3 (compressed, fits API size limits)."""
         tmp_dir = tempfile.mkdtemp(prefix="socratiq_asr_")
-        output_path = Path(tmp_dir) / "audio.wav"
+        output_path = Path(tmp_dir) / "audio.mp3"
         proc = await asyncio.create_subprocess_exec(
-            "yt-dlp", "-x", "--audio-format", "wav", "--audio-quality", "0",
+            "yt-dlp", "-x", "--audio-format", "mp3", "--audio-quality", "5",
             "--no-playlist", "-o", str(output_path), url,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
@@ -50,11 +60,14 @@ class WhisperService:
         return output_path
 
     async def _transcribe_api(self, audio_path: Path) -> list[dict]:
-        """Transcribe via OpenAI Whisper API."""
+        """Transcribe via Whisper-compatible API (Groq, OpenAI, SiliconFlow, etc.)."""
         import openai
-        client = openai.AsyncOpenAI()
+        client = openai.AsyncOpenAI(
+            api_key=self._api_key or None,
+            base_url=self._api_base_url or None,
+        )
         response = await client.audio.transcriptions.create(
-            model="whisper-1", file=audio_path,
+            model=self._api_model, file=audio_path,
             response_format="verbose_json", timestamp_granularities=["segment"],
         )
         segments = []

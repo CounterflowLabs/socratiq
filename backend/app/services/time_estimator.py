@@ -43,10 +43,10 @@ class TimeEstimator:
                 LlmUsageLog.task_type.in_(["content_analysis"]),
             )
         )
-        avg_ms = await result.scalar()
+        avg_ms = result.scalar()
 
         if avg_ms is not None:
-            self._llm_latency_s = avg_ms / 1000.0
+            self._llm_latency_s = float(avg_ms) / 1000.0
             logger.info(f"Calibrated LLM latency: {self._llm_latency_s:.1f}s")
 
     def estimate_remaining(

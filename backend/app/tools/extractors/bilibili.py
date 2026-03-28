@@ -28,8 +28,15 @@ class BilibiliExtractor(ContentExtractor):
     subtitle access to logged-in users.
     """
 
-    def __init__(self, credential: Credential | None = None,
-                 whisper_mode: str = "api", whisper_model: str = "base"):
+    def __init__(
+        self,
+        credential: Credential | None = None,
+        whisper_mode: str = "api",
+        whisper_model: str = "base",
+        whisper_api_key: str = "",
+        whisper_api_base_url: str = "https://api.groq.com/openai/v1",
+        whisper_api_model: str = "whisper-large-v3",
+    ):
         """Initialize with optional Bilibili credential.
 
         Args:
@@ -38,10 +45,16 @@ class BilibiliExtractor(ContentExtractor):
                 If None, only publicly accessible subtitles work.
             whisper_mode: Whisper ASR mode ("api" or "local").
             whisper_model: Whisper model name for local mode.
+            whisper_api_key: API key for Whisper-compatible API.
+            whisper_api_base_url: Base URL for Whisper-compatible API.
+            whisper_api_model: Model name for Whisper-compatible API.
         """
         self.credential = credential
         self._whisper_mode = whisper_mode
         self._whisper_model = whisper_model
+        self._whisper_api_key = whisper_api_key
+        self._whisper_api_base_url = whisper_api_base_url
+        self._whisper_api_model = whisper_api_model
 
     def supported_source_type(self) -> str:
         return "bilibili"
@@ -183,15 +196,25 @@ class BilibiliExtractor(ContentExtractor):
         if is_multi_page:
             media_url = f"{media_url}?p={page_index + 1}"
 
-        subtitle_info = await v.get_subtitle(cid=cid)
-        subtitles = subtitle_info.get("subtitles", [])
+        try:
+            subtitle_info = await v.get_subtitle(cid=cid)
+            subtitles = subtitle_info.get("subtitles", [])
+        except Exception as e:
+            logger.warning(f"Failed to get subtitles for {bvid} page {page_index}: {e}")
+            subtitles = []
 
         if not subtitles:
             logger.info(
                 f"No subtitles for {bvid} page {page_index}, falling back to Whisper ASR"
             )
             from app.tools.extractors.asr import WhisperService
-            whisper = WhisperService(mode=self._whisper_mode, model=self._whisper_model)
+            whisper = WhisperService(
+                mode=self._whisper_mode,
+                model=self._whisper_model,
+                api_key=self._whisper_api_key,
+                api_base_url=self._whisper_api_base_url,
+                api_model=self._whisper_api_model,
+            )
             segments = await whisper.transcribe(source)
             subtitle_source = "whisper"
             chunks = group_segments(

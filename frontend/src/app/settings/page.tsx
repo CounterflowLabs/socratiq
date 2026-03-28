@@ -8,8 +8,10 @@ import {
   deleteModel,
   testModel,
   createModel,
+  getWhisperConfig,
+  updateWhisperConfig,
 } from "@/lib/api";
-import type { ModelConfigResponse, ModelTierResponse, ModelTier } from "@/lib/api";
+import type { ModelConfigResponse, ModelTierResponse, ModelTier, WhisperConfigResponse } from "@/lib/api";
 
 const TIER_INFO: { tier: ModelTier; label: string; description: string }[] = [
   { tier: "primary", label: "主交互模型", description: "对话教学、工具调用" },
@@ -45,6 +47,16 @@ export default function SettingsPage() {
   });
   const [addError, setAddError] = useState("");
   const [adding, setAdding] = useState(false);
+  const [whisperConfig, setWhisperConfig] = useState<WhisperConfigResponse | null>(null);
+  const [whisperEdits, setWhisperEdits] = useState({
+    mode: "api",
+    api_base_url: "",
+    api_model: "",
+    api_key: "",
+    local_model: "base",
+  });
+  const [whisperSaving, setWhisperSaving] = useState(false);
+  const [whisperMessage, setWhisperMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
 
   useEffect(() => {
     loadData();
@@ -53,9 +65,17 @@ export default function SettingsPage() {
   async function loadData() {
     setLoading(true);
     try {
-      const [m, t] = await Promise.all([getModels(), getModelTiers()]);
+      const [m, t, w] = await Promise.all([getModels(), getModelTiers(), getWhisperConfig()]);
       setModels(m);
       setTiers(t);
+      setWhisperConfig(w);
+      setWhisperEdits({
+        mode: w.mode || "api",
+        api_base_url: w.api_base_url || "",
+        api_model: w.api_model || "",
+        api_key: "", // Don't populate - show placeholder with masked key
+        local_model: w.local_model || "base",
+      });
       // Initialize tier edits from current config
       const edits: Record<string, string> = { primary: "", light: "", strong: "", embedding: "" };
       for (const c of t) edits[c.tier] = c.model_name;
@@ -81,6 +101,27 @@ export default function SettingsPage() {
       setTierMessage({ type: "err", text: err instanceof Error ? err.message : "保存失败" });
     } finally {
       setTierSaving(false);
+    }
+  }
+
+  async function handleSaveWhisper() {
+    setWhisperSaving(true);
+    setWhisperMessage(null);
+    try {
+      const updates: Record<string, string> = {};
+      if (whisperEdits.mode) updates.mode = whisperEdits.mode;
+      if (whisperEdits.api_base_url) updates.api_base_url = whisperEdits.api_base_url;
+      if (whisperEdits.api_model) updates.api_model = whisperEdits.api_model;
+      if (whisperEdits.api_key) updates.api_key = whisperEdits.api_key;
+      if (whisperEdits.local_model) updates.local_model = whisperEdits.local_model;
+      const result = await updateWhisperConfig(updates);
+      setWhisperConfig(result);
+      setWhisperEdits(prev => ({ ...prev, api_key: "" })); // Clear key field after save
+      setWhisperMessage({ type: "ok", text: "保存成功" });
+    } catch (err) {
+      setWhisperMessage({ type: "err", text: err instanceof Error ? err.message : "保存失败" });
+    } finally {
+      setWhisperSaving(false);
     }
   }
 
@@ -224,7 +265,91 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      {/* TODO: Whisper ASR 配置面板 */}
+      {/* Whisper ASR Config */}
+      <div className="bg-white rounded-xl border border-gray-200 p-6 mb-4">
+        <h2 className="text-sm font-semibold text-gray-900 mb-4">语音识别 (Whisper ASR)</h2>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm text-gray-700 mb-1">模式</label>
+            <select
+              value={whisperEdits.mode}
+              onChange={(e) => setWhisperEdits(prev => ({ ...prev, mode: e.target.value }))}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="api">API（Groq / OpenAI 等）</option>
+              <option value="local">本地模型</option>
+            </select>
+          </div>
+
+          {whisperEdits.mode === "api" ? (
+            <>
+              <div>
+                <label className="block text-sm text-gray-700 mb-1">API Base URL</label>
+                <input
+                  type="text"
+                  value={whisperEdits.api_base_url}
+                  onChange={(e) => setWhisperEdits(prev => ({ ...prev, api_base_url: e.target.value }))}
+                  placeholder="https://api.groq.com/openai/v1"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-gray-700 mb-1">模型</label>
+                <input
+                  type="text"
+                  value={whisperEdits.api_model}
+                  onChange={(e) => setWhisperEdits(prev => ({ ...prev, api_model: e.target.value }))}
+                  placeholder="whisper-large-v3"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-gray-700 mb-1">API Key</label>
+                <input
+                  type="password"
+                  value={whisperEdits.api_key}
+                  onChange={(e) => setWhisperEdits(prev => ({ ...prev, api_key: e.target.value }))}
+                  placeholder={whisperConfig?.api_key_masked || "输入 API Key"}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                {whisperConfig?.api_key_masked && !whisperEdits.api_key && (
+                  <p className="text-xs text-gray-400 mt-1">当前: {whisperConfig.api_key_masked}（留空则不修改）</p>
+                )}
+              </div>
+            </>
+          ) : (
+            <div>
+              <label className="block text-sm text-gray-700 mb-1">本地模型大小</label>
+              <select
+                value={whisperEdits.local_model}
+                onChange={(e) => setWhisperEdits(prev => ({ ...prev, local_model: e.target.value }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="tiny">tiny (最快)</option>
+                <option value="base">base</option>
+                <option value="small">small</option>
+                <option value="medium">medium</option>
+                <option value="large">large (最准)</option>
+              </select>
+            </div>
+          )}
+
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleSaveWhisper}
+              disabled={whisperSaving}
+              className="px-4 py-2 text-xs bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
+            >
+              {whisperSaving ? "保存中..." : "保存配置"}
+            </button>
+            {whisperMessage && (
+              <span className={`text-xs ${whisperMessage.type === "ok" ? "text-green-600" : "text-red-600"}`}>
+                {whisperMessage.text}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
 
       {/* Models */}
       <div className="bg-white rounded-xl border border-gray-200 p-6">
@@ -362,11 +487,18 @@ export default function SettingsPage() {
                 className="p-4 rounded-lg border border-gray-200"
               >
                 <div className="flex items-center justify-between mb-2">
-                  <div>
+                  <div className="flex items-center gap-2">
                     <span className="text-sm font-medium text-gray-900">
                       {m.name}
                     </span>
-                    <span className="ml-2 text-xs text-gray-500">
+                    <span className={`px-1.5 py-0.5 text-[10px] font-medium rounded ${
+                      m.model_type === "embedding"
+                        ? "bg-purple-50 text-purple-600"
+                        : "bg-blue-50 text-blue-600"
+                    }`}>
+                      {m.model_type === "embedding" ? "向量" : "对话"}
+                    </span>
+                    <span className="text-xs text-gray-500">
                       {m.provider_type}
                     </span>
                   </div>

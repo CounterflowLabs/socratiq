@@ -518,3 +518,35 @@ export async function getKnowledgeGraph(courseId: string, maxDepth: number = 2):
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
+
+// ─── Whisper ASR Config ──────────────────────────────
+
+export interface WhisperConfigResponse {
+  mode: string;
+  api_base_url?: string;
+  api_model?: string;
+  api_key_masked?: string;
+  local_model?: string;
+}
+
+export async function getWhisperConfig(): Promise<WhisperConfigResponse> {
+  const res = await fetch(`${API_BASE}/settings/whisper`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updateWhisperConfig(data: {
+  mode?: string;
+  api_base_url?: string;
+  api_model?: string;
+  api_key?: string;
+  local_model?: string;
+}): Promise<WhisperConfigResponse> {
+  const res = await fetch(`${API_BASE}/settings/whisper`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}

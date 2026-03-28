@@ -1,6 +1,15 @@
 """Pydantic schemas for LLM model configuration API."""
 
+from enum import Enum
+
 from pydantic import BaseModel, Field
+
+
+class ModelTier(str, Enum):
+    PRIMARY = "primary"
+    LIGHT = "light"
+    STRONG = "strong"
+    EMBEDDING = "embedding"
 
 
 class ModelConfigCreate(BaseModel):
@@ -9,6 +18,7 @@ class ModelConfigCreate(BaseModel):
     model_id: str = Field(..., description="Actual model identifier")
     api_key: str | None = Field(None, description="API key (will be encrypted)")
     base_url: str | None = Field(None, description="Custom API endpoint URL")
+    model_type: str = Field("chat", description="'chat' or 'embedding'")
     supports_tool_use: bool = True
     supports_streaming: bool = True
     max_tokens_limit: int = 4096
@@ -31,20 +41,26 @@ class ModelConfigResponse(BaseModel):
     model_id: str
     api_key_masked: str | None = None
     base_url: str | None = None
+    model_type: str = "chat"
     supports_tool_use: bool
     supports_streaming: bool
     max_tokens_limit: int
     is_active: bool
 
 
-class ModelRouteUpdate(BaseModel):
-    task_type: str = Field(..., description="mentor_chat, content_analysis, evaluation, or embedding")
-    model_name: str = Field(..., description="Model config name to route to")
+class ModelTierUpdate(BaseModel):
+    tier: ModelTier = Field(..., description="primary, light, strong, or embedding")
+    model_name: str = Field(..., description="Model config name to assign to this tier")
 
 
-class ModelRouteResponse(BaseModel):
-    task_type: str
+class ModelTierResponse(BaseModel):
+    tier: str
     model_name: str
+
+
+# Backwards compat aliases
+ModelRouteUpdate = ModelTierUpdate
+ModelRouteResponse = ModelTierResponse
 
 
 class ModelTestResponse(BaseModel):

@@ -25,6 +25,112 @@ def ingest_source(self, source_id: str) -> dict:
     return asyncio.run(_ingest_source_async(self, source_id))
 
 
+@celery_app.task(
+    bind=True,
+    name="content_ingestion.clone_source",
+    max_retries=1,
+    default_retry_delay=10,
+    soft_time_limit=60,
+    time_limit=90,
+)
+def clone_source(self, source_id: str, ref_source_id: str) -> dict:
+    """Clone content from a ready ref_source to a new source. No LLM calls."""
+    import asyncio
+    return asyncio.run(_clone_source_async(self, source_id, ref_source_id))
+
+
+async def _clone_source_async(task, source_id: str, ref_source_id: str) -> dict:
+    """Async implementation of content cloning."""
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+    from app.db.models.source import Source
+    from app.db.models.content_chunk import ContentChunk as ContentChunkModel
+    from app.db.models.concept import ConceptSource
+    from app.config import get_settings
+
+    settings = get_settings()
+    worker_engine = create_async_engine(settings.database_url, echo=False, pool_size=5, max_overflow=10)
+    worker_session_factory = async_sessionmaker(worker_engine, class_=AsyncSession, expire_on_commit=False)
+
+    try:
+        async with worker_session_factory() as db:
+            from uuid import UUID
+            sid = UUID(source_id)
+            ref_sid = UUID(ref_source_id)
+
+            target = await db.get(Source, sid)
+            ref = await db.get(Source, ref_sid)
+
+            if not target or not ref or ref.status != "ready":
+                if target:
+                    target.status = "error"
+                    target.metadata_ = {**target.metadata_, "error": "引用源不可用"}
+                    await db.commit()
+                return {"source_id": source_id, "status": "error", "reason": "ref_source not ready"}
+
+            task.update_state(state="PROGRESS", meta={"stage": "cloning"})
+
+            # Copy scalar fields
+            target.title = target.title or ref.title
+            target.raw_content = ref.raw_content
+            target.metadata_ = {**ref.metadata_}
+            await db.flush()
+
+            # Clone ContentChunks
+            result = await db.execute(
+                select(ContentChunkModel).where(ContentChunkModel.source_id == ref_sid)
+            )
+            ref_chunks = result.scalars().all()
+            chunk_count = 0
+            for chunk in ref_chunks:
+                new_chunk = ContentChunkModel(
+                    source_id=sid,
+                    text=chunk.text,
+                    embedding=chunk.embedding,
+                    metadata_=dict(chunk.metadata_),
+                )
+                db.add(new_chunk)
+                chunk_count += 1
+            await db.flush()
+
+            # Clone ConceptSource links
+            cs_result = await db.execute(
+                select(ConceptSource).where(ConceptSource.source_id == ref_sid)
+            )
+            ref_concept_sources = cs_result.scalars().all()
+            concept_count = 0
+            for cs in ref_concept_sources:
+                existing = await db.execute(
+                    select(ConceptSource).where(
+                        ConceptSource.concept_id == cs.concept_id,
+                        ConceptSource.source_id == sid,
+                    )
+                )
+                if not existing.scalar_one_or_none():
+                    db.add(ConceptSource(
+                        concept_id=cs.concept_id,
+                        source_id=sid,
+                        context=cs.context,
+                    ))
+                    concept_count += 1
+            await db.flush()
+
+            # Mark ready
+            target.status = "ready"
+            await db.commit()
+
+            logger.info(f"Cloned source {source_id} from ref {ref_source_id}: {chunk_count} chunks, {concept_count} concepts")
+            return {
+                "source_id": source_id,
+                "ref_source_id": ref_source_id,
+                "chunks_cloned": chunk_count,
+                "concepts_linked": concept_count,
+                "status": "ready",
+            }
+    finally:
+        await worker_engine.dispose()
+
+
 async def _ingest_source_async(task, source_id: str) -> dict:
     """Async implementation of the ingestion pipeline."""
     import time
@@ -294,6 +400,9 @@ async def _ingest_source_async(task, source_id: str) -> dict:
                 await _update_status(db, sid, "ready")
                 await db.commit()
 
+                # Notify waiting sources via Redis
+                _publish_source_done(source, "ready")
+
                 return {
                     "source_id": source_id,
                     "title": source.title,
@@ -308,6 +417,7 @@ async def _ingest_source_async(task, source_id: str) -> dict:
                 logger.error(f"Ingestion failed for source {source_id}: {e}", exc_info=True)
                 await _update_status(db, sid, "error", error_message=str(e))
                 await db.commit()
+                _publish_source_done(source, "error")
                 raise
     finally:
         await worker_engine.dispose()
@@ -393,3 +503,24 @@ async def _get_or_create_concept(db, ext_concept):
     db.add(concept)
     await db.flush()
     return concept
+
+
+def _publish_source_done(source, status: str) -> None:
+    """Publish source completion/failure event to Redis."""
+    import json
+    import redis
+    from app.config import get_settings
+    from app.services.content_key import content_key_hash
+
+    if not source.content_key:
+        return
+
+    settings = get_settings()
+    try:
+        r = redis.Redis.from_url(settings.redis_url)
+        channel = f"source:done:{content_key_hash(source.content_key)}"
+        payload = json.dumps({"source_id": str(source.id), "status": status})
+        r.publish(channel, payload)
+        logger.info(f"Published {status} to {channel}")
+    except Exception as e:
+        logger.warning(f"Failed to publish source done event: {e}")

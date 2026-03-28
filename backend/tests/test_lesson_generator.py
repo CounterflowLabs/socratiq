@@ -71,6 +71,23 @@ class TestLessonGenerator:
         assert len(result.sections) >= 1
 
     @pytest.mark.asyncio
+    async def test_generate_accepts_goal_parameter(self):
+        mock_provider = AsyncMock()
+        mock_provider.chat.return_value = LLMResponse(
+            content=[ContentBlock(type="text", text=json.dumps({
+                "title": "Quick Overview",
+                "summary": "Brief overview",
+                "sections": [{"heading": "Key Points", "content": "Main ideas.", "timestamp": 0.0,
+                              "code_snippets": [], "key_concepts": ["python"], "diagrams": []}],
+            }))],
+            model="mock",
+        )
+        gen = LessonGenerator(mock_provider)
+        result = await gen.generate(["Python basics"], "Python", goal="overview")
+        assert result.title == "Quick Overview"
+        mock_provider.chat.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_handles_malformed_json(self):
         mock_provider = AsyncMock()
         mock_provider.chat.return_value = LLMResponse(

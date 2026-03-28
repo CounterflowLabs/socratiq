@@ -42,19 +42,27 @@ Return ONLY valid JSON matching this schema:
 }}"""
 
 
+GOAL_PROMPTS = {
+    "overview": "\n\nLearning goal: 快速了解大意 (Quick Overview). Keep content concise and focused on core ideas. Skip implementation details. Summarize key takeaways.",
+    "master": "\n\nLearning goal: 系统掌握核心概念 (Deep Mastery). Explain each concept thoroughly with examples. Include edge cases and nuances. Build understanding step by step.",
+    "apply": "\n\nLearning goal: 实战应用 (Practical Application). Focus on how-to steps and hands-on procedures. Emphasize code examples and practical usage patterns. Include actionable instructions.",
+}
+
+
 class LessonGenerator:
     def __init__(self, provider: LLMProvider):
         self._provider = provider
 
-    async def generate(self, subtitle_chunks: list[str], video_title: str) -> LessonContent:
+    async def generate(self, subtitle_chunks: list[str], video_title: str, goal: str | None = None) -> LessonContent:
         """Convert subtitle chunks into structured lesson content."""
         subtitles = "\n\n".join(subtitle_chunks)
+        goal_suffix = GOAL_PROMPTS.get(goal, "") if goal else ""
 
         try:
             response = await self._provider.chat(
                 messages=[UnifiedMessage(
                     role="user",
-                    content=LESSON_PROMPT.format(title=video_title, subtitles=subtitles[:8000]),
+                    content=LESSON_PROMPT.format(title=video_title, subtitles=subtitles[:8000]) + goal_suffix,
                 )],
                 max_tokens=4000,
                 temperature=0.3,

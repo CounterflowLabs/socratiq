@@ -51,10 +51,20 @@ class LabGenerator:
 
     async def generate(
         self, code_snippets: list[CodeSnippet], lesson_context: str, language: str,
+        goal: str | None = None,
     ) -> dict | None:
         """Generate a lab from code snippets. Returns None if no code or low confidence."""
         if not code_snippets:
             return None
+
+        if goal == "overview":
+            return None
+
+        goal_suffix = ""
+        if goal == "master":
+            goal_suffix = "\n\nLearning goal: 系统掌握 (Deep Mastery). Create focused exercises that test understanding of core concepts. Include fill-in-the-blank and targeted questions."
+        elif goal == "apply":
+            goal_suffix = "\n\nLearning goal: 实战应用 (Practical Application). Create a complete project-style lab with realistic starter code, comprehensive tests, and a full solution."
 
         snippets_text = "\n\n".join(
             f"```{s.language}\n{s.code}\n```\nContext: {s.context}" for s in code_snippets
@@ -66,7 +76,7 @@ class LabGenerator:
                     role="user",
                     content=LAB_PROMPT.format(
                         snippets=snippets_text, context=lesson_context[:3000], language=language,
-                    ),
+                    ) + goal_suffix,
                 )],
                 max_tokens=4000,
                 temperature=0.3,

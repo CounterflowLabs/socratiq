@@ -9,6 +9,13 @@ import { Card } from "@/components/ui/card";
 import { listCourses, getReviewStats, getSetupStatus, getTaskStatus, generateCourse, type CourseResponse } from "@/lib/api";
 import { useCoursesStore, useTasksStore, type PendingTask } from "@/lib/stores";
 
+function formatRemainingTime(seconds: number | undefined): string | null {
+  if (!seconds || seconds <= 0) return null;
+  if (seconds < 60) return `预计剩余 ${seconds} 秒`;
+  const minutes = Math.ceil(seconds / 60);
+  return `预计剩余 ${minutes} 分钟`;
+}
+
 function taskStateLabel(state: string): string {
   const labels: Record<string, string> = {
     PENDING: "排队中...",
@@ -69,7 +76,11 @@ export default function DashboardPage() {
       for (const task of activeTasks) {
         try {
           const status = await getTaskStatus(task.taskId);
-          updateTask(task.taskId, { state: status.state, error: status.error });
+          updateTask(task.taskId, {
+            state: status.state,
+            error: status.error,
+            estimatedRemainingSeconds: status.estimated_remaining_seconds,
+          });
 
           if (status.state === "SUCCESS" && !task.courseId) {
             // Auto-generate course
@@ -143,9 +154,18 @@ export default function DashboardPage() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <h3 className="text-sm font-medium text-gray-900 truncate">{task.title}</h3>
-                    <p className="text-xs text-gray-500 mt-0.5">
-                      {task.error || taskStateLabel(task.state)}
-                    </p>
+                    {task.state === "FAILURE" && task.error ? (
+                      <p className="text-xs text-red-600 mt-0.5">{task.error}</p>
+                    ) : (
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        {taskStateLabel(task.state)}
+                        {task.state !== "SUCCESS" && formatRemainingTime(task.estimatedRemainingSeconds) && (
+                          <span className="text-gray-400 ml-2">
+                            {formatRemainingTime(task.estimatedRemainingSeconds)}
+                          </span>
+                        )}
+                      </p>
+                    )}
                   </div>
                   {task.courseId && (
                     <button

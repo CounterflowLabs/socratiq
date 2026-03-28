@@ -80,6 +80,7 @@ export interface PendingTask {
   state: string; // PENDING, extracting, analyzing, generating_lessons, generating_labs, storing, embedding, SUCCESS, FAILURE
   error?: string;
   courseId?: string; // set when course generated
+  estimatedRemainingSeconds?: number;
 }
 
 interface TasksStore {

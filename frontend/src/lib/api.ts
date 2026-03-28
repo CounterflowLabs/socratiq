@@ -204,10 +204,15 @@ export interface ModelConfigResponse {
   is_active: boolean;
 }
 
-export interface ModelRouteResponse {
-  task_type: string;
+export type ModelTier = "primary" | "light" | "strong" | "embedding";
+
+export interface ModelTierResponse {
+  tier: ModelTier;
   model_name: string;
 }
+
+// Backwards compat alias
+export type ModelRouteResponse = ModelTierResponse;
 
 export async function getModels(): Promise<ModelConfigResponse[]> {
   const res = await fetch(`${API_BASE}/models`);
@@ -215,11 +220,26 @@ export async function getModels(): Promise<ModelConfigResponse[]> {
   return res.json();
 }
 
-export async function getModelRoutes(): Promise<ModelRouteResponse[]> {
-  const res = await fetch(`${API_BASE}/model-routes`);
+export async function getModelTiers(): Promise<ModelTierResponse[]> {
+  const res = await fetch(`${API_BASE}/model-tiers`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
+
+export async function updateModelTiers(
+  tiers: { tier: ModelTier; model_name: string }[],
+): Promise<ModelTierResponse[]> {
+  const res = await fetch(`${API_BASE}/model-tiers`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(tiers),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+// Backwards compat alias
+export const getModelRoutes = getModelTiers;
 
 export async function getTaskStatus(taskId: string): Promise<{
   task_id: string;
@@ -227,6 +247,8 @@ export async function getTaskStatus(taskId: string): Promise<{
   result?: unknown;
   error?: string;
   progress?: unknown;
+  stage?: string;
+  estimated_remaining_seconds?: number;
 }> {
   const res = await fetch(`${API_BASE}/tasks/${taskId}/status`);
   if (!res.ok) throw new Error(await res.text());

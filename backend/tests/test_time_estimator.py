@@ -21,8 +21,9 @@ class TestTimeEstimator:
 
     @pytest.mark.asyncio
     async def test_estimate_with_history_uses_calibrated_latency(self):
+        from unittest.mock import MagicMock
         mock_db = AsyncMock()
-        mock_result = AsyncMock()
+        mock_result = MagicMock()  # sync mock — scalar() is not async
         mock_result.scalar.return_value = 12000
         mock_db.execute.return_value = mock_result
 

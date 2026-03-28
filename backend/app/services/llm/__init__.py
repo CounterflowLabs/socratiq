@@ -15,7 +15,7 @@ from app.services.llm.base import (
     UnifiedMessage,
 )
 from app.services.llm.config import ModelConfigManager
-from app.services.llm.router import ModelRouter, TaskType
+from app.services.llm.router import ModelRouter, ModelTier, TaskType
 
 __all__ = [
     "ContentBlock",
@@ -28,6 +28,7 @@ __all__ = [
     "LLMTimeoutError",
     "ModelConfigManager",
     "ModelRouter",
+    "ModelTier",
     "StreamChunk",
     "TaskType",
     "TokenUsage",

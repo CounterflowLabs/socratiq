@@ -3,7 +3,7 @@
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models.model_config import ModelConfig, ModelRouteConfig
+from app.db.models.model_config import ModelConfig, ModelTierConfig
 from app.services.llm.encryption import encrypt_api_key, decrypt_api_key, mask_api_key
 
 
@@ -96,25 +96,33 @@ class ModelConfigManager:
             return None
         return mask_api_key(key)
 
-    # Route config management
-    async def get_route_configs(self, db: AsyncSession) -> list[ModelRouteConfig]:
-        result = await db.execute(select(ModelRouteConfig))
+    # Tier config management
+    async def get_tier_configs(self, db: AsyncSession) -> list[ModelTierConfig]:
+        result = await db.execute(select(ModelTierConfig))
         return list(result.scalars().all())
 
-    async def update_route_config(
+    async def update_tier_config(
         self,
         db: AsyncSession,
-        task_type: str,
+        tier: str,
         model_name: str,
-    ) -> ModelRouteConfig:
+    ) -> ModelTierConfig:
         result = await db.execute(
-            select(ModelRouteConfig).where(ModelRouteConfig.task_type == task_type)
+            select(ModelTierConfig).where(ModelTierConfig.tier == tier)
         )
-        route = result.scalar_one_or_none()
-        if route:
-            route.model_name = model_name
+        existing = result.scalar_one_or_none()
+        if existing:
+            existing.model_name = model_name
         else:
-            route = ModelRouteConfig(task_type=task_type, model_name=model_name)
-            db.add(route)
+            existing = ModelTierConfig(tier=tier, model_name=model_name)
+            db.add(existing)
         await db.flush()
-        return route
+        return existing
+
+    # Backwards compat aliases
+    get_route_configs = get_tier_configs
+
+    async def update_route_config(
+        self, db: AsyncSession, task_type: str, model_name: str
+    ) -> ModelTierConfig:
+        return await self.update_tier_config(db, task_type, model_name)

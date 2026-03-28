@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Home, BookOpen, Search, BarChart3, ChevronLeft, ChevronRight, Brain, Settings, Menu, X } from "lucide-react";
+import { Home, BookOpen, Search, BarChart3, ChevronLeft, ChevronRight, Brain, Settings, Menu, X, Database } from "lucide-react";
 import { clsx } from "clsx";
 
 const items = [
   { id: "/", label: "首页", icon: Home },
   { id: "/import", label: "导入资料", icon: Search },
+  { id: "/sources", label: "资料库", icon: Database },
   { id: "/settings", label: "设置", icon: Settings },
 ];
 

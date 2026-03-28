@@ -16,6 +16,15 @@ export interface SourceResponse {
   updated_at: string;
 }
 
+export class DuplicateSourceError extends Error {
+  existingSource: SourceResponse | null;
+  constructor(message: string, existingSource: SourceResponse | null) {
+    super(message);
+    this.name = "DuplicateSourceError";
+    this.existingSource = existingSource;
+  }
+}
+
 export async function createSourceFromURL(
   url: string,
   sourceType?: string,
@@ -30,6 +39,13 @@ export async function createSourceFromURL(
     method: "POST",
     body: form,
   });
+  if (res.status === 409) {
+    const body = await res.json();
+    throw new DuplicateSourceError(
+      body.detail?.message || "该资源已导入或正在处理中",
+      body.detail?.existing_source ?? null,
+    );
+  }
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -46,6 +62,13 @@ export async function createSourceFromFile(
     method: "POST",
     body: form,
   });
+  if (res.status === 409) {
+    const body = await res.json();
+    throw new DuplicateSourceError(
+      body.detail?.message || "该资源已导入或正在处理中",
+      body.detail?.existing_source ?? null,
+    );
+  }
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -61,6 +84,12 @@ export async function listSources(): Promise<{
 
 export async function getSource(id: string): Promise<SourceResponse> {
   const res = await fetch(`${API_BASE}/sources/${id}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function listActiveSources(): Promise<SourceResponse[]> {
+  const res = await fetch(`${API_BASE}/sources/active`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }

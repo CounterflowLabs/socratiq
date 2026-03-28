@@ -6,7 +6,7 @@ import Link from "next/link";
 import { Brain, Plus, ChevronRight, BookOpen, Loader, RefreshCw, AlertCircle, CheckCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { listCourses, getReviewStats, getSetupStatus, getTaskStatus, generateCourse, type CourseResponse } from "@/lib/api";
+import { listCourses, getReviewStats, getSetupStatus, getTaskStatus, generateCourse, listActiveSources, type CourseResponse } from "@/lib/api";
 import { useCoursesStore, useTasksStore, type PendingTask } from "@/lib/stores";
 
 function formatRemainingTime(seconds: number | undefined): string | null {
@@ -25,6 +25,8 @@ function taskStateLabel(state: string): string {
     generating_labs: "生成 Lab...",
     storing: "存储数据...",
     embedding: "计算向量...",
+    waiting_donor: "复用已有资源中...",
+    cloning: "复制内容中...",
     SUCCESS: "处理完成",
     FAILURE: "处理失败",
   };
@@ -34,7 +36,7 @@ function taskStateLabel(state: string): string {
 export default function DashboardPage() {
   const router = useRouter();
   const { courses, setCourses, loading, setLoading } = useCoursesStore();
-  const { tasks, updateTask, removeTask } = useTasksStore();
+  const { tasks, addTask, updateTask, removeTask } = useTasksStore();
   const [reviewStats, setReviewStats] = useState<{ due_today: number; completed_today: number } | null>(null);
 
   useEffect(() => {
@@ -66,6 +68,26 @@ export default function DashboardPage() {
           .catch(() => {});
       });
   }, [router, setCourses, setLoading]);
+
+  // Restore active tasks from backend on mount (survives page refresh)
+  useEffect(() => {
+    listActiveSources()
+      .then((sources) => {
+        for (const s of sources) {
+          if (s.task_id && !tasks.find((t) => t.taskId === s.task_id)) {
+            addTask({
+              taskId: s.task_id,
+              sourceId: s.id,
+              title: s.title || s.url || "处理中...",
+              sourceType: s.type,
+              state: "PENDING",
+            });
+          }
+        }
+      })
+      .catch(() => {}); // silently ignore if backend unavailable
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Run once on mount only
 
   // Poll active tasks
   useEffect(() => {

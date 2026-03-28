@@ -10,6 +10,10 @@ import {
   createModel,
   getWhisperConfig,
   updateWhisperConfig,
+  getBilibiliStatus,
+  generateBilibiliQrcode,
+  checkBilibiliQrcode,
+  logoutBilibili,
 } from "@/lib/api";
 import type { ModelConfigResponse, ModelTierResponse, ModelTier, WhisperConfigResponse } from "@/lib/api";
 
@@ -57,6 +61,9 @@ export default function SettingsPage() {
   });
   const [whisperSaving, setWhisperSaving] = useState(false);
   const [whisperMessage, setWhisperMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+  const [biliStatus, setBiliStatus] = useState<{ logged_in: boolean; dedeuserid?: string } | null>(null);
+  const [biliQrcode, setBiliQrcode] = useState<string | null>(null);
+  const [biliQrStatus, setBiliQrStatus] = useState<string | null>(null);
 
   useEffect(() => {
     loadData();
@@ -65,10 +72,11 @@ export default function SettingsPage() {
   async function loadData() {
     setLoading(true);
     try {
-      const [m, t, w] = await Promise.all([getModels(), getModelTiers(), getWhisperConfig()]);
+      const [m, t, w, b] = await Promise.all([getModels(), getModelTiers(), getWhisperConfig(), getBilibiliStatus()]);
       setModels(m);
       setTiers(t);
       setWhisperConfig(w);
+      setBiliStatus(b);
       setWhisperEdits({
         mode: w.mode || "api",
         api_base_url: w.api_base_url || "",
@@ -122,6 +130,46 @@ export default function SettingsPage() {
       setWhisperMessage({ type: "err", text: err instanceof Error ? err.message : "保存失败" });
     } finally {
       setWhisperSaving(false);
+    }
+  }
+
+  async function handleBiliLogin() {
+    try {
+      const result = await generateBilibiliQrcode();
+      setBiliQrcode(result.qrcode_base64);
+      setBiliQrStatus("waiting");
+      // Start polling
+      const poll = setInterval(async () => {
+        try {
+          const status = await checkBilibiliQrcode();
+          setBiliQrStatus(status.status);
+          if (status.status === "done") {
+            clearInterval(poll);
+            setBiliQrcode(null);
+            setBiliQrStatus(null);
+            setBiliStatus({ logged_in: true, dedeuserid: status.dedeuserid });
+          } else if (status.status === "expired") {
+            clearInterval(poll);
+            setBiliQrcode(null);
+            setBiliQrStatus("expired");
+          }
+        } catch {
+          clearInterval(poll);
+          setBiliQrcode(null);
+          setBiliQrStatus(null);
+        }
+      }, 2000);
+    } catch (e) {
+      console.error("Failed to generate QR code:", e);
+    }
+  }
+
+  async function handleBiliLogout() {
+    try {
+      await logoutBilibili();
+      setBiliStatus({ logged_in: false });
+    } catch (e) {
+      console.error("Failed to logout:", e);
     }
   }
 
@@ -349,6 +397,57 @@ export default function SettingsPage() {
             )}
           </div>
         </div>
+      </div>
+
+      {/* Bilibili Account */}
+      <div className="bg-white rounded-xl border border-gray-200 p-6 mb-4">
+        <h2 className="text-sm font-semibold text-gray-900 mb-4">B站账号</h2>
+        <p className="text-xs text-gray-500 mb-4">登录 B 站账号以获取视频字幕（AI 字幕需要登录才能访问）</p>
+
+        {biliStatus?.logged_in ? (
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="inline-block w-2 h-2 rounded-full bg-green-500" />
+              <span className="text-sm text-gray-700">已登录 {biliStatus.dedeuserid && `(UID: ${biliStatus.dedeuserid})`}</span>
+            </div>
+            <button
+              onClick={handleBiliLogout}
+              className="px-3 py-1.5 text-xs rounded-md border border-red-200 text-red-600 hover:bg-red-50"
+            >
+              退出登录
+            </button>
+          </div>
+        ) : biliQrcode ? (
+          <div className="text-center">
+            <p className="text-sm text-gray-600 mb-3">
+              {biliQrStatus === "waiting" && "请使用 B 站 App 扫描二维码"}
+              {biliQrStatus === "scanned" && "已扫码，请在手机上确认登录"}
+              {biliQrStatus === "expired" && "二维码已过期，请重新生成"}
+            </p>
+            {biliQrStatus !== "expired" && (
+              <img
+                src={`data:image/png;base64,${biliQrcode}`}
+                alt="Bilibili QR Code"
+                className="w-48 h-48 mx-auto border border-gray-200 rounded-lg"
+              />
+            )}
+            {biliQrStatus === "expired" && (
+              <button
+                onClick={handleBiliLogin}
+                className="px-4 py-2 text-xs bg-blue-600 text-white rounded-md hover:bg-blue-700"
+              >
+                重新生成
+              </button>
+            )}
+          </div>
+        ) : (
+          <button
+            onClick={handleBiliLogin}
+            className="px-4 py-2 text-xs bg-blue-600 text-white rounded-md hover:bg-blue-700"
+          >
+            扫码登录
+          </button>
+        )}
       </div>
 
       {/* Models */}

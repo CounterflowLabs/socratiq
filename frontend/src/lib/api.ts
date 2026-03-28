@@ -1,6 +1,9 @@
 /** API client for Socratiq backend. */
 
-const API_BASE = "http://localhost:8000/api/v1";
+const API_BASE =
+  typeof window !== "undefined"
+    ? `http://${window.location.hostname}:8000/api/v1`
+    : "http://localhost:8000/api/v1";
 
 // ─── Source APIs ───────────────────────────────────────
 
@@ -549,4 +552,29 @@ export async function updateWhisperConfig(data: {
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
+}
+
+// ─── Bilibili Auth ───────────────────────────────────
+
+export async function getBilibiliStatus(): Promise<{ logged_in: boolean; dedeuserid?: string }> {
+  const res = await fetch(`${API_BASE}/settings/bilibili/status`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function generateBilibiliQrcode(): Promise<{ qrcode_base64: string; status: string }> {
+  const res = await fetch(`${API_BASE}/settings/bilibili/qrcode`, { method: "POST" });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function checkBilibiliQrcode(): Promise<{ status: string; dedeuserid?: string }> {
+  const res = await fetch(`${API_BASE}/settings/bilibili/qrcode/status`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function logoutBilibili(): Promise<void> {
+  const res = await fetch(`${API_BASE}/settings/bilibili`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await res.text());
 }

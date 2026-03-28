@@ -13,7 +13,8 @@ from app.config import get_settings
 from app.db.models.source import Source
 from app.db.models.user import User
 from app.models.source import SourceResponse, SourceListResponse
-from app.worker.tasks.content_ingestion import ingest_source
+from app.services.content_key import extract_content_key
+from app.worker.tasks.content_ingestion import ingest_source, clone_source
 
 router = APIRouter(prefix="/api/v1/sources", tags=["sources"])
 
@@ -62,30 +63,66 @@ async def create_source(
         if source_type not in ("bilibili", "youtube"):
             raise HTTPException(400, f"Unsupported source type: {source_type}")
 
+    # --- Compute content_key ---
+    file_content_bytes = content if file else None
+    ck = extract_content_key(source_type, url=url, file_content=file_content_bytes)
+
+    # --- Same-user dedup ---
+    if ck:
+        existing = (await db.execute(
+            select(Source).where(
+                Source.content_key == ck,
+                Source.created_by == user.id,
+                Source.status != "error",
+            )
+        )).scalar_one_or_none()
+        if existing:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "该资源已导入或正在处理中",
+                    "existing_source": _source_to_response(existing).model_dump(mode="json"),
+                },
+            )
+
+    # --- Cross-user ref_source lookup ---
+    ref_source = None
+    if ck:
+        ref_source = (await db.execute(
+            select(Source).where(
+                Source.content_key == ck,
+                Source.status != "error",
+                Source.created_by != user.id,
+            ).order_by(Source.created_at.desc()).limit(1)
+        )).scalar_one_or_none()
+
     source = Source(
         type=source_type,
         url=url,
         title=title,
-        status="pending",
+        status="waiting_donor" if ref_source else "pending",
         metadata_=metadata,
         created_by=user.id,
+        content_key=ck,
+        ref_source_id=ref_source.id if ref_source else None,
     )
     db.add(source)
+    await db.flush()
+
+    if ref_source and ref_source.status == "ready":
+        task = clone_source.delay(str(source.id), str(ref_source.id))
+        source.celery_task_id = task.id
+    elif ref_source:
+        # Ref still processing — Redis subscriber will dispatch clone when ready
+        pass
+    else:
+        task = ingest_source.delay(str(source.id))
+        source.celery_task_id = task.id
+
     await db.commit()
+    await db.refresh(source)
 
-    task = ingest_source.delay(str(source.id))
-
-    return SourceResponse(
-        id=source.id,
-        type=source.type,
-        url=source.url,
-        title=source.title,
-        status=source.status,
-        metadata_=source.metadata_,
-        task_id=task.id,
-        created_at=source.created_at,
-        updated_at=source.updated_at,
-    )
+    return _source_to_response(source)
 
 
 @router.get("", response_model=SourceListResponse)
@@ -116,6 +153,25 @@ async def list_sources(
         skip=skip,
         limit=limit,
     )
+
+
+@router.get("/active", response_model=list[SourceResponse])
+async def list_active_sources(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_local_user)],
+) -> list[SourceResponse]:
+    """List sources that are still being processed (not ready/error)."""
+    result = await db.execute(
+        select(Source)
+        .where(
+            Source.created_by == user.id,
+            Source.status.notin_(["ready", "error"]),
+            Source.celery_task_id.is_not(None),
+        )
+        .order_by(Source.created_at.desc())
+    )
+    sources = result.scalars().all()
+    return [_source_to_response(s) for s in sources]
 
 
 @router.get("/{source_id}", response_model=SourceResponse)
@@ -152,7 +208,7 @@ def _source_to_response(source: Source) -> SourceResponse:
         title=source.title,
         status=source.status,
         metadata_=source.metadata_,
-        task_id=None,
+        task_id=source.celery_task_id,
         created_at=source.created_at,
         updated_at=source.updated_at,
     )

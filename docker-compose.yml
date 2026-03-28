@@ -2,15 +2,15 @@ services:
   db:
     image: pgvector/pgvector:pg16
     environment:
-      POSTGRES_USER: learnmentor
-      POSTGRES_PASSWORD: learnmentor
-      POSTGRES_DB: learnmentor
+      POSTGRES_USER: socratiq
+      POSTGRES_PASSWORD: socratiq
+      POSTGRES_DB: socratiq
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U learnmentor"]
+      test: ["CMD-SHELL", "pg_isready -U socratiq"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -38,7 +38,7 @@ services:
         condition: service_healthy
     env_file: .env
     environment:
-      - DATABASE_URL=postgresql+asyncpg://learnmentor:learnmentor@db:5432/learnmentor
+      - DATABASE_URL=postgresql+asyncpg://socratiq:socratiq@db:5432/socratiq
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/1
       - CELERY_RESULT_BACKEND=redis://redis:6379/2
@@ -53,7 +53,7 @@ services:
         condition: service_healthy
     env_file: .env
     environment:
-      - DATABASE_URL=postgresql+asyncpg://learnmentor:learnmentor@db:5432/learnmentor
+      - DATABASE_URL=postgresql+asyncpg://socratiq:socratiq@db:5432/socratiq
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/1
       - CELERY_RESULT_BACKEND=redis://redis:6379/2

@@ -1,4 +1,4 @@
-# LearnMentor Phase 2 — Production-Grade Full Design
+# Socratiq Phase 2 — Production-Grade Full Design
 
 **Date**: 2026-03-25
 **Status**: Draft

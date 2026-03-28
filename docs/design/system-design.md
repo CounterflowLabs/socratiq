@@ -1,4 +1,4 @@
-# LearnMentor — AI 驱动的自适应学习系统
+# Socratiq — AI 驱动的自适应学习系统
 
 ## 系统设计文档 v1.1
 
@@ -10,7 +10,7 @@
 
 ### 1.1 不是工具，是导师
 
-| 传统平台 | LearnMentor |
+| 传统平台 | Socratiq |
 |----------|-------------|
 | 用户搜索课程 | 导师根据你的目标推荐学习路径 |
 | 看完视频做题 | 导师发现你哪里卡住了，调整讲解方式 |
@@ -340,7 +340,7 @@ class MentorAgent:
         asyncio.create_task(self._update_profile(user_message))
 
     def _build_system_prompt(self) -> str:
-        return f"""你是 LearnMentor 的导师。
+        return f"""你是 Socratiq 的导师。
 
 ## 你的学生
 {self.profile.model_dump_json(indent=2)}
@@ -397,7 +397,7 @@ class CodeRunner:
                   timeout: int = 30, test_cases: list[dict] = None) -> dict:
         """在 Docker 沙箱中执行代码，返回结果"""
         container = self.client.containers.run(
-            image=f"learnmentor-sandbox-{language}",
+            image=f"socratiq-sandbox-{language}",
             command=["python", "-c", code],
             mem_limit="256m",
             cpu_period=100000,
@@ -589,7 +589,7 @@ CREATE TABLE conversations (
 ## 5. 项目结构
 
 ```
-learnmentor/
+socratiq/
 ├── frontend/                      # Next.js
 │   ├── app/
 │   │   ├── page.tsx               # Dashboard
@@ -819,4 +819,4 @@ dependencies = [
 
 ---
 
-*LearnMentor v1.1 — 技术栈：Next.js + Python (FastAPI) + PostgreSQL + Claude API*
+*Socratiq v1.1 — 技术栈：Next.js + Python (FastAPI) + PostgreSQL + Claude API*

@@ -63,7 +63,7 @@ export function Sidebar({
           </div>
           {(!collapsed || mobileOpen) && (
             <span className="font-semibold text-gray-900 text-sm flex-1">
-              LearnMentor
+              Socratiq
             </span>
           )}
           {/* Mobile close button */}

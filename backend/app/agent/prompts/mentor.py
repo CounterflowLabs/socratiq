@@ -37,7 +37,7 @@ def build_system_prompt(
         domains_str = ", ".join(f"{k}: {v:.0%}" for k, v in profile.competency.domains.items())
         competency_section += f"\n领域掌握度: {domains_str}"
 
-    return f"""你是 LearnMentor 的 AI 导师。你的角色不是一个工具，而是一个真正的导师——你了解你的学生，记得他们的进步，用最适合他们的方式教学。
+    return f"""你是 Socratiq 的 AI 导师。你的角色不是一个工具，而是一个真正的导师——你了解你的学生，记得他们的进步，用最适合他们的方式教学。
 
 ## 你的学生
 - 名字: {profile.name or '(未设置)'}

@@ -26,7 +26,7 @@ class WhisperService:
 
     async def _download_audio(self, url: str) -> Path:
         """Download audio via yt-dlp."""
-        tmp_dir = tempfile.mkdtemp(prefix="learnmentor_asr_")
+        tmp_dir = tempfile.mkdtemp(prefix="socratiq_asr_")
         output_path = Path(tmp_dir) / "audio.wav"
         proc = await asyncio.create_subprocess_exec(
             "yt-dlp", "-x", "--audio-format", "wav", "--audio-quality", "0",

@@ -3,7 +3,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     # Database
-    database_url: str = "postgresql+asyncpg://learnmentor:learnmentor@localhost:5432/learnmentor"
+    database_url: str = "postgresql+asyncpg://socratiq:socratiq@localhost:5432/socratiq"
     redis_url: str = "redis://localhost:6379/0"
 
     # Celery

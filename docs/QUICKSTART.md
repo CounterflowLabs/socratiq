@@ -1,4 +1,4 @@
-# LearnMentor 开发快速启动指南
+# Socratiq 开发快速启动指南
 
 ## 从 Cowork 设计原型到 Claude Code 开发的丝滑过渡
 
@@ -44,12 +44,12 @@ Superpowers 是一个 Claude Code 开发方法论框架，核心流程：
 
 ```bash
 # 创建项目目录
-mkdir learnmentor && cd learnmentor
+mkdir socratiq && cd socratiq
 git init
 
 # 把 Cowork 生成的文件拷贝过来
 # CLAUDE.md 已经为你准备好了（见同目录下的 CLAUDE.md）
-cp /path/to/learnmentor-bootstrap/CLAUDE.md ./CLAUDE.md
+cp /path/to/socratiq-bootstrap/CLAUDE.md ./CLAUDE.md
 ```
 
 ---
@@ -66,7 +66,7 @@ claude
 直接把下面这段话贴给 Claude Code，它会按 Superpowers 流程启动：
 
 ```
-我要开发 LearnMentor —— 一个 AI 驱动的自适应学习系统。
+我要开发 Socratiq —— 一个 AI 驱动的自适应学习系统。
 
 请先阅读 CLAUDE.md 了解项目全貌。
 
@@ -191,7 +191,7 @@ Session 20: 部署配置 + CI/CD
 |------|------|------|
 | CLAUDE.md | `./CLAUDE.md` | Claude Code 项目上下文（已准备好） |
 | 产品设计手册 | 你的文档文件夹 | 完整产品方案 v2.0 |
-| 交互原型 | `LearnMentor-Prototype.jsx` | 可运行的 React 原型（Cowork 产出） |
+| 交互原型 | `Socratiq-Prototype.jsx` | 可运行的 React 原型（Cowork 产出） |
 | 系统设计文档 | 你的文档文件夹 | 详细系统架构设计 |
 
 ---

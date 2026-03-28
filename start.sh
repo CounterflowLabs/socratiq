@@ -1,8 +1,8 @@
 #!/bin/bash
-# LearnMentor Offline — 一键启动脚本
+# Socratiq Offline — 一键启动脚本
 set -e
 
-echo "🧠 LearnMentor Offline — AI 驱动的自适应学习系统"
+echo "🧠 Socratiq Offline — AI 驱动的自适应学习系统"
 echo "================================================"
 echo ""
 
@@ -49,7 +49,7 @@ cd ..
 
 echo ""
 echo "================================================"
-echo "✅ LearnMentor 已启动！"
+echo "✅ Socratiq 已启动！"
 echo ""
 echo "   前端: http://localhost:3000"
 echo "   后端: http://localhost:8000"

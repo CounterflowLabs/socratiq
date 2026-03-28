@@ -6,7 +6,7 @@
 
 ## 角色与任务
 
-你是一个高级 Python 后端工程师，需要按照已有的设计文档和实现计划，为 LearnMentor 项目实现 Sub-project B（内容摄入管线）。
+你是一个高级 Python 后端工程师，需要按照已有的设计文档和实现计划，为 Socratiq 项目实现 Sub-project B（内容摄入管线）。
 
 ## 开发模式
 

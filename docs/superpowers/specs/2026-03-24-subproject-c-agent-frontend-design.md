@@ -9,7 +9,7 @@
 
 ## 1. Overview
 
-Sub-project C implements the two user-facing layers of LearnMentor:
+Sub-project C implements the two user-facing layers of Socratiq:
 
 1. **MentorAgent** — the AI agent core that powers all mentor interactions (backend)
 2. **Frontend** — the Next.js application users interact with (import, learn, chat, settings)
@@ -687,7 +687,7 @@ def build_system_prompt(
         domains_str = ", ".join(f"{k}: {v:.0%}" for k, v in profile.competency.domains.items())
         competency_section += f"\n领域掌握度: {domains_str}"
 
-    return f"""你是 LearnMentor 的 AI 导师。你的角色不是一个工具，而是一个真正的导师——你了解你的学生，记得他们的进步，用最适合他们的方式教学。
+    return f"""你是 Socratiq 的 AI 导师。你的角色不是一个工具，而是一个真正的导师——你了解你的学生，记得他们的进步，用最适合他们的方式教学。
 
 ## 你的学生
 - 名字: {profile.name or '(未设置)'}
@@ -1476,7 +1476,7 @@ No separate memory manager class is needed for MVP. The three access patterns ab
 #### Initialize
 
 ```bash
-cd learnmentor/
+cd socratiq/
 npx create-next-app@latest frontend \
   --typescript --tailwind --eslint --app --src-dir=false \
   --import-alias="@/*" --use-npm
@@ -1549,7 +1549,7 @@ import "./globals.css";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "LearnMentor",
+  title: "Socratiq",
   description: "AI-powered adaptive learning system",
 };
 
@@ -2471,7 +2471,7 @@ curl http://localhost:8000/api/courses
 
 **Setup commands:**
 ```bash
-cd learnmentor/
+cd socratiq/
 npx create-next-app@latest frontend --typescript --tailwind --eslint --app --src-dir=false --import-alias="@/*" --use-npm
 cd frontend/
 npm install zustand eventsource-parser react-markdown remark-gfm

@@ -8,7 +8,7 @@
 
 ## 1. Overview
 
-Sub-project A builds the foundation layer for LearnMentor MVP. Everything else (content ingestion, agent core, frontend) depends on this layer being solid.
+Sub-project A builds the foundation layer for Socratiq MVP. Everything else (content ingestion, agent core, frontend) depends on this layer being solid.
 
 ### Key Decisions
 
@@ -31,7 +31,7 @@ Sub-project A builds the foundation layer for LearnMentor MVP. Everything else (
 ### Directory Structure
 
 ```
-learnmentor/
+socratiq/
 ├── backend/
 │   ├── app/
 │   │   ├── __init__.py
@@ -112,9 +112,9 @@ services:
   db:
     image: pgvector/pgvector:pg16
     environment:
-      POSTGRES_USER: learnmentor
-      POSTGRES_PASSWORD: learnmentor
-      POSTGRES_DB: learnmentor
+      POSTGRES_USER: socratiq
+      POSTGRES_PASSWORD: socratiq
+      POSTGRES_DB: socratiq
     ports:
       - "5432:5432"
     volumes:
@@ -144,7 +144,7 @@ volumes:
 ```python
 class Settings(BaseSettings):
     # Database
-    database_url: str = "postgresql+asyncpg://learnmentor:learnmentor@localhost:5432/learnmentor"
+    database_url: str = "postgresql+asyncpg://socratiq:socratiq@localhost:5432/socratiq"
     redis_url: str = "redis://localhost:6379/0"
 
     # Celery

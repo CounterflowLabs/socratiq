@@ -136,7 +136,7 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
 - [ ] **Step 4: Sync dependencies**
 
 ```bash
-cd /Users/tulip/Documents/Claude/Projects/LLMs/learnmentor/backend && uv sync
+cd /Users/tulip/Documents/Claude/Projects/LLMs/socratiq/backend && uv sync
 ```
 
 - [ ] **Step 5: Commit**
@@ -427,7 +427,7 @@ class LlmUsageLog(BaseMixin, Base):
 - [ ] **Step 4: Generate and review Alembic migration**
 
 ```bash
-cd /Users/tulip/Documents/Claude/Projects/LLMs/learnmentor/backend
+cd /Users/tulip/Documents/Claude/Projects/LLMs/socratiq/backend
 .venv/bin/alembic revision --autogenerate -m "add auth fields, multi-tenant models, usage logs"
 ```
 
@@ -1229,7 +1229,7 @@ git commit -m "feat: add CostGuard service for LLM usage tracking and budgets"
 - [ ] **Step 1: Install next-auth**
 
 ```bash
-cd /Users/tulip/Documents/Claude/Projects/LLMs/learnmentor/frontend
+cd /Users/tulip/Documents/Claude/Projects/LLMs/socratiq/frontend
 npm install next-auth@beta
 ```
 
@@ -1427,7 +1427,7 @@ export default function LoginPage() {
     <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
-          <h1 className="text-2xl font-bold text-gray-900">LearnMentor</h1>
+          <h1 className="text-2xl font-bold text-gray-900">Socratiq</h1>
           <p className="text-sm text-gray-500 mt-1">AI 驱动的自适应学习系统</p>
         </div>
 
@@ -1495,13 +1495,13 @@ const API_BASE = "/api/v1";
 - [ ] **Step 8: Build and verify**
 
 ```bash
-cd /Users/tulip/Documents/Claude/Projects/LLMs/learnmentor/frontend && npm run build
+cd /Users/tulip/Documents/Claude/Projects/LLMs/socratiq/frontend && npm run build
 ```
 
 - [ ] **Step 9: Commit**
 
 ```bash
-cd /Users/tulip/Documents/Claude/Projects/LLMs/learnmentor
+cd /Users/tulip/Documents/Claude/Projects/LLMs/socratiq
 git add frontend/
 git commit -m "feat(frontend): add Auth.js BFF auth, login page, API proxy"
 ```
@@ -1602,14 +1602,14 @@ Every `client.post("/api/v1/sources", ...)` call needs `headers={"Authorization"
 - [ ] **Step 3: Run full test suite**
 
 ```bash
-cd /Users/tulip/Documents/Claude/Projects/LLMs/learnmentor/backend
+cd /Users/tulip/Documents/Claude/Projects/LLMs/socratiq/backend
 .venv/bin/python -m pytest -v
 ```
 
 - [ ] **Step 4: Run frontend build + tests**
 
 ```bash
-cd /Users/tulip/Documents/Claude/Projects/LLMs/learnmentor/frontend
+cd /Users/tulip/Documents/Claude/Projects/LLMs/socratiq/frontend
 npm run build && npm test
 ```
 

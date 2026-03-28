@@ -957,94 +957,6 @@ redis = [
 ]
 
 [[package]]
-name = "learnmentor-backend"
-version = "0.1.0"
-source = { virtual = "." }
-dependencies = [
-    { name = "alembic" },
-    { name = "anthropic" },
-    { name = "asyncpg" },
-    { name = "bcrypt" },
-    { name = "bilibili-api-python" },
-    { name = "celery", extra = ["redis"] },
-    { name = "cryptography" },
-    { name = "fastapi" },
-    { name = "google-auth" },
-    { name = "httpx" },
-    { name = "numpy" },
-    { name = "openai" },
-    { name = "pgvector" },
-    { name = "pydantic" },
-    { name = "pydantic-settings" },
-    { name = "pyjwt" },
-    { name = "pymupdf" },
-    { name = "python-multipart" },
-    { name = "redis" },
-    { name = "sentry-sdk", extra = ["fastapi"] },
-    { name = "sqlalchemy", extra = ["asyncio"] },
-    { name = "sse-starlette" },
-    { name = "structlog" },
-    { name = "uvicorn", extra = ["standard"] },
-    { name = "youtube-transcript-api" },
-    { name = "yt-dlp" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "fakeredis", extra = ["lua"] },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "testcontainers" },
-]
-whisper = [
-    { name = "openai-whisper" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest-asyncio" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "alembic" },
-    { name = "anthropic", specifier = ">=0.40" },
-    { name = "asyncpg" },
-    { name = "bcrypt", specifier = ">=4.0" },
-    { name = "bilibili-api-python", specifier = ">=16.0" },
-    { name = "celery", extras = ["redis"] },
-    { name = "cryptography" },
-    { name = "fakeredis", extras = ["lua"], marker = "extra == 'dev'" },
-    { name = "fastapi", specifier = ">=0.115" },
-    { name = "google-auth", specifier = ">=2.0" },
-    { name = "httpx" },
-    { name = "numpy" },
-    { name = "openai", specifier = ">=1.50" },
-    { name = "openai-whisper", marker = "extra == 'whisper'", specifier = ">=20231117" },
-    { name = "pgvector" },
-    { name = "pydantic", specifier = ">=2.0" },
-    { name = "pydantic-settings" },
-    { name = "pyjwt", specifier = ">=2.8" },
-    { name = "pymupdf", specifier = ">=1.24" },
-    { name = "pytest", marker = "extra == 'dev'" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'" },
-    { name = "python-multipart" },
-    { name = "redis" },
-    { name = "sentry-sdk", extras = ["fastapi"], specifier = ">=2.0" },
-    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
-    { name = "sse-starlette" },
-    { name = "structlog", specifier = ">=24.0" },
-    { name = "testcontainers", extras = ["postgres"], marker = "extra == 'dev'" },
-    { name = "uvicorn", extras = ["standard"] },
-    { name = "youtube-transcript-api", specifier = ">=0.6.1" },
-    { name = "yt-dlp", specifier = ">=2024.1" },
-]
-provides-extras = ["dev", "whisper"]
-
-[package.metadata.requires-dev]
-dev = [{ name = "pytest-asyncio", specifier = ">=1.3.0" }]
-
-[[package]]
 name = "llvmlite"
 version = "0.46.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2353,6 +2265,94 @@ sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e0
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235, upload-time = "2024-02-25T23:20:01.196Z" },
 ]
+
+[[package]]
+name = "socratiq-backend"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "alembic" },
+    { name = "anthropic" },
+    { name = "asyncpg" },
+    { name = "bcrypt" },
+    { name = "bilibili-api-python" },
+    { name = "celery", extra = ["redis"] },
+    { name = "cryptography" },
+    { name = "fastapi" },
+    { name = "google-auth" },
+    { name = "httpx" },
+    { name = "numpy" },
+    { name = "openai" },
+    { name = "pgvector" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "pyjwt" },
+    { name = "pymupdf" },
+    { name = "python-multipart" },
+    { name = "redis" },
+    { name = "sentry-sdk", extra = ["fastapi"] },
+    { name = "sqlalchemy", extra = ["asyncio"] },
+    { name = "sse-starlette" },
+    { name = "structlog" },
+    { name = "uvicorn", extra = ["standard"] },
+    { name = "youtube-transcript-api" },
+    { name = "yt-dlp" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "fakeredis", extra = ["lua"] },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "testcontainers" },
+]
+whisper = [
+    { name = "openai-whisper" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "alembic" },
+    { name = "anthropic", specifier = ">=0.40" },
+    { name = "asyncpg" },
+    { name = "bcrypt", specifier = ">=4.0" },
+    { name = "bilibili-api-python", specifier = ">=16.0" },
+    { name = "celery", extras = ["redis"] },
+    { name = "cryptography" },
+    { name = "fakeredis", extras = ["lua"], marker = "extra == 'dev'" },
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "google-auth", specifier = ">=2.0" },
+    { name = "httpx" },
+    { name = "numpy" },
+    { name = "openai", specifier = ">=1.50" },
+    { name = "openai-whisper", marker = "extra == 'whisper'", specifier = ">=20231117" },
+    { name = "pgvector" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "pydantic-settings" },
+    { name = "pyjwt", specifier = ">=2.8" },
+    { name = "pymupdf", specifier = ">=1.24" },
+    { name = "pytest", marker = "extra == 'dev'" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'" },
+    { name = "python-multipart" },
+    { name = "redis" },
+    { name = "sentry-sdk", extras = ["fastapi"], specifier = ">=2.0" },
+    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
+    { name = "sse-starlette" },
+    { name = "structlog", specifier = ">=24.0" },
+    { name = "testcontainers", extras = ["postgres"], marker = "extra == 'dev'" },
+    { name = "uvicorn", extras = ["standard"] },
+    { name = "youtube-transcript-api", specifier = ">=0.6.1" },
+    { name = "yt-dlp", specifier = ">=2024.1" },
+]
+provides-extras = ["dev", "whisper"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest-asyncio", specifier = ">=1.3.0" }]
 
 [[package]]
 name = "sortedcontainers"

@@ -9,7 +9,7 @@
 
 ## 1. Overview
 
-Sub-project B implements the content ingestion pipeline — the first user-facing feature of LearnMentor. A user submits a Bilibili video URL or uploads a PDF, and the system asynchronously extracts content, analyzes it with an LLM, generates embeddings, and produces a structured course.
+Sub-project B implements the content ingestion pipeline — the first user-facing feature of Socratiq. A user submits a Bilibili video URL or uploads a PDF, and the system asynchronously extracts content, analyzes it with an LLM, generates embeddings, and produces a structured course.
 
 ### Data Flow
 

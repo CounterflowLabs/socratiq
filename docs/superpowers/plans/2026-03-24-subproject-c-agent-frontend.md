@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Implement the MentorAgent AI agent core (backend) and the Next.js frontend — the user-facing layers of LearnMentor.
+**Goal:** Implement the MentorAgent AI agent core (backend) and the Next.js frontend — the user-facing layers of Socratiq.
 
 **Architecture:** MentorAgent agent loop with tool_use (knowledge RAG, profile, progress tools) → SSE streaming via FastAPI → Next.js App Router frontend with Zustand state + shadcn/ui components.
 
@@ -474,7 +474,7 @@ git commit -m "feat(agent): register chat router and add SSE dependencies"
 - [ ] **Step 1: Initialize Next.js project**
 
 ```bash
-cd /path/to/learnmentor
+cd /path/to/socratiq
 npx create-next-app@latest frontend --typescript --tailwind --eslint --app --src-dir=false --import-alias="@/*" --use-npm
 ```
 

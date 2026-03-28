@@ -1,8 +1,8 @@
-# LearnMentor 产品设计手册
+# Socratiq 产品设计手册
 
 **AI 驱动的自适应学习系统 · 产品设计手册 v2.0**
 
-> 本手册汇总了 LearnMentor 从概念构想到产品规划的全部讨论、调研报告和设计文档，
+> 本手册汇总了 Socratiq 从概念构想到产品规划的全部讨论、调研报告和设计文档，
 > 作为开发团队和未来潜在投资者的核心参考文件。
 
 ---
@@ -31,9 +31,9 @@
 
 ## 1.2 核心问题
 
-传统学习平台解决的是"找到信息"的问题。LearnMentor 解决的是**"学会知识"**的问题。
+传统学习平台解决的是"找到信息"的问题。Socratiq 解决的是**"学会知识"**的问题。
 
-同一篇论文，对初学者它会抽出核心思想用大白话讲；对进阶学生它会聚焦方法论细节并设计复现实验。这个"因材施教"的层才是 LearnMentor 与 NotebookLM、传统知识库的根本差异。
+同一篇论文，对初学者它会抽出核心思想用大白话讲；对进阶学生它会聚焦方法论细节并设计复现实验。这个"因材施教"的层才是 Socratiq 与 NotebookLM、传统知识库的根本差异。
 
 ## 1.3 产品定位
 
@@ -44,7 +44,7 @@
 
 ## 1.4 与竞品的本质差异
 
-| 维度 | NotebookLM | Khanmigo | Duolingo | **LearnMentor** |
+| 维度 | NotebookLM | Khanmigo | Duolingo | **Socratiq** |
 |------|-----------|----------|----------|----------------|
 | 核心问题 | "资料说了什么？" | "这道题怎么做？" | "今天学了吗？" | **"你怎么才能学会？"** |
 | 学生画像 | ❌ 无 | 部分 | ✅ 自适应 | ✅ 持续演化认知模型 |
@@ -113,7 +113,7 @@
 
 | 产品 | 自适应画像 | 多源内容 | AI导师 | 游戏化 | 主动探索 | 价格/月 |
 |------|:---:|:---:|:---:|:---:|:---:|---:|
-| **LearnMentor** | ✅ | ✅ | ✅ | 🔜 | ✅ | 待定 |
+| **Socratiq** | ✅ | ✅ | ✅ | 🔜 | ✅ | 待定 |
 | NotebookLM | ❌ | ✅ | ❌ | ❌ | ❌ | $0-20 |
 | Khanmigo | 部分 | ❌ | ✅ | ❌ | ❌ | $4 |
 | Duolingo Max | ✅ | ❌ | 部分 | ✅ | ❌ | $30 |
@@ -130,7 +130,7 @@
 - **松鼠 AI**：获 TIME 2025 最佳发明，服务 2,400 万学生，2,000+ 实体门店
 - **科大讯飞**：自研 Spark X1 模型，幻觉率仅 2.39%（行业平均 6.8%），覆盖 5 万所学校
 
-### LearnMentor 在中国的机会
+### Socratiq 在中国的机会
 
 - 纯软件在 K-12 市场面临硬件垄断
 - **Bilibili 视频摄入**是战略级差异化——B站学习区极为热门，没有硬件竞品摄入此内容
@@ -158,9 +158,9 @@
 
 传统学习平台的逻辑：**用户主动操作 → 系统被动响应**
 
-LearnMentor 的逻辑：**导师主动观察 → 理解学生 → 适时引导**
+Socratiq 的逻辑：**导师主动观察 → 理解学生 → 适时引导**
 
-| 传统平台 | LearnMentor |
+| 传统平台 | Socratiq |
 |----------|-------------|
 | 用户搜索课程 | 导师根据目标推荐学习路径 |
 | 看完视频做题 | 导师发现你哪里卡住了，调整讲解方式 |
@@ -474,7 +474,7 @@ async def post_interaction_update(self, interaction: Interaction):
 
 ```python
 def build_system_prompt(self, context: AgentContext) -> str:
-    return f"""你是 LearnMentor 的导师 Agent。
+    return f"""你是 Socratiq 的导师 Agent。
 
 ## 你的学生（画像摘要）
 姓名：{context.profile.name}
@@ -866,7 +866,7 @@ conversations (id, user_id, course_id, mode, messages JSONB, created_at, updated
 ## B. 项目结构
 
 ```
-learnmentor/
+socratiq/
 ├── frontend/                      # Next.js
 │   ├── app/                       # App Router 页面
 │   ├── components/                # VideoPlayer, MentorChat, CodeEditor, KnowledgeGraph
@@ -923,6 +923,6 @@ next, react, typescript, tailwindcss, @shadcn/ui, monaco-editor, d3
 
 ---
 
-*LearnMentor 产品设计手册 v2.0*
+*Socratiq 产品设计手册 v2.0*
 *技术栈：Next.js + Python (FastAPI) + PostgreSQL/pgvector + Claude API*
 *最后更新：2025*

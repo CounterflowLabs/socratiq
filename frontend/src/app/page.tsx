@@ -96,7 +96,7 @@ export default function DashboardPage() {
       <div className="max-w-4xl mx-auto px-4 sm:px-6 pt-14 md:pt-6 pb-6">
         {/* Greeting */}
         <div className="mb-6">
-          <h1 className="text-xl font-bold text-gray-900">LearnMentor</h1>
+          <h1 className="text-xl font-bold text-gray-900">Socratiq</h1>
           <p className="text-sm text-gray-500 mt-1">AI 驱动的个性化学习平台</p>
         </div>
 
@@ -190,7 +190,7 @@ export default function DashboardPage() {
             </div>
             <h3 className="text-base font-semibold text-gray-900 mb-2">还没有课程</h3>
             <p className="text-sm text-gray-500 mb-6 max-w-sm mx-auto">
-              导入一个 B站视频或 PDF 文档，LearnMentor 会自动分析内容并为你生成个性化学习路径。
+              导入一个 B站视频或 PDF 文档，Socratiq 会自动分析内容并为你生成个性化学习路径。
             </p>
             <Link href="/import">
               <Button>

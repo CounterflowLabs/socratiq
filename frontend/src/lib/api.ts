@@ -1,4 +1,4 @@
-/** API client for LearnMentor backend. */
+/** API client for Socratiq backend. */
 
 const API_BASE = "http://localhost:8000/api/v1";
 

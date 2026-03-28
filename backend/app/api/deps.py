@@ -50,7 +50,7 @@ async def get_local_user(db: AsyncSession = Depends(get_db)) -> User:
     """Return the fixed local user (offline mode, no auth)."""
     user = await db.get(User, LOCAL_USER_ID)
     if not user:
-        user = User(id=LOCAL_USER_ID, email="local@learnmentor.local", name="Local User")
+        user = User(id=LOCAL_USER_ID, email="local@socratiq.local", name="Local User")
         db.add(user)
         await db.flush()
     return user

@@ -19,7 +19,7 @@
 - [ ] **Step 1: Create test directory structure**
 
 ```bash
-cd /Users/tulip/Documents/Claude/Projects/LLMs/learnmentor/backend
+cd /Users/tulip/Documents/Claude/Projects/LLMs/socratiq/backend
 mkdir -p tests/tools/extractors
 touch tests/tools/__init__.py tests/tools/extractors/__init__.py
 ```
@@ -377,7 +377,7 @@ class WhisperService:
         Raises:
             RuntimeError: If yt-dlp fails.
         """
-        tmp_dir = tempfile.mkdtemp(prefix="learnmentor_asr_")
+        tmp_dir = tempfile.mkdtemp(prefix="socratiq_asr_")
         output_path = Path(tmp_dir) / "audio.wav"
 
         proc = await asyncio.create_subprocess_exec(
@@ -1064,14 +1064,14 @@ const canSubmit = goal && (sourceType === "pdf" ? pdfName : url.trim());
 - [ ] **Step 2: Build and verify**
 
 ```bash
-cd /Users/tulip/Documents/Claude/Projects/LLMs/learnmentor/frontend && npm run build
+cd /Users/tulip/Documents/Claude/Projects/LLMs/socratiq/frontend && npm run build
 ```
 Expected: Build succeeds
 
 - [ ] **Step 3: Commit**
 
 ```bash
-cd /Users/tulip/Documents/Claude/Projects/LLMs/learnmentor
+cd /Users/tulip/Documents/Claude/Projects/LLMs/socratiq
 git add frontend/src/app/import/page.tsx
 git commit -m "feat(frontend): add YouTube tab to import page"
 ```
@@ -1108,7 +1108,7 @@ Add to `TestSources` class in `test_smoke.py`:
 - [ ] **Step 2: Run all tests**
 
 ```bash
-cd /Users/tulip/Documents/Claude/Projects/LLMs/learnmentor/backend
+cd /Users/tulip/Documents/Claude/Projects/LLMs/socratiq/backend
 .venv/bin/python -m pytest -v --tb=short
 ```
 Expected: ALL PASS (previous 63 + new extractor tests + new smoke test)
@@ -1127,21 +1127,21 @@ git commit -m "test: add YouTube source creation smoke test"
 - [ ] **Step 1: Run full backend test suite**
 
 ```bash
-cd /Users/tulip/Documents/Claude/Projects/LLMs/learnmentor/backend
+cd /Users/tulip/Documents/Claude/Projects/LLMs/socratiq/backend
 .venv/bin/python -m pytest -v
 ```
 
 - [ ] **Step 2: Run frontend build**
 
 ```bash
-cd /Users/tulip/Documents/Claude/Projects/LLMs/learnmentor/frontend
+cd /Users/tulip/Documents/Claude/Projects/LLMs/socratiq/frontend
 npm run build
 ```
 
 - [ ] **Step 3: Run frontend tests**
 
 ```bash
-cd /Users/tulip/Documents/Claude/Projects/LLMs/learnmentor/frontend
+cd /Users/tulip/Documents/Claude/Projects/LLMs/socratiq/frontend
 npm test
 ```
 

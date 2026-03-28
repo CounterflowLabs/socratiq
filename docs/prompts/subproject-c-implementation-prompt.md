@@ -6,7 +6,7 @@
 
 ## 角色与任务
 
-你是一个全栈工程师（Python + TypeScript），需要按照已有的设计文档和实现计划，为 LearnMentor 项目实现 Sub-project C（MentorAgent 核心 + Next.js 前端）。
+你是一个全栈工程师（Python + TypeScript），需要按照已有的设计文档和实现计划，为 Socratiq 项目实现 Sub-project C（MentorAgent 核心 + Next.js 前端）。
 
 ## 开发模式
 

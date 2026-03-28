@@ -1,4 +1,4 @@
-# LearnMentor v0.1.0 开源离线版设计
+# Socratiq v0.1.0 开源离线版设计
 
 **Date**: 2026-03-25
 **Status**: Approved
@@ -53,8 +53,8 @@ services:
 
 用户体验：
 ```bash
-git clone https://github.com/xxx/learnmentor
-cd learnmentor
+git clone https://github.com/CounterflowLabs/socratiq
+cd socratiq
 cp .env.example .env   # 编辑 LLM 配置（或跳过，首次启动引导）
 docker compose up
 # 打开 http://localhost:3000
@@ -335,7 +335,7 @@ Celery task: ingest_source
 ## 9. README + LICENSE
 
 ```markdown
-# 🧠 LearnMentor
+# 🧠 Socratiq
 
 把 B 站编程教程变成交互式课程。导入视频合集，AI 自动生成结构化课文、
 诊断测评、Lab 代码练习，配合苏格拉底式 AI 导师辅导学习。
@@ -353,8 +353,8 @@ Celery task: ingest_source
 
 ## 🚀 快速开始
 
-git clone https://github.com/xxx/learnmentor
-cd learnmentor
+git clone https://github.com/CounterflowLabs/socratiq
+cd socratiq
 docker compose up
 # 打开 http://localhost:3000
 

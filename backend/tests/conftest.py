@@ -91,7 +91,7 @@ async def demo_user(db_session):
     """Insert the local user for offline mode."""
     user = User(
         id=LOCAL_USER_ID,
-        email="local@learnmentor.local",
+        email="local@socratiq.local",
         name="Local User",
     )
     db_session.add(user)

@@ -1,4 +1,4 @@
-# 🧠 LearnMentor
+# 🧠 Socratiq
 
 把 B 站编程教程变成交互式课程。
 
@@ -20,8 +20,8 @@
 ### Docker Compose（推荐）
 
 ```bash
-git clone https://github.com/xxx/learnmentor.git
-cd learnmentor
+git clone https://github.com/CounterflowLabs/socratiq.git
+cd socratiq
 cp .env.example .env
 docker compose up
 ```
@@ -64,7 +64,7 @@ npm run dev
 ## 📁 项目结构
 
 ```
-learnmentor/
+socratiq/
 ├── backend/          # FastAPI + Python
 │   ├── app/
 │   │   ├── api/      # API 路由

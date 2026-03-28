@@ -135,7 +135,7 @@ Add imports for both new models.
 - [ ] **Step 4: Generate and apply Alembic migration**
 
 ```bash
-cd /Users/tulip/Documents/Claude/Projects/LLMs/learnmentor/backend
+cd /Users/tulip/Documents/Claude/Projects/LLMs/socratiq/backend
 .venv/bin/alembic revision --autogenerate -m "add exercise_submissions and review_items tables"
 .venv/bin/alembic upgrade head
 ```
@@ -149,7 +149,7 @@ cd /Users/tulip/Documents/Claude/Projects/LLMs/learnmentor/backend
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Users/tulip/Documents/Claude/Projects/LLMs/learnmentor
+cd /Users/tulip/Documents/Claude/Projects/LLMs/socratiq
 git add backend/app/db/models/ backend/alembic/
 git commit -m "feat(db): add exercise_submissions and review_items tables"
 ```
@@ -1490,7 +1490,7 @@ Rewrite `frontend/src/app/diagnostic/page.tsx` as a card-based quiz:
 - [ ] **Step 3: Build and verify**
 
 ```bash
-cd /Users/tulip/Documents/Claude/Projects/LLMs/learnmentor/frontend && npm run build
+cd /Users/tulip/Documents/Claude/Projects/LLMs/socratiq/frontend && npm run build
 ```
 
 - [ ] **Step 4: Commit**
@@ -1640,14 +1640,14 @@ git commit -m "feat(frontend): add review stats card to dashboard"
 - [ ] **Step 1: Run full backend test suite**
 
 ```bash
-cd /Users/tulip/Documents/Claude/Projects/LLMs/learnmentor/backend
+cd /Users/tulip/Documents/Claude/Projects/LLMs/socratiq/backend
 .venv/bin/python -m pytest -v --tb=short
 ```
 
 - [ ] **Step 2: Run frontend build + tests**
 
 ```bash
-cd /Users/tulip/Documents/Claude/Projects/LLMs/learnmentor/frontend
+cd /Users/tulip/Documents/Claude/Projects/LLMs/socratiq/frontend
 npm run build && npm test
 ```
 

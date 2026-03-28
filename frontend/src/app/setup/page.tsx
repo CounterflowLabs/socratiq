@@ -124,7 +124,7 @@ export default function SetupPage() {
           <div className="w-14 h-14 rounded-2xl bg-blue-50 flex items-center justify-center mx-auto mb-4">
             <Brain className="w-7 h-7 text-blue-600" />
           </div>
-          <h1 className="text-xl font-bold text-gray-900">欢迎使用 LearnMentor</h1>
+          <h1 className="text-xl font-bold text-gray-900">欢迎使用 Socratiq</h1>
           <p className="text-sm text-gray-500 mt-2">首先配置一个 AI 模型，才能开始学习</p>
         </div>
 

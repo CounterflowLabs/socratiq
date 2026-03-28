@@ -12,7 +12,7 @@ export default function WelcomePage() {
           <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center">
             <Brain className="w-4 h-4 text-white" />
           </div>
-          <span className="font-semibold text-gray-900">LearnMentor</span>
+          <span className="font-semibold text-gray-900">Socratiq</span>
         </div>
         <Button variant="secondary" size="sm">登录</Button>
       </header>
@@ -26,7 +26,7 @@ export default function WelcomePage() {
             把任何学习资料，<br />变成你的<span className="text-blue-600">私人导师</span>
           </h1>
           <p className="text-lg text-gray-500 mb-8 max-w-lg mx-auto" style={{ lineHeight: 1.6 }}>
-            粘贴一个 B站视频链接或上传 PDF，LearnMentor 会为你生成个性化学习路径，用苏格拉底式引导帮你真正学会。
+            粘贴一个 B站视频链接或上传 PDF，Socratiq 会为你生成个性化学习路径，用苏格拉底式引导帮你真正学会。
           </p>
 
           <div className="flex items-center justify-center gap-3 mb-12">

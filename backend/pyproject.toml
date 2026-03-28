@@ -1,7 +1,7 @@
 [project]
-name = "learnmentor-backend"
+name = "socratiq-backend"
 version = "0.1.0"
-description = "LearnMentor - AI-driven adaptive learning system backend"
+description = "Socratiq - AI-driven adaptive learning system backend"
 requires-python = ">=3.12"
 dependencies = [
     # Web framework

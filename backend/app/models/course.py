@@ -11,6 +11,7 @@ class CourseGenerateRequest(BaseModel):
     """Request body for generating a course from sources."""
     source_ids: list[uuid.UUID] = Field(..., min_length=1)
     title: str | None = None
+    goal: str | None = None
 
 
 class CourseResponse(BaseModel):
@@ -18,6 +19,7 @@ class CourseResponse(BaseModel):
     id: uuid.UUID
     title: str
     description: str | None = None
+    goal: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -42,6 +44,7 @@ class CourseDetailResponse(BaseModel):
     id: uuid.UUID
     title: str
     description: str | None = None
+    goal: str | None = None
     source_ids: list[uuid.UUID] = Field(default_factory=list)
     sections: list[SectionResponse] = Field(default_factory=list)
     created_at: datetime

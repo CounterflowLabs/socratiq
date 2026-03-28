@@ -3,16 +3,32 @@
 import { useEffect, useState } from "react";
 import {
   getModels,
-  getModelRoutes,
+  getModelTiers,
+  updateModelTiers,
   deleteModel,
   testModel,
   createModel,
 } from "@/lib/api";
-import type { ModelConfigResponse, ModelRouteResponse } from "@/lib/api";
+import type { ModelConfigResponse, ModelTierResponse, ModelTier } from "@/lib/api";
+
+const TIER_INFO: { tier: ModelTier; label: string; description: string }[] = [
+  { tier: "primary", label: "主交互模型", description: "对话教学、工具调用" },
+  { tier: "light", label: "轻量任务模型", description: "内容分析、翻译、摘要" },
+  { tier: "strong", label: "复杂推理模型", description: "评估、诊断（可选，未配置时回退到主交互模型）" },
+  { tier: "embedding", label: "向量计算模型", description: "RAG 检索、语义搜索" },
+];
 
 export default function SettingsPage() {
   const [models, setModels] = useState<ModelConfigResponse[]>([]);
-  const [routes, setRoutes] = useState<ModelRouteResponse[]>([]);
+  const [tiers, setTiers] = useState<ModelTierResponse[]>([]);
+  const [tierEdits, setTierEdits] = useState<Record<ModelTier, string>>({
+    primary: "",
+    light: "",
+    strong: "",
+    embedding: "",
+  });
+  const [tierSaving, setTierSaving] = useState(false);
+  const [tierMessage, setTierMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [testing, setTesting] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<
@@ -25,6 +41,7 @@ export default function SettingsPage() {
     model_id: "",
     api_key: "",
     base_url: "",
+    model_type: "chat",
   });
   const [addError, setAddError] = useState("");
   const [adding, setAdding] = useState(false);
@@ -36,18 +53,46 @@ export default function SettingsPage() {
   async function loadData() {
     setLoading(true);
     try {
-      const [m, r] = await Promise.all([
-        getModels(),
-        getModelRoutes(),
-      ]);
+      const [m, t] = await Promise.all([getModels(), getModelTiers()]);
       setModels(m);
-      setRoutes(r);
+      setTiers(t);
+      // Initialize tier edits from current config
+      const edits: Record<string, string> = { primary: "", light: "", strong: "", embedding: "" };
+      for (const c of t) edits[c.tier] = c.model_name;
+      setTierEdits(edits as Record<ModelTier, string>);
     } catch (e) {
       console.error("Failed to load settings:", e);
     } finally {
       setLoading(false);
     }
   }
+
+  async function handleSaveTiers() {
+    setTierSaving(true);
+    setTierMessage(null);
+    try {
+      const updates = TIER_INFO
+        .filter(({ tier }) => tierEdits[tier])
+        .map(({ tier }) => ({ tier, model_name: tierEdits[tier] }));
+      const result = await updateModelTiers(updates);
+      setTiers(result);
+      setTierMessage({ type: "ok", text: "保存成功" });
+    } catch (err) {
+      setTierMessage({ type: "err", text: err instanceof Error ? err.message : "保存失败" });
+    } finally {
+      setTierSaving(false);
+    }
+  }
+
+  const tiersChanged = TIER_INFO.some(({ tier }) => {
+    const current = tiers.find((t) => t.tier === tier)?.model_name ?? "";
+    return tierEdits[tier] !== current;
+  });
+
+  const modelsForTier = (tier: ModelTier) =>
+    models.filter((m) =>
+      tier === "embedding" ? m.model_type === "embedding" : m.model_type !== "embedding"
+    );
 
   async function handleTest(name: string) {
     setTesting(name);
@@ -84,6 +129,7 @@ export default function SettingsPage() {
         model_id: newModel.model_id,
         api_key: newModel.api_key || undefined,
         base_url: newModel.base_url || undefined,
+        model_type: newModel.model_type,
       });
       setModels((prev) => [...prev, created]);
       setNewModel({
@@ -92,23 +138,20 @@ export default function SettingsPage() {
         model_id: "",
         api_key: "",
         base_url: "",
+        model_type: "chat",
       });
       setShowAddForm(false);
+      // Reload tiers in case backend auto-assigned
+      const t = await getModelTiers();
+      setTiers(t);
+      const edits: Record<string, string> = { ...tierEdits };
+      for (const c of t) edits[c.tier] = c.model_name;
+      setTierEdits(edits as Record<ModelTier, string>);
     } catch (err) {
       setAddError(err instanceof Error ? err.message : "添加失败");
     } finally {
       setAdding(false);
     }
-  }
-
-  function getRouteLabel(taskType: string): string {
-    const map: Record<string, string> = {
-      mentor_chat: "主交互",
-      content_analysis: "内容分析",
-      evaluation: "复杂推理",
-      embedding: "向量计算",
-    };
-    return map[taskType] || taskType;
   }
 
   if (loading) {
@@ -124,29 +167,64 @@ export default function SettingsPage() {
     <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6">
       <h1 className="text-xl font-bold text-gray-900 mb-6">设置</h1>
 
-      {/* Model Routes */}
-      {routes.length > 0 && (
-        <div className="bg-white rounded-xl border border-gray-200 p-6 mb-4">
-          <h2 className="text-sm font-semibold text-gray-900 mb-4">
-            模型路由
-          </h2>
-          <div className="space-y-3">
-            {routes.map((r) => (
-              <div
-                key={r.task_type}
-                className="flex items-center justify-between py-2 border-b border-gray-100 last:border-0"
-              >
-                <span className="text-sm text-gray-700">
-                  {getRouteLabel(r.task_type)}
-                </span>
-                <span className="text-sm font-medium text-gray-900">
-                  {r.model_name}
-                </span>
+      {/* Model Tiers */}
+      <div className="bg-white rounded-xl border border-gray-200 p-6 mb-4">
+        <h2 className="text-sm font-semibold text-gray-900 mb-4">
+          模型分级
+        </h2>
+        <div className="space-y-4">
+          {TIER_INFO.map(({ tier, label, description }) => (
+            <div key={tier}>
+              {tier === "embedding" && (
+                <div className="border-t border-gray-200 my-4 pt-2">
+                  <span className="text-xs font-medium text-gray-400 uppercase tracking-wide">向量模型</span>
+                </div>
+              )}
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-sm text-gray-700">{label}</label>
+                {tier === "strong" && (
+                  <span className="text-xs text-gray-400">可选</span>
+                )}
               </div>
-            ))}
-          </div>
+              <select
+                value={tierEdits[tier]}
+                onChange={(e) =>
+                  setTierEdits((prev) => ({ ...prev, [tier]: e.target.value }))
+                }
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">
+                  {tier === "strong" ? "未配置（回退到主交互模型）" : "未配置"}
+                </option>
+                {modelsForTier(tier).filter((m) => m.is_active).map((m) => (
+                  <option key={m.name} value={m.name}>
+                    {m.name} ({m.model_id})
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-gray-400 mt-0.5">{description}</p>
+            </div>
+          ))}
         </div>
-      )}
+        <div className="flex items-center gap-3 mt-4">
+          <button
+            onClick={handleSaveTiers}
+            disabled={tierSaving || !tiersChanged}
+            className="px-4 py-2 text-xs bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {tierSaving ? "保存中..." : "保存分级"}
+          </button>
+          {tierMessage && (
+            <span
+              className={`text-xs ${tierMessage.type === "ok" ? "text-green-600" : "text-red-600"}`}
+            >
+              {tierMessage.text}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* TODO: Whisper ASR 配置面板 */}
 
       {/* Models */}
       <div className="bg-white rounded-xl border border-gray-200 p-6">
@@ -180,6 +258,27 @@ export default function SettingsPage() {
                 required
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">模型类型</label>
+              <div className="flex gap-3">
+                <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+                  <input type="radio" name="model_type" value="chat"
+                    checked={newModel.model_type === "chat"}
+                    onChange={() => setNewModel({ ...newModel, model_type: "chat" })}
+                    className="accent-blue-600"
+                  />
+                  对话模型
+                </label>
+                <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+                  <input type="radio" name="model_type" value="embedding"
+                    checked={newModel.model_type === "embedding"}
+                    onChange={() => setNewModel({ ...newModel, model_type: "embedding" })}
+                    className="accent-blue-600"
+                  />
+                  向量模型
+                </label>
+              </div>
             </div>
             <div>
               <label className="block text-xs text-gray-600 mb-1">

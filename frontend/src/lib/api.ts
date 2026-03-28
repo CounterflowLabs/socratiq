@@ -231,6 +231,7 @@ export interface ModelConfigResponse {
   model_id: string;
   api_key_masked?: string;
   base_url?: string;
+  model_type: string;
   supports_tool_use: boolean;
   supports_streaming: boolean;
   max_tokens_limit: number;
@@ -294,6 +295,7 @@ export async function createModel(data: {
   model_id: string;
   api_key?: string;
   base_url?: string;
+  model_type?: string;
 }): Promise<ModelConfigResponse> {
   const res = await fetch(`${API_BASE}/models`, {
     method: "POST",

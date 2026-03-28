@@ -38,6 +38,11 @@ class Source(BaseMixin, Base):
     status: Mapped[str] = mapped_column(
         String, server_default=text("'pending'"), nullable=False
     )
+    celery_task_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    content_key: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    ref_source_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("sources.id"), nullable=True
+    )
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id"), nullable=True
     )

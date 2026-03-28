@@ -169,7 +169,12 @@ async def _ingest_source_async(task, source_id: str) -> dict:
                 task.update_state(state="PROGRESS", meta={"stage": "extracting"})
 
                 whisper_kwargs = await _get_whisper_config(db, settings)
-                extractor = _create_extractor(source, whisper_kwargs)
+                bilibili_credential = (
+                    await _get_bilibili_credential(db, settings)
+                    if source.type == "bilibili"
+                    else None
+                )
+                extractor = _create_extractor(source, whisper_kwargs, bilibili_credential)
 
                 if source.type == "pdf":
                     from pathlib import Path
@@ -353,23 +358,49 @@ async def _get_whisper_config(db, settings) -> dict:
     }
 
 
-def _create_extractor(source, whisper_kwargs: dict):
+async def _get_bilibili_credential(db, settings):
+    """Get Bilibili credential from DB if available, else fall back to .env."""
+    from bilibili_api import Credential
+    from sqlalchemy import select
+
+    from app.db.models.bilibili_credential import BilibiliCredential
+    from app.services.llm.encryption import decrypt_api_key
+
+    try:
+        result = await db.execute(select(BilibiliCredential).limit(1))
+        bc = result.scalar_one_or_none()
+        if bc and bc.sessdata_encrypted:
+            sessdata = decrypt_api_key(bc.sessdata_encrypted, settings.llm_encryption_key)
+            bili_jct = (
+                decrypt_api_key(bc.bili_jct_encrypted, settings.llm_encryption_key)
+                if bc.bili_jct_encrypted
+                else ""
+            )
+            return Credential(sessdata=sessdata, bili_jct=bili_jct)
+    except Exception:
+        pass
+
+    # Fallback to .env
+    sessdata = getattr(settings, "bilibili_sessdata", "")
+    if sessdata:
+        return Credential(
+            sessdata=sessdata,
+            bili_jct=getattr(settings, "bilibili_bili_jct", ""),
+            buvid3=getattr(settings, "bilibili_buvid3", ""),
+        )
+    return None
+
+
+def _create_extractor(source, whisper_kwargs: dict, bilibili_credential=None):
     """Create the appropriate extractor for a source."""
     from app.tools.extractors import get_extractor
-    from app.config import get_settings
-    settings = get_settings()
+
     if source.type == "youtube":
         return get_extractor("youtube", **whisper_kwargs)
     elif source.type == "bilibili":
         kwargs = {**whisper_kwargs}
-        sessdata = getattr(settings, "bilibili_sessdata", None)
-        if sessdata:
-            from bilibili_api import Credential
-            kwargs["credential"] = Credential(
-                sessdata=settings.bilibili_sessdata,
-                bili_jct=getattr(settings, "bilibili_bili_jct", ""),
-                buvid3=getattr(settings, "bilibili_buvid3", ""),
-            )
+        if bilibili_credential:
+            kwargs["credential"] = bilibili_credential
         return get_extractor("bilibili", **kwargs)
     elif source.type == "pdf":
         return get_extractor("pdf")
@@ -387,13 +418,13 @@ async def _update_status(db, source_id: UUID, status: str, error_message: str | 
         if source:
             source.metadata_ = {**source.metadata_, "error": error_message}
             source.status = status
-            await db.flush()
+            await db.commit()
             return
 
     await db.execute(
         sa_update(Source).where(Source.id == source_id).values(status=status)
     )
-    await db.flush()
+    await db.commit()
 
 
 async def _get_or_create_concept(db, ext_concept):

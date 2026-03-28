@@ -17,6 +17,9 @@ from app.services.llm.encryption import encrypt_api_key, decrypt_api_key, mask_a
 
 router = APIRouter(prefix="/api/v1", tags=["setup"])
 
+# In-memory storage for active Bilibili QR login sessions
+_bilibili_qr_sessions: dict[str, object] = {}
+
 
 @router.get("/setup/status")
 async def setup_status(db: AsyncSession = Depends(get_db)):
@@ -138,3 +141,113 @@ def _mask_key(key: str | None) -> str | None:
     if len(key) <= 8:
         return "****"
     return key[:4] + "****" + key[-4:]
+
+
+# ---------------------------------------------------------------------------
+# Bilibili QR-code login
+# ---------------------------------------------------------------------------
+
+
+@router.post("/settings/bilibili/qrcode")
+async def generate_bilibili_qrcode(
+    user: Annotated[User, Depends(get_local_user)],
+) -> dict:
+    """Generate Bilibili QR code for scanning login."""
+    import base64
+
+    from bilibili_api.login_v2 import QrCodeLogin
+
+    qr = QrCodeLogin()
+    await qr.generate_qrcode()
+
+    _bilibili_qr_sessions[str(user.id)] = qr
+
+    b64 = base64.b64encode(qr.get_qrcode_picture().content).decode()
+    return {"qrcode_base64": b64, "status": "generated"}
+
+
+@router.get("/settings/bilibili/qrcode/status")
+async def check_bilibili_qrcode(
+    user: Annotated[User, Depends(get_local_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Check Bilibili QR code scan status and save credential on success."""
+    from bilibili_api.login_v2 import QrCodeLoginEvents
+
+    from app.db.models.bilibili_credential import BilibiliCredential
+
+    qr = _bilibili_qr_sessions.get(str(user.id))
+    if not qr:
+        return {"status": "expired"}
+
+    state = await qr.check_state()
+
+    if state == QrCodeLoginEvents.SCAN:
+        return {"status": "waiting"}
+    elif state == QrCodeLoginEvents.CONF:
+        return {"status": "scanned"}
+    elif state == QrCodeLoginEvents.TIMEOUT:
+        _bilibili_qr_sessions.pop(str(user.id), None)
+        return {"status": "expired"}
+    elif state == QrCodeLoginEvents.DONE:
+        cred = qr.get_credential()
+        settings = get_settings()
+
+        # Upsert credential
+        result = await db.execute(
+            select(BilibiliCredential).where(BilibiliCredential.user_id == user.id)
+        )
+        bc = result.scalar_one_or_none()
+        if not bc:
+            bc = BilibiliCredential(user_id=user.id)
+            db.add(bc)
+
+        bc.sessdata_encrypted = encrypt_api_key(
+            cred.sessdata, settings.llm_encryption_key
+        )
+        bc.bili_jct_encrypted = encrypt_api_key(
+            cred.bili_jct, settings.llm_encryption_key
+        )
+        bc.dedeuserid = cred.dedeuserid
+
+        await db.commit()
+        _bilibili_qr_sessions.pop(str(user.id), None)
+
+        return {"status": "done", "dedeuserid": cred.dedeuserid}
+
+    return {"status": "unknown"}
+
+
+@router.get("/settings/bilibili/status")
+async def get_bilibili_status(
+    user: Annotated[User, Depends(get_local_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Check if Bilibili credentials are configured."""
+    from app.db.models.bilibili_credential import BilibiliCredential
+
+    result = await db.execute(
+        select(BilibiliCredential).where(BilibiliCredential.user_id == user.id)
+    )
+    bc = result.scalar_one_or_none()
+    if bc and bc.sessdata_encrypted:
+        return {"logged_in": True, "dedeuserid": bc.dedeuserid}
+    return {"logged_in": False}
+
+
+@router.delete("/settings/bilibili")
+async def logout_bilibili(
+    user: Annotated[User, Depends(get_local_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Remove stored Bilibili credentials."""
+    from app.db.models.bilibili_credential import BilibiliCredential
+
+    result = await db.execute(
+        select(BilibiliCredential).where(BilibiliCredential.user_id == user.id)
+    )
+    bc = result.scalar_one_or_none()
+    if bc:
+        await db.delete(bc)
+        await db.commit()
+    return {"status": "logged_out"}

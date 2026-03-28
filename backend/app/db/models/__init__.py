@@ -19,6 +19,7 @@ from app.db.models.episodic_memory import EpisodicMemory
 from app.db.models.metacognitive_record import MetacognitiveRecord
 from app.db.models.translation import Translation
 from app.db.models.whisper_config import WhisperConfig
+from app.db.models.bilibili_credential import BilibiliCredential
 
 __all__ = [
     "Base",
@@ -45,4 +46,5 @@ __all__ = [
     "MetacognitiveRecord",
     "Translation",
     "WhisperConfig",
+    "BilibiliCredential",
 ]

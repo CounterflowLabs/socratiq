@@ -277,7 +277,7 @@ export const getModelRoutes = getModelTiers;
 export async function getTaskStatus(taskId: string): Promise<{
   task_id: string;
   state: string;
-  result?: unknown;
+  result?: { course_id?: string; [key: string]: unknown };
   error?: string;
   progress?: unknown;
   stage?: string;

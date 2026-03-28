@@ -6,7 +6,7 @@ import Link from "next/link";
 import { Brain, Plus, ChevronRight, BookOpen, Loader, RefreshCw, AlertCircle, CheckCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { listCourses, getReviewStats, getSetupStatus, getTaskStatus, generateCourse, listActiveSources, type CourseResponse } from "@/lib/api";
+import { listCourses, getReviewStats, getSetupStatus, getTaskStatus, listActiveSources, type CourseResponse } from "@/lib/api";
 import { useCoursesStore, useTasksStore, type PendingTask } from "@/lib/stores";
 
 function formatRemainingTime(seconds: number | undefined): string | null {
@@ -27,6 +27,7 @@ function taskStateLabel(state: string): string {
     embedding: "计算向量...",
     waiting_donor: "复用已有资源中...",
     cloning: "复制内容中...",
+    assembling_course: "组装课程...",
     SUCCESS: "处理完成",
     FAILURE: "处理失败",
   };
@@ -105,15 +106,14 @@ export default function DashboardPage() {
           });
 
           if (status.state === "SUCCESS" && !task.courseId) {
-            // Auto-generate course
-            try {
-              const course = await generateCourse([task.sourceId]);
-              updateTask(task.taskId, { courseId: course.id, state: "SUCCESS" });
-              // Refresh course list
-              listCourses().then((res) => setCourses(res.items)).catch(() => {});
-            } catch {
-              updateTask(task.taskId, { state: "FAILURE", error: "课程生成失败" });
+            // Chain completed — result includes course_id from generate_course_task
+            const courseId = status.result?.course_id;
+            if (courseId) {
+              updateTask(task.taskId, { courseId, state: "SUCCESS" });
+            } else {
+              updateTask(task.taskId, { state: "SUCCESS" });
             }
+            listCourses().then((res) => setCourses(res.items)).catch(() => {});
           }
         } catch {
           // Silently retry on next interval

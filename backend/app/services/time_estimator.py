@@ -22,7 +22,7 @@ ANALYZER_BATCH_CHARS = 6000
 EMBED_BATCH_SIZE = 50
 
 # Ordered stages for partial estimation
-STAGES = ["analyzing", "generating_lessons", "generating_labs", "storing", "embedding"]
+STAGES = ["analyzing", "storing", "embedding"]
 
 
 class TimeEstimator:
@@ -40,7 +40,7 @@ class TimeEstimator:
         result = await self._db.execute(
             select(func.avg(LlmUsageLog.duration_ms)).where(
                 LlmUsageLog.duration_ms.is_not(None),
-                LlmUsageLog.task_type.in_(["content_analysis", "lesson_gen", "lab_gen"]),
+                LlmUsageLog.task_type.in_(["content_analysis"]),
             )
         )
         avg_ms = await result.scalar()
@@ -53,8 +53,6 @@ class TimeEstimator:
         self,
         chunk_count: int,
         total_chars: int,
-        page_count: int,
-        code_page_count: int,
         current_stage: str | None = None,
     ) -> int:
         """Estimate remaining seconds from current_stage onward."""
@@ -62,8 +60,6 @@ class TimeEstimator:
 
         stage_estimates = {
             "analyzing": math.ceil(total_chars / ANALYZER_BATCH_CHARS) * llm if total_chars >= 8000 else llm,
-            "generating_lessons": page_count * llm,
-            "generating_labs": code_page_count * llm,
             "storing": DEFAULT_STORE_OVERHEAD_S,
             "embedding": math.ceil(chunk_count / EMBED_BATCH_SIZE) * DEFAULT_EMBED_LATENCY_S,
         }

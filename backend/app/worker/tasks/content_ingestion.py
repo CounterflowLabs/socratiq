@@ -186,18 +186,12 @@ async def _ingest_source_async(task, source_id: str) -> dict:
                 total_chars = sum(len(c.raw_text) for c in result.chunks)
                 estimator = TimeEstimator(db)
                 await estimator.load_calibration()
-                est_code_pages = max(1, len(result.chunks) // 3)
-                page_set = set()
-                for c in result.chunks:
-                    page_set.add(c.metadata.get("page_index", 0))
-                est_page_count = len(page_set)
                 cost_guard = CostGuard(db)
 
                 # === STEP 2: ANALYZE ===
                 await _update_status(db, sid, "analyzing")
                 remaining = estimator.estimate_remaining(
                     chunk_count=len(result.chunks), total_chars=total_chars,
-                    page_count=est_page_count, code_page_count=est_code_pages,
                     current_stage="analyzing",
                 )
                 task.update_state(state="PROGRESS", meta={"stage": "analyzing", "estimated_remaining_seconds": remaining})
@@ -223,96 +217,10 @@ async def _ingest_source_async(task, source_id: str) -> dict:
                     f"{len(analysis.chunks)} chunks"
                 )
 
-                # === STEP 3: GENERATE LESSONS ===
-                await _update_status(db, sid, "generating_lessons")
-
-                from app.services.lesson_generator import LessonGenerator
-                from app.services.llm.router import TaskType
-                lesson_provider = await model_router.get_provider(TaskType.CONTENT_ANALYSIS)
-                lesson_gen = LessonGenerator(lesson_provider)
-
-                page_groups: dict[int, list] = {}
-                for chunk in analysis.chunks:
-                    page_idx = chunk.metadata.get("page_index", 0)
-                    page_groups.setdefault(page_idx, []).append(chunk)
-
-                remaining = estimator.estimate_remaining(
-                    chunk_count=len(result.chunks), total_chars=total_chars,
-                    page_count=len(page_groups), code_page_count=est_code_pages,
-                    current_stage="generating_lessons",
-                )
-                task.update_state(state="PROGRESS", meta={"stage": "generating_lessons", "estimated_remaining_seconds": remaining})
-
-                lesson_by_page: dict[int, object] = {}
-                for page_idx in sorted(page_groups.keys()):
-                    page_chunks = page_groups[page_idx]
-                    chunk_texts = [c.raw_text for c in page_chunks]
-                    page_title = page_chunks[0].metadata.get("page_title") or source.title or "Untitled"
-                    t0 = time.monotonic()
-                    lesson_content = await lesson_gen.generate(chunk_texts, page_title)
-                    lesson_ms = int((time.monotonic() - t0) * 1000)
-                    await cost_guard.log_usage(
-                        user_id=None, task_type="lesson_gen",
-                        model_name="unknown", tokens_in=0, tokens_out=0,
-                        duration_ms=lesson_ms,
-                    )
-                    lesson_by_page[page_idx] = lesson_content
-                    logger.info(
-                        f"Generated lesson for page {page_idx}: "
-                        f"{len(lesson_content.sections)} sections"
-                    )
-
-                # === STEP 4: GENERATE LABS ===
-                await _update_status(db, sid, "generating_labs")
-                remaining = estimator.estimate_remaining(
-                    chunk_count=len(result.chunks), total_chars=total_chars,
-                    page_count=len(page_groups), code_page_count=est_code_pages,
-                    current_stage="generating_labs",
-                )
-                task.update_state(state="PROGRESS", meta={"stage": "generating_labs", "estimated_remaining_seconds": remaining})
-
-                from app.services.lab_generator import LabGenerator
-                from app.db.models.lab import Lab
-                lab_gen = LabGenerator(lesson_provider)
-
-                labs_by_page: dict[int, dict | None] = {}
-                for page_idx, lesson_content in lesson_by_page.items():
-                    all_snippets = []
-                    for section in lesson_content.sections:
-                        all_snippets.extend(section.code_snippets)
-
-                    if not all_snippets:
-                        labs_by_page[page_idx] = None
-                        continue
-
-                    lang_counts: dict[str, int] = {}
-                    for s in all_snippets:
-                        lang_counts[s.language] = lang_counts.get(s.language, 0) + 1
-                    language = max(lang_counts, key=lang_counts.__getitem__)
-
-                    t0 = time.monotonic()
-                    lab_result = await lab_gen.generate(
-                        code_snippets=all_snippets,
-                        lesson_context=lesson_content.summary,
-                        language=language,
-                    )
-                    lab_ms = int((time.monotonic() - t0) * 1000)
-                    await cost_guard.log_usage(
-                        user_id=None, task_type="lab_gen",
-                        model_name="unknown", tokens_in=0, tokens_out=0,
-                        duration_ms=lab_ms,
-                    )
-                    labs_by_page[page_idx] = lab_result
-                    if lab_result:
-                        logger.info(f"Generated lab for page {page_idx}: {lab_result.get('title')}")
-                    else:
-                        logger.info(f"No lab generated for page {page_idx} (low confidence or error)")
-
-                # === STEP 5: STORE ===
+                # === STEP 3: STORE ===
                 await _update_status(db, sid, "storing")
                 remaining = estimator.estimate_remaining(
                     chunk_count=len(analysis.chunks), total_chars=total_chars,
-                    page_count=len(page_groups), code_page_count=0,
                     current_stage="storing",
                 )
                 task.update_state(state="PROGRESS", meta={"stage": "storing", "estimated_remaining_seconds": remaining})
@@ -369,24 +277,14 @@ async def _ingest_source_async(task, source_id: str) -> dict:
                     "chunk_count": len(analysis.chunks),
                     "estimated_study_minutes": analysis.estimated_study_minutes,
                     "suggested_prerequisites": analysis.suggested_prerequisites,
-                    "lesson_by_page": {
-                        str(page_idx): lesson.model_dump()
-                        for page_idx, lesson in lesson_by_page.items()
-                    },
-                    "labs_by_page": {
-                        str(page_idx): lab_data
-                        for page_idx, lab_data in labs_by_page.items()
-                        if lab_data is not None
-                    },
                 }
                 await db.flush()
                 logger.info(f"Stored {len(chunk_ids)} chunks and {len(concept_ids)} concepts")
 
-                # === STEP 6: EMBED ===
+                # === STEP 4: EMBED ===
                 await _update_status(db, sid, "embedding")
                 remaining = estimator.estimate_remaining(
                     chunk_count=len(analysis.chunks), total_chars=total_chars,
-                    page_count=len(page_groups), code_page_count=0,
                     current_stage="embedding",
                 )
                 task.update_state(state="PROGRESS", meta={"stage": "embedding", "estimated_remaining_seconds": remaining})
@@ -396,7 +294,7 @@ async def _ingest_source_async(task, source_id: str) -> dict:
                 await embedding_service.embed_and_store_concepts(db, concept_ids, concept_texts)
                 logger.info(f"Embedded {len(chunk_ids)} chunks and {len(concept_ids)} concepts")
 
-                # === STEP 7: DONE ===
+                # === STEP 5: DONE ===
                 await _update_status(db, sid, "ready")
                 await db.commit()
 
@@ -408,8 +306,6 @@ async def _ingest_source_async(task, source_id: str) -> dict:
                     "title": source.title,
                     "chunks_created": len(chunk_ids),
                     "concepts_created": len(concept_ids),
-                    "lessons_generated": len(lesson_by_page),
-                    "labs_generated": sum(1 for v in labs_by_page.values() if v is not None),
                     "status": "ready",
                 }
 

@@ -28,12 +28,14 @@ export class DuplicateSourceError extends Error {
 export async function createSourceFromURL(
   url: string,
   sourceType?: string,
-  title?: string
+  title?: string,
+  goal?: string,
 ): Promise<SourceResponse> {
   const form = new FormData();
   form.append("url", url);
   if (sourceType) form.append("source_type", sourceType);
   if (title) form.append("title", title);
+  if (goal) form.append("goal", goal);
 
   const res = await fetch(`${API_BASE}/sources`, {
     method: "POST",
@@ -52,11 +54,13 @@ export async function createSourceFromURL(
 
 export async function createSourceFromFile(
   file: File,
-  title?: string
+  title?: string,
+  goal?: string,
 ): Promise<SourceResponse> {
   const form = new FormData();
   form.append("file", file);
   if (title) form.append("title", title);
+  if (goal) form.append("goal", goal);
 
   const res = await fetch(`${API_BASE}/sources`, {
     method: "POST",

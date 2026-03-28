@@ -14,7 +14,9 @@ from app.db.models.source import Source
 from app.db.models.user import User
 from app.models.source import SourceResponse, SourceListResponse
 from app.services.content_key import extract_content_key
+from celery import chain
 from app.worker.tasks.content_ingestion import ingest_source, clone_source
+from app.worker.tasks.course_generation import generate_course_task
 
 router = APIRouter(prefix="/api/v1/sources", tags=["sources"])
 
@@ -27,6 +29,7 @@ async def create_source(
     url: str | None = Form(None),
     source_type: str | None = Form(None),
     title: str | None = Form(None),
+    goal: str | None = Form(None),
     file: UploadFile | None = File(None),
 ) -> SourceResponse:
     """Submit a URL or upload a file for content ingestion."""
@@ -110,14 +113,22 @@ async def create_source(
     await db.flush()
 
     if ref_source and ref_source.status == "ready":
-        task = clone_source.delay(str(source.id), str(ref_source.id))
-        source.celery_task_id = task.id
+        pipeline = chain(
+            clone_source.s(str(source.id), str(ref_source.id)),
+            generate_course_task.s(goal=goal, user_id=str(user.id)),
+        )
+        result = pipeline.delay()
+        source.celery_task_id = result.id
     elif ref_source:
-        # Ref still processing — Redis subscriber will dispatch clone when ready
-        pass
+        # Ref still processing — Redis subscriber will dispatch chain when ready
+        source.metadata_ = {**source.metadata_, "pending_goal": goal, "pending_user_id": str(user.id)}
     else:
-        task = ingest_source.delay(str(source.id))
-        source.celery_task_id = task.id
+        pipeline = chain(
+            ingest_source.s(str(source.id)),
+            generate_course_task.s(goal=goal, user_id=str(user.id)),
+        )
+        result = pipeline.delay()
+        source.celery_task_id = result.id
 
     await db.commit()
     await db.refresh(source)

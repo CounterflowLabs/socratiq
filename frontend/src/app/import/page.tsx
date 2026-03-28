@@ -38,9 +38,9 @@ export default function ImportPage() {
     try {
       let source;
       if (sourceType === "bilibili" || sourceType === "youtube") {
-        source = await createSourceFromURL(url.trim());
+        source = await createSourceFromURL(url.trim(), undefined, undefined, goal ?? undefined);
       } else if (pdfFile) {
-        source = await createSourceFromFile(pdfFile);
+        source = await createSourceFromFile(pdfFile, undefined, goal ?? undefined);
       } else {
         setErrorMsg("请选择文件");
         setLoading(false);

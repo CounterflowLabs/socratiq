@@ -58,3 +58,11 @@ async def get_task_status(task_id: str, debug: bool = Query(False)) -> dict:
             response["estimated_remaining_seconds"] = result.info["estimated_remaining_seconds"]
 
     return response
+
+
+@router.post("/{task_id}/cancel")
+async def cancel_task(task_id: str) -> dict:
+    """Cancel a running task."""
+    result = AsyncResult(task_id, app=celery_app)
+    result.revoke(terminate=True)
+    return {"task_id": task_id, "status": "cancelled"}

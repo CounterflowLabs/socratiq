@@ -92,6 +92,18 @@ export async function getSource(id: string): Promise<SourceResponse> {
   return res.json();
 }
 
+export async function cancelSource(sourceId: string): Promise<SourceResponse> {
+  const res = await fetch(`${API_BASE}/sources/${sourceId}/cancel`, { method: "POST" });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function retrySource(sourceId: string): Promise<SourceResponse> {
+  const res = await fetch(`${API_BASE}/sources/${sourceId}/retry`, { method: "POST" });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export async function listActiveSources(): Promise<SourceResponse[]> {
   const res = await fetch(`${API_BASE}/sources/active`);
   if (!res.ok) throw new Error(await res.text());

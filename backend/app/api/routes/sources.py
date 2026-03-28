@@ -66,6 +66,19 @@ async def create_source(
         if source_type not in ("bilibili", "youtube"):
             raise HTTPException(400, f"Unsupported source type: {source_type}")
 
+    # --- Validate required model tiers are configured ---
+    from app.services.llm.config import ModelConfigManager
+    tier_manager = ModelConfigManager(get_settings().llm_encryption_key)
+    existing_tiers = await tier_manager.get_tier_configs(db)
+    configured_tiers = {c.tier for c in existing_tiers}
+    missing = []
+    if "light" not in configured_tiers:
+        missing.append("轻量任务模型 (light)")
+    if "embedding" not in configured_tiers:
+        missing.append("向量计算模型 (embedding)")
+    if missing:
+        raise HTTPException(400, f"请先在设置页面配置以下模型: {', '.join(missing)}")
+
     # --- Compute content_key ---
     file_content_bytes = content if file else None
     ck = extract_content_key(source_type, url=url, file_content=file_content_bytes)
@@ -172,17 +185,86 @@ async def list_active_sources(
     user: Annotated[User, Depends(get_local_user)],
 ) -> list[SourceResponse]:
     """List sources that are still being processed (not ready/error)."""
+    from datetime import datetime, timedelta
+    cutoff = datetime.utcnow() - timedelta(minutes=30)
     result = await db.execute(
         select(Source)
         .where(
             Source.created_by == user.id,
             Source.status.notin_(["ready", "error"]),
             Source.celery_task_id.is_not(None),
+            Source.created_at > cutoff,
         )
         .order_by(Source.created_at.desc())
     )
     sources = result.scalars().all()
     return [_source_to_response(s) for s in sources]
+
+
+@router.post("/{source_id}/cancel")
+async def cancel_source(
+    source_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_local_user)],
+) -> SourceResponse:
+    """Cancel an in-progress source ingestion."""
+    from celery.result import AsyncResult
+    from app.worker.celery_app import celery_app
+
+    result = await db.execute(
+        select(Source).where(Source.id == source_id, Source.created_by == user.id)
+    )
+    source = result.scalar_one_or_none()
+    if not source:
+        raise HTTPException(404, "Source not found")
+    if source.status in ("ready", "error"):
+        raise HTTPException(400, "Source is not in progress")
+
+    # Revoke Celery task
+    if source.celery_task_id:
+        AsyncResult(source.celery_task_id, app=celery_app).revoke(terminate=True)
+
+    source.status = "error"
+    source.metadata_ = {**source.metadata_, "error": "用户取消"}
+    await db.commit()
+    await db.refresh(source)
+    return _source_to_response(source)
+
+
+@router.post("/{source_id}/retry")
+async def retry_source(
+    source_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_local_user)],
+) -> SourceResponse:
+    """Retry a failed source ingestion."""
+    result = await db.execute(
+        select(Source).where(Source.id == source_id, Source.created_by == user.id)
+    )
+    source = result.scalar_one_or_none()
+    if not source:
+        raise HTTPException(404, "Source not found")
+    if source.status != "error":
+        raise HTTPException(400, "Only failed sources can be retried")
+
+    # Reset status and clear error
+    source.status = "pending"
+    source.metadata_ = {k: v for k, v in source.metadata_.items() if k != "error"}
+
+    # Re-dispatch pipeline
+    goal = source.metadata_.get("pending_goal")
+    user_id = str(user.id)
+
+    pipeline = chain(
+        ingest_source.s(str(source.id)),
+        generate_course_task.s(goal=goal, user_id=user_id),
+    )
+    task_result = pipeline.delay()
+    source.celery_task_id = task_result.id
+
+    await db.commit()
+    await db.refresh(source)
+    return _source_to_response(source)
 
 
 @router.get("/{source_id}", response_model=SourceResponse)

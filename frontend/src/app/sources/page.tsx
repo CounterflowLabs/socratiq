@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Plus, Play, FileText, Loader, AlertCircle, CheckCircle, RefreshCw } from "lucide-react";
+import { Plus, Play, FileText, Loader, AlertCircle, CheckCircle, RefreshCw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { listSources, type SourceResponse } from "@/lib/api";
+import { listSources, cancelSource, retrySource, type SourceResponse } from "@/lib/api";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; bgColor: string }> = {
   pending: { label: "排队中", color: "text-blue-700", bgColor: "bg-blue-50" },
@@ -111,14 +111,26 @@ export default function SourcesPage() {
                         {new Date(source.created_at).toLocaleDateString("zh-CN")}
                       </span>
                     </div>
+                    {source.status === "error" && source.metadata_?.error && (
+                      <p className="text-xs text-red-500 mt-0.5 truncate">
+                        {String(source.metadata_.error)}
+                      </p>
+                    )}
                   </div>
-                  <div className="flex-shrink-0">
+                  <div className="flex-shrink-0 flex gap-2">
                     {source.status === "error" && (
-                      <Link href="/import">
-                        <Button size="sm" variant="ghost">
-                          <RefreshCw className="w-3.5 h-3.5" /> 重新导入
-                        </Button>
-                      </Link>
+                      <Button size="sm" variant="ghost" onClick={async () => {
+                        try { await retrySource(source.id); loadSources(); } catch {}
+                      }}>
+                        <RefreshCw className="w-3.5 h-3.5" /> 重试
+                      </Button>
+                    )}
+                    {!["ready", "error"].includes(source.status) && (
+                      <Button size="sm" variant="ghost" onClick={async () => {
+                        try { await cancelSource(source.id); loadSources(); } catch {}
+                      }}>
+                        <X className="w-3.5 h-3.5" /> 取消
+                      </Button>
                     )}
                   </div>
                 </div>

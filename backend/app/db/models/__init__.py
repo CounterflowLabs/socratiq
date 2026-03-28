@@ -18,6 +18,7 @@ from app.db.models.review_item import ReviewItem
 from app.db.models.episodic_memory import EpisodicMemory
 from app.db.models.metacognitive_record import MetacognitiveRecord
 from app.db.models.translation import Translation
+from app.db.models.whisper_config import WhisperConfig
 
 __all__ = [
     "Base",
@@ -43,4 +44,5 @@ __all__ = [
     "EpisodicMemory",
     "MetacognitiveRecord",
     "Translation",
+    "WhisperConfig",
 ]

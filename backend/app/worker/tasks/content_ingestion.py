@@ -168,10 +168,13 @@ async def _ingest_source_async(task, source_id: str) -> dict:
                 await _update_status(db, sid, "extracting")
                 task.update_state(state="PROGRESS", meta={"stage": "extracting"})
 
-                extractor = _create_extractor(source)
+                whisper_kwargs = await _get_whisper_config(db, settings)
+                extractor = _create_extractor(source, whisper_kwargs)
 
                 if source.type == "pdf":
-                    file_path = source.metadata_.get("file_path", "")
+                    from pathlib import Path
+                    relative_path = source.metadata_.get("file_path", "")
+                    file_path = str(Path(settings.upload_dir) / relative_path)
                     result = await extractor.extract(file_path)
                 else:
                     result = await extractor.extract(source.url or "")
@@ -319,18 +322,42 @@ async def _ingest_source_async(task, source_id: str) -> dict:
         await worker_engine.dispose()
 
 
-def _create_extractor(source):
-    """Create the appropriate extractor for a source."""
-    from app.tools.extractors import get_extractor
-    from app.config import get_settings
-    settings = get_settings()
-    whisper_kwargs = {
+async def _get_whisper_config(db, settings) -> dict:
+    """Get Whisper config from DB if available, else fall back to .env settings."""
+    from sqlalchemy import select
+    from app.db.models.whisper_config import WhisperConfig
+
+    try:
+        result = await db.execute(select(WhisperConfig).limit(1))
+        config = result.scalar_one_or_none()
+    except Exception:
+        config = None
+
+    if config and config.api_key_encrypted:
+        from app.services.llm.encryption import decrypt_api_key
+        api_key = decrypt_api_key(config.api_key_encrypted, settings.llm_encryption_key)
+        return {
+            "whisper_mode": config.mode or settings.whisper_mode,
+            "whisper_model": config.local_model or settings.whisper_model,
+            "whisper_api_key": api_key,
+            "whisper_api_base_url": config.api_base_url or settings.whisper_api_base_url,
+            "whisper_api_model": config.api_model or settings.whisper_api_model,
+        }
+
+    return {
         "whisper_mode": settings.whisper_mode,
         "whisper_model": settings.whisper_model,
         "whisper_api_key": settings.whisper_api_key,
         "whisper_api_base_url": settings.whisper_api_base_url,
         "whisper_api_model": settings.whisper_api_model,
     }
+
+
+def _create_extractor(source, whisper_kwargs: dict):
+    """Create the appropriate extractor for a source."""
+    from app.tools.extractors import get_extractor
+    from app.config import get_settings
+    settings = get_settings()
     if source.type == "youtube":
         return get_extractor("youtube", **whisper_kwargs)
     elif source.type == "bilibili":

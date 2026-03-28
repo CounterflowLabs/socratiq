@@ -58,6 +58,22 @@ class ModelTierResponse(BaseModel):
     model_name: str
 
 
+class WhisperConfigResponse(BaseModel):
+    mode: str = "api"
+    api_base_url: str | None = None
+    api_model: str | None = None
+    api_key_masked: str | None = None
+    local_model: str | None = None
+
+
+class WhisperConfigUpdate(BaseModel):
+    mode: str | None = None
+    api_base_url: str | None = None
+    api_model: str | None = None
+    api_key: str | None = None  # Plain text, will be encrypted
+    local_model: str | None = None
+
+
 # Backwards compat aliases
 ModelRouteUpdate = ModelTierUpdate
 ModelRouteResponse = ModelTierResponse

@@ -28,14 +28,18 @@ def _get_config_manager() -> ModelConfigManager:
 @router.get("", response_model=list[ModelConfigResponse])
 async def list_models(
     user: Annotated[User, Depends(get_local_user)],
+    model_type: str | None = None,
     db: AsyncSession = Depends(get_db),
     manager: ModelConfigManager = Depends(_get_config_manager),
 ):
-    result = await db.execute(
+    query = (
         select(ModelConfig)
         .where(or_(ModelConfig.user_id == user.id, ModelConfig.user_id.is_(None)))
-        .order_by(ModelConfig.name)
     )
+    if model_type is not None:
+        query = query.where(ModelConfig.model_type == model_type)
+    query = query.order_by(ModelConfig.name)
+    result = await db.execute(query)
     models = list(result.scalars().all())
     return [
         ModelConfigResponse(
@@ -48,6 +52,7 @@ async def list_models(
             supports_streaming=m.supports_streaming,
             max_tokens_limit=m.max_tokens_limit,
             is_active=m.is_active,
+            model_type=m.model_type,
         )
         for m in models
     ]
@@ -76,7 +81,20 @@ async def create_model(
         max_tokens_limit=data.max_tokens_limit,
     )
     model.user_id = user.id
+    model.model_type = data.model_type
     await db.flush()
+
+    # Auto-assign to tiers that don't have a model yet (type-aware)
+    existing_tiers = await manager.get_tier_configs(db)
+    assigned_tiers = {c.tier for c in existing_tiers}
+
+    if data.model_type == "embedding":
+        if "embedding" not in assigned_tiers:
+            await manager.update_tier_config(db, "embedding", model.name)
+    else:
+        for tier in ["primary", "light", "strong"]:
+            if tier not in assigned_tiers:
+                await manager.update_tier_config(db, tier, model.name)
 
     return ModelConfigResponse(
         name=model.name,
@@ -88,6 +106,7 @@ async def create_model(
         supports_streaming=model.supports_streaming,
         max_tokens_limit=model.max_tokens_limit,
         is_active=model.is_active,
+        model_type=model.model_type,
     )
 
 
@@ -125,6 +144,7 @@ async def update_model(
         supports_streaming=model.supports_streaming,
         max_tokens_limit=model.max_tokens_limit,
         is_active=model.is_active,
+        model_type=model.model_type,
     )
 
 

@@ -26,3 +26,11 @@ celery_app.conf.update(
 # Explicitly import tasks so they register with Celery
 import app.worker.tasks.content_ingestion  # noqa: F401
 import app.worker.tasks.memory_pruning  # noqa: F401
+
+from celery.signals import worker_ready
+
+
+@worker_ready.connect
+def on_worker_ready(**kwargs):
+    from app.worker.ref_subscriber import start_ref_subscriber
+    start_ref_subscriber()

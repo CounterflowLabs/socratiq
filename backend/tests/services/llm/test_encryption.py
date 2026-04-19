@@ -3,7 +3,12 @@
 import pytest
 from cryptography.fernet import Fernet
 
-from app.services.llm.encryption import decrypt_api_key, encrypt_api_key, mask_api_key
+from app.services.llm.encryption import (
+    decrypt_api_key,
+    decrypt_api_key_or_none,
+    encrypt_api_key,
+    mask_api_key,
+)
 
 
 @pytest.fixture
@@ -33,6 +38,13 @@ class TestEncryptDecrypt:
         encrypted = encrypt_api_key("secret", key1)
         with pytest.raises(Exception):
             decrypt_api_key(encrypted, key2)
+
+    def test_wrong_key_returns_none_with_safe_helper(self) -> None:
+        key1 = Fernet.generate_key().decode()
+        key2 = Fernet.generate_key().decode()
+        encrypted = encrypt_api_key("secret", key1)
+
+        assert decrypt_api_key_or_none(encrypted, key2) is None
 
 
 class TestMaskApiKey:

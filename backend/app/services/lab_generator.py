@@ -50,7 +50,11 @@ class LabGenerator:
         self._provider = provider
 
     async def generate(
-        self, code_snippets: list[CodeSnippet], lesson_context: str, language: str,
+        self,
+        code_snippets: list[CodeSnippet],
+        lesson_context: str,
+        language: str,
+        goal: str | None = None,
     ) -> dict | None:
         """Generate a lab from code snippets. Returns None if no code or low confidence."""
         if not code_snippets:
@@ -59,6 +63,7 @@ class LabGenerator:
         snippets_text = "\n\n".join(
             f"```{s.language}\n{s.code}\n```\nContext: {s.context}" for s in code_snippets
         )
+        goal_prompt = f"\n\nLearning goal: {goal}" if goal else ""
 
         try:
             response = await self._provider.chat(
@@ -66,7 +71,8 @@ class LabGenerator:
                     role="user",
                     content=LAB_PROMPT.format(
                         snippets=snippets_text, context=lesson_context[:3000], language=language,
-                    ),
+                    )
+                    + goal_prompt,
                 )],
                 max_tokens=4000,
                 temperature=0.3,

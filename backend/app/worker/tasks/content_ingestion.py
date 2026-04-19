@@ -566,7 +566,7 @@ async def _get_whisper_config(db) -> dict:
     from sqlalchemy import select
 
     from app.db.models.whisper_config import WhisperConfig
-    from app.services.llm.encryption import decrypt_api_key
+    from app.services.llm.encryption import decrypt_api_key_or_none
 
     settings = get_settings()
 
@@ -577,15 +577,18 @@ async def _get_whisper_config(db) -> dict:
         config = None
 
     if config:
-        api_key = (
-            decrypt_api_key(config.api_key_encrypted, settings.llm_encryption_key)
-            if config.api_key_encrypted
-            else settings.whisper_api_key
+        api_key = decrypt_api_key_or_none(
+            config.api_key_encrypted,
+            settings.llm_encryption_key,
         )
+        if config.api_key_encrypted and api_key is None:
+            logger.warning(
+                "Failed to decrypt stored Whisper API key; falling back to env/default for ingestion."
+            )
         return {
             "whisper_mode": config.mode or settings.whisper_mode,
             "whisper_model": config.local_model or settings.whisper_model,
-            "whisper_api_key": api_key,
+            "whisper_api_key": api_key or settings.whisper_api_key,
             "whisper_api_base_url": config.api_base_url or settings.whisper_api_base_url,
             "whisper_api_model": config.api_model or settings.whisper_api_model,
         }

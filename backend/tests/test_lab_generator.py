@@ -70,3 +70,29 @@ class TestLabGenerator:
             lesson_context="", language="python",
         )
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_accepts_goal_keyword(self):
+        mock_provider = AsyncMock()
+        mock_provider.chat.return_value = LLMResponse(
+            content=[ContentBlock(type="text", text=json.dumps({
+                "title": "Build Attention Scores",
+                "description": "Implement a simple attention scorer.",
+                "language": "python",
+                "starter_code": {"attention.py": "def score(q, k):\n    # TODO\n    pass"},
+                "test_code": {"test_attention.py": "from attention import score\n\ndef test_score():\n    assert score([1], [1]) == 1"},
+                "solution_code": {"attention.py": "def score(q, k):\n    return q[0] * k[0]"},
+                "run_instructions": "python -m pytest -v",
+                "confidence": 0.9,
+            }))],
+            model="mock",
+        )
+        gen = LabGenerator(mock_provider)
+        result = await gen.generate(
+            code_snippets=[CodeSnippet(language="python", code="def score(q, k): return q[0] * k[0]", context="dot product")],
+            lesson_context="Attention lesson",
+            language="python",
+            goal="apply",
+        )
+        assert result is not None
+        assert result["title"] == "Build Attention Scores"

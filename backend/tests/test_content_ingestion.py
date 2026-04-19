@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from cryptography.fernet import Fernet
 from sqlalchemy import select
 
 from app.db.models.content_chunk import ContentChunk
@@ -12,6 +13,8 @@ from app.worker.tasks import content_ingestion
 from app.worker import ref_subscriber
 from app.db.models.source import Source
 from app.db.models.source_task import SourceTask
+from app.db.models.whisper_config import WhisperConfig
+from app.services.llm.encryption import encrypt_api_key
 
 
 def test_create_worker_resources_builds_dedicated_session_factory(monkeypatch):
@@ -108,6 +111,49 @@ def test_create_worker_resources_returns_fresh_session_factory_each_time(monkeyp
     assert first.session_factory is not second.session_factory
     assert first.model_router.session_factory is session_factories[0]
     assert second.model_router.session_factory is session_factories[1]
+
+
+@pytest.mark.asyncio
+async def test_get_whisper_config_falls_back_to_env_when_stored_key_is_unreadable(
+    monkeypatch,
+    db_session,
+    demo_user,
+):
+    wrong_key = Fernet.generate_key().decode()
+    db_session.add(
+        WhisperConfig(
+            user_id=demo_user.id,
+            mode="api",
+            api_base_url="https://example.invalid/v1",
+            api_model="custom-whisper",
+            api_key_encrypted=encrypt_api_key("stored-secret", wrong_key),
+            local_model="small",
+        )
+    )
+    await db_session.flush()
+
+    monkeypatch.setattr(
+        content_ingestion,
+        "get_settings",
+        lambda: SimpleNamespace(
+            llm_encryption_key="current-key",
+            whisper_mode="local",
+            whisper_model="base",
+            whisper_api_key="env-secret",
+            whisper_api_base_url="https://api.groq.com/openai/v1",
+            whisper_api_model="whisper-large-v3",
+        ),
+    )
+
+    config = await content_ingestion._get_whisper_config(db_session)
+
+    assert config == {
+        "whisper_mode": "api",
+        "whisper_model": "small",
+        "whisper_api_key": "env-secret",
+        "whisper_api_base_url": "https://example.invalid/v1",
+        "whisper_api_model": "custom-whisper",
+    }
 
 
 @pytest.mark.asyncio

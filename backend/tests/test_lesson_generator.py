@@ -80,3 +80,30 @@ class TestLessonGenerator:
         gen = LessonGenerator(mock_provider)
         result = await gen.generate(["subtitle text"], "Title")
         assert result.title == "Title"
+
+    @pytest.mark.asyncio
+    async def test_accepts_goal_keyword(self):
+        mock_provider = AsyncMock()
+        mock_provider.chat.return_value = LLMResponse(
+            content=[ContentBlock(type="text", text=json.dumps({
+                "title": "Transformer Intro",
+                "summary": "Goal-aware lesson summary",
+                "sections": [{
+                    "heading": "Overview",
+                    "content": "Transformer overview content.",
+                    "timestamp": 0.0,
+                    "code_snippets": [],
+                    "key_concepts": ["transformer"],
+                    "diagrams": [],
+                    "interactive_steps": None,
+                }],
+            }))],
+            model="mock",
+        )
+        gen = LessonGenerator(mock_provider)
+        result = await gen.generate(
+            subtitle_chunks=["subtitle text"],
+            video_title="Transformer Intro",
+            goal="overview",
+        )
+        assert result.title == "Transformer Intro"

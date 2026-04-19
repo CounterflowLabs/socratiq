@@ -46,15 +46,25 @@ class LessonGenerator:
     def __init__(self, provider: LLMProvider):
         self._provider = provider
 
-    async def generate(self, subtitle_chunks: list[str], video_title: str) -> LessonContent:
+    async def generate(
+        self,
+        subtitle_chunks: list[str],
+        video_title: str,
+        goal: str | None = None,
+    ) -> LessonContent:
         """Convert subtitle chunks into structured lesson content."""
         subtitles = "\n\n".join(subtitle_chunks)
+        goal_prompt = f"\n\nLearning goal: {goal}" if goal else ""
 
         try:
             response = await self._provider.chat(
                 messages=[UnifiedMessage(
                     role="user",
-                    content=LESSON_PROMPT.format(title=video_title, subtitles=subtitles[:8000]),
+                    content=LESSON_PROMPT.format(
+                        title=video_title,
+                        subtitles=subtitles[:8000],
+                    )
+                    + goal_prompt,
                 )],
                 max_tokens=4000,
                 temperature=0.3,

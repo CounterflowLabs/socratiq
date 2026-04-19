@@ -1,6 +1,7 @@
 """API routes for first-time setup / onboarding."""
 
 import httpx
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -14,7 +15,7 @@ from app.db.models.model_config import ModelConfig
 from app.db.models.user import User
 from app.db.models.whisper_config import WhisperConfig
 from app.models.model_schemas import WhisperConfigResponse, WhisperConfigUpdate
-from app.services.llm.encryption import decrypt_api_key, encrypt_api_key
+from app.services.llm.encryption import decrypt_api_key_or_none, encrypt_api_key
 from app.services.llm.codex_auth import (
     codex_login_manager,
     get_codex_login_status,
@@ -23,6 +24,7 @@ from app.services.llm.codex_auth import (
 
 router = APIRouter(prefix="/api/v1/setup", tags=["setup"])
 _bilibili_qr_sessions: dict[str, object] = {}
+logger = logging.getLogger(__name__)
 
 
 @router.get("/status")
@@ -111,15 +113,20 @@ async def get_whisper_config(
             local_model=settings.whisper_model,
         )
 
+    decrypted_key = decrypt_api_key_or_none(
+        config.api_key_encrypted,
+        settings.llm_encryption_key,
+    )
+    if config.api_key_encrypted and decrypted_key is None:
+        logger.warning(
+            "Failed to decrypt stored Whisper API key for setup UI; falling back to env/default."
+        )
+
     return WhisperConfigResponse(
         mode=config.mode,
         api_base_url=config.api_base_url,
         api_model=config.api_model,
-        api_key_masked=(
-            _mask_key(decrypt_api_key(config.api_key_encrypted, settings.llm_encryption_key))
-            if config.api_key_encrypted
-            else _mask_key(settings.whisper_api_key)
-        ),
+        api_key_masked=_mask_key(decrypted_key or settings.whisper_api_key),
         local_model=config.local_model,
     )
 
@@ -159,15 +166,20 @@ async def update_whisper_config(
 
     await db.flush()
 
+    decrypted_key = decrypt_api_key_or_none(
+        config.api_key_encrypted,
+        settings.llm_encryption_key,
+    )
+    if config.api_key_encrypted and decrypted_key is None:
+        logger.warning(
+            "Stored Whisper API key remained unreadable after update; returning env/default mask."
+        )
+
     return WhisperConfigResponse(
         mode=config.mode,
         api_base_url=config.api_base_url,
         api_model=config.api_model,
-        api_key_masked=(
-            _mask_key(decrypt_api_key(config.api_key_encrypted, settings.llm_encryption_key))
-            if config.api_key_encrypted
-            else _mask_key(settings.whisper_api_key)
-        ),
+        api_key_masked=_mask_key(decrypted_key or settings.whisper_api_key),
         local_model=config.local_model,
     )
 

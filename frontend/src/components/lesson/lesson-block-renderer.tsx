@@ -39,9 +39,7 @@ function interactiveStepsToBody(
     .join("\n\n");
 }
 
-export function blocksFromLegacy(lesson: LessonContent): LessonBlock[] {
-  if (lesson.blocks?.length) return lesson.blocks;
-
+function buildLegacyBaseBlocks(lesson: LessonContent): LessonBlock[] {
   const blocks: LessonBlock[] = [];
 
   if (lesson.title || lesson.summary) {
@@ -98,6 +96,48 @@ export function blocksFromLegacy(lesson: LessonContent): LessonBlock[] {
   }
 
   return blocks;
+}
+
+function hasEquivalentNextStepBlock(
+  blocks: LessonBlock[],
+  candidate: LessonBlock
+) {
+  return blocks.some((block) => {
+    if (block.type !== "next_step") return false;
+    return block.title === candidate.title && block.body === candidate.body;
+  });
+}
+
+function mergeSectionInteractiveStepFallbacks(
+  blocks: LessonBlock[],
+  lesson: LessonContent
+): LessonBlock[] {
+  const mergedBlocks = [...blocks];
+
+  lesson.sections.forEach((section) => {
+    if (!section.interactive_steps) return;
+
+    const candidate: LessonBlock = {
+      type: "next_step",
+      title: section.interactive_steps.title,
+      body: interactiveStepsToBody(section.interactive_steps),
+    };
+
+    if (hasEquivalentNextStepBlock(mergedBlocks, candidate)) {
+      return;
+    }
+
+    const recapIndex = mergedBlocks.findIndex((block) => block.type === "recap");
+    const insertIndex = recapIndex >= 0 ? recapIndex : mergedBlocks.length;
+    mergedBlocks.splice(insertIndex, 0, candidate);
+  });
+
+  return mergedBlocks;
+}
+
+export function blocksFromLegacy(lesson: LessonContent): LessonBlock[] {
+  const baseBlocks = lesson.blocks?.length ? [...lesson.blocks] : buildLegacyBaseBlocks(lesson);
+  return mergeSectionInteractiveStepFallbacks(baseBlocks, lesson);
 }
 
 function readBlockSectionId(block: LessonBlock): string | null {

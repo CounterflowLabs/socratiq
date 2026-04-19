@@ -113,4 +113,78 @@ describe("LessonBlockRenderer", () => {
     expect(screen.getByText("linear algebra")).toBeInTheDocument();
     expect(screen.getByText("transformer")).toBeInTheDocument();
   });
+
+  it("merges interactive steps from sections even when backend blocks already exist", async () => {
+    const { default: LessonBlockRenderer } = await import("@/components/lesson/lesson-block-renderer");
+
+    render(
+      <LessonBlockRenderer
+        lesson={{
+          title: "Existing Blocks",
+          summary: "仍然需要 interactive steps fallback",
+          blocks: [{ type: "prose", title: "正文", body: "先理解概念。" }],
+          sections: [
+            {
+              heading: "步骤练习",
+              content: "这里有操作步骤。",
+              timestamp: 0,
+              code_snippets: [],
+              key_concepts: [],
+              diagrams: [],
+              interactive_steps: {
+                title: "自己试着走一遍",
+                steps: [
+                  { label: "第一步", detail: "先打开输入张量。" },
+                  { label: "第二步", detail: "再计算注意力分数。" },
+                ],
+              },
+            },
+          ],
+        }}
+      />
+    );
+
+    expect(screen.getByText("自己试着走一遍")).toBeInTheDocument();
+    expect(screen.getByText(/1\. 第一步/)).toBeInTheDocument();
+    expect(screen.getByText(/2\. 第二步/)).toBeInTheDocument();
+  });
+
+  it("does not duplicate interactive steps when an equivalent next step block already exists", async () => {
+    const { default: LessonBlockRenderer } = await import("@/components/lesson/lesson-block-renderer");
+
+    render(
+      <LessonBlockRenderer
+        lesson={{
+          title: "No Duplicate Steps",
+          summary: "去重检查",
+          blocks: [
+            {
+              type: "next_step",
+              title: "自己试着走一遍",
+              body: "1. 第一步\n先打开输入张量。\n\n2. 第二步\n再计算注意力分数。",
+            },
+          ],
+          sections: [
+            {
+              heading: "步骤练习",
+              content: "这里有操作步骤。",
+              timestamp: 0,
+              code_snippets: [],
+              key_concepts: [],
+              diagrams: [],
+              interactive_steps: {
+                title: "自己试着走一遍",
+                steps: [
+                  { label: "第一步", detail: "先打开输入张量。" },
+                  { label: "第二步", detail: "再计算注意力分数。" },
+                ],
+              },
+            },
+          ],
+        }}
+      />
+    );
+
+    expect(screen.getAllByText("自己试着走一遍")).toHaveLength(1);
+  });
 });

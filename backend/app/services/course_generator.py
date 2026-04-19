@@ -27,6 +27,7 @@ class CourseGenerator:
         source_ids: list[UUID],
         title: str | None = None,
         user_id: UUID | None = None,
+        skip_ready_check: bool = False,
     ) -> Course:
         """Generate a course from one or more ingested sources.
 
@@ -35,6 +36,8 @@ class CourseGenerator:
             source_ids: List of Source UUIDs (must all be status='ready').
             title: Optional course title.
             user_id: Optional user UUID.
+            skip_ready_check: Allows internal pipelines to assemble a course
+                before the source is marked fully ready for external callers.
 
         Returns:
             The created Course ORM object.
@@ -48,7 +51,7 @@ class CourseGenerator:
             source = await db.get(Source, sid)
             if not source:
                 raise ValueError(f"Source {sid} not found")
-            if source.status != "ready":
+            if not skip_ready_check and source.status != "ready":
                 raise ValueError(f"Source {sid} is not ready (status={source.status})")
             sources.append(source)
 

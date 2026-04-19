@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import ForeignKey, String, Text, event, text
+from sqlalchemy import ForeignKey, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -35,17 +35,4 @@ class SourceTask(BaseMixin, Base):
 
     source: Mapped["Source"] = relationship(  # noqa: F821
         "Source", back_populates="tasks"
-    )
-
-
-@event.listens_for(SourceTask, "before_insert")
-def _ensure_metadata_column(mapper, connection, target) -> None:
-    """Backfill the task metadata column for databases created before this field existed."""
-    connection.execute(
-        text(
-            """
-            ALTER TABLE source_tasks
-            ADD COLUMN IF NOT EXISTS metadata_ JSONB NOT NULL DEFAULT '{}'::jsonb
-            """
-        )
     )

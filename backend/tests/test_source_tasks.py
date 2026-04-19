@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from pathlib import Path
 
 import pytest
 from sqlalchemy import select
@@ -9,6 +10,23 @@ from app.db.models.source import Source
 from app.db.models.source_task import SourceTask
 from app.services.source_tasks import finish_source_processing_and_enqueue_course
 from app.worker.tasks import course_generation
+
+
+def test_source_task_metadata_followup_migration_exists():
+    versions_dir = Path(__file__).resolve().parents[1] / "alembic" / "versions"
+    migration_texts = [
+        path.read_text()
+        for path in versions_dir.glob("*.py")
+        if path.name != "c1d2e3f4a5b6_add_lifecycle_fields_to_source_tasks.py"
+    ]
+
+    assert any(
+        'down_revision: Union[str, Sequence[str], None] = "c1d2e3f4a5b6"' in text
+        and '"source_tasks"' in text
+        and '"metadata_"' in text
+        and "op.add_column(" in text
+        for text in migration_texts
+    )
 
 
 @pytest.mark.asyncio

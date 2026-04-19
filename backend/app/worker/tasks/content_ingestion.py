@@ -18,6 +18,7 @@ from app.services.source_tasks import (
     dispatch_course_generation,
     finish_source_processing_and_enqueue_course,
     mark_source_task,
+    recover_course_generation_dispatch_failure,
 )
 from app.worker.celery_app import celery_app
 
@@ -199,12 +200,28 @@ async def _clone_source_async(task, source_id: str, ref_source_id: str) -> dict:
                 raise
         if completion is None:
             raise RuntimeError("Clone finished without preparing course generation")
-        dispatch_course_generation(
-            payload=completion.course_dispatch.payload,
-            task_id=completion.course_dispatch.task_id,
-            goal=completion.course_dispatch.goal,
-            user_id=completion.course_dispatch.user_id,
-        )
+        try:
+            dispatch_course_generation(
+                payload=completion.course_dispatch.payload,
+                task_id=completion.course_dispatch.task_id,
+                goal=completion.course_dispatch.goal,
+                user_id=completion.course_dispatch.user_id,
+            )
+        except Exception as exc:
+            logger.error(
+                "Failed to dispatch course generation for cloned source %s: %s",
+                source_id,
+                exc,
+                exc_info=True,
+            )
+            await recover_course_generation_dispatch_failure(
+                session_factory=resources.session_factory,
+                source_id=sid,
+                course_task_id=completion.course_dispatch.task_id,
+                fallback_task_id=completion.course_dispatch.fallback_task_id,
+                error_message=str(exc),
+            )
+            raise RuntimeError(f"Failed to dispatch course generation: {exc}") from exc
         return completion.result
     finally:
         await resources.engine.dispose()
@@ -473,12 +490,28 @@ async def _ingest_source_async(task, source_id: str) -> dict:
                 raise
         if completion is None:
             raise RuntimeError("Ingestion finished without preparing course generation")
-        dispatch_course_generation(
-            payload=completion.course_dispatch.payload,
-            task_id=completion.course_dispatch.task_id,
-            goal=completion.course_dispatch.goal,
-            user_id=completion.course_dispatch.user_id,
-        )
+        try:
+            dispatch_course_generation(
+                payload=completion.course_dispatch.payload,
+                task_id=completion.course_dispatch.task_id,
+                goal=completion.course_dispatch.goal,
+                user_id=completion.course_dispatch.user_id,
+            )
+        except Exception as exc:
+            logger.error(
+                "Failed to dispatch course generation for source %s: %s",
+                source_id,
+                exc,
+                exc_info=True,
+            )
+            await recover_course_generation_dispatch_failure(
+                session_factory=resources.session_factory,
+                source_id=sid,
+                course_task_id=completion.course_dispatch.task_id,
+                fallback_task_id=completion.course_dispatch.fallback_task_id,
+                error_message=str(exc),
+            )
+            raise RuntimeError(f"Failed to dispatch course generation: {exc}") from exc
         return completion.result
     finally:
         await resources.engine.dispose()

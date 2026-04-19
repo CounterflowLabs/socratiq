@@ -427,6 +427,117 @@ async def test_clone_source_queues_course_generation_when_clone_finishes(
 
 
 @pytest.mark.asyncio
+async def test_clone_source_recovers_when_course_dispatch_fails(
+    monkeypatch, db_session, demo_user
+):
+    donor = Source(
+        type="youtube",
+        url="https://www.youtube.com/watch?v=donor",
+        title="Donor source",
+        status="ready",
+        raw_content="donor raw content",
+        metadata_={"topic": "reuse"},
+        created_by=demo_user.id,
+    )
+    target = Source(
+        type="youtube",
+        url="https://www.youtube.com/watch?v=target",
+        title=None,
+        status="pending",
+        metadata_={},
+        ref_source_id=donor.id,
+        created_by=demo_user.id,
+    )
+    db_session.add_all([donor, target])
+    await db_session.flush()
+
+    db_session.add(
+        ContentChunk(
+            source_id=donor.id,
+            text="donor chunk",
+            metadata_={"page_index": 0, "page_title": "Cloned Page"},
+        )
+    )
+    db_session.add(
+        SourceTask(
+            source_id=target.id,
+            task_type="source_processing",
+            status="running",
+            celery_task_id="clone-processing-1",
+        )
+    )
+    await db_session.flush()
+
+    class FakeAsyncContext:
+        def __init__(self, session):
+            self._session = session
+
+        async def __aenter__(self):
+            return self._session
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeSessionFactory:
+        def __init__(self, session):
+            self._session = session
+
+        def __call__(self):
+            return FakeAsyncContext(self._session)
+
+    class FakeEngine:
+        async def dispose(self):
+            return None
+
+    fake_resources = SimpleNamespace(
+        settings=SimpleNamespace(upload_dir="/tmp"),
+        engine=FakeEngine(),
+        session_factory=FakeSessionFactory(db_session),
+        model_router=SimpleNamespace(),
+    )
+
+    monkeypatch.setattr(
+        content_ingestion,
+        "_create_worker_resources",
+        lambda: fake_resources,
+    )
+    monkeypatch.setattr(
+        "app.services.source_tasks.uuid4",
+        lambda: "course-task-from-clone",
+    )
+    monkeypatch.setattr(
+        content_ingestion,
+        "dispatch_course_generation",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("broker unavailable")),
+    )
+
+    class FakeTask:
+        def update_state(self, state, meta=None):
+            return None
+
+    with pytest.raises(RuntimeError, match="Failed to dispatch course generation"):
+        await content_ingestion._clone_source_async(
+            FakeTask(),
+            str(target.id),
+            str(donor.id),
+        )
+
+    target_row = await db_session.get(Source, target.id)
+    tasks = (
+        await db_session.execute(
+            select(SourceTask).where(SourceTask.source_id == target.id)
+        )
+    ).scalars().all()
+    task_by_type = {task.task_type: task for task in tasks}
+
+    assert target_row.status == "ready"
+    assert target_row.celery_task_id == "clone-processing-1"
+    assert task_by_type["course_generation"].status == "failure"
+    assert task_by_type["course_generation"].stage == "error"
+    assert task_by_type["course_generation"].error_summary == "broker unavailable"
+
+
+@pytest.mark.asyncio
 async def test_ref_subscriber_ready_waiter_dispatches_only_clone_task(
     monkeypatch, db_session, demo_user
 ):

@@ -11,6 +11,7 @@ from app.db.models.source_task import SourceTask
 from app.services.source_tasks import (
     dispatch_course_generation,
     finish_source_processing_and_enqueue_course,
+    recover_course_generation_dispatch_failure,
 )
 from app.worker.tasks import course_generation
 
@@ -102,6 +103,64 @@ def test_dispatch_course_generation_uses_preallocated_task_id(monkeypatch):
         "kwargs": {"goal": "overview", "user_id": "user-1"},
         "task_id": "course-1",
     }
+
+
+@pytest.mark.asyncio
+async def test_recover_course_generation_dispatch_failure_rolls_back_source_task_pointer(
+    db_session, demo_user
+):
+    source = Source(
+        type="youtube",
+        url="https://www.youtube.com/watch?v=test",
+        title="Source Title",
+        status="ready",
+        celery_task_id="course-1",
+        created_by=demo_user.id,
+    )
+    db_session.add(source)
+    await db_session.flush()
+
+    db_session.add(
+        SourceTask(
+            source_id=source.id,
+            task_type="source_processing",
+            status="success",
+            stage="ready",
+            celery_task_id="processing-1",
+        )
+    )
+    db_session.add(
+        SourceTask(
+            source_id=source.id,
+            task_type="course_generation",
+            status="pending",
+            stage="pending",
+            celery_task_id="course-1",
+        )
+    )
+    await db_session.commit()
+
+    await recover_course_generation_dispatch_failure(
+        session_factory=lambda: db_session,
+        source_id=source.id,
+        course_task_id="course-1",
+        fallback_task_id="processing-1",
+        error_message="broker unavailable",
+    )
+
+    source_row = await db_session.get(Source, source.id)
+    tasks = (
+        await db_session.execute(
+            select(SourceTask).where(SourceTask.source_id == source.id)
+        )
+    ).scalars().all()
+    task_by_type = {task.task_type: task for task in tasks}
+
+    assert source_row.status == "ready"
+    assert source_row.celery_task_id == "processing-1"
+    assert task_by_type["course_generation"].status == "failure"
+    assert task_by_type["course_generation"].stage == "error"
+    assert task_by_type["course_generation"].error_summary == "broker unavailable"
 
 
 @pytest.mark.asyncio

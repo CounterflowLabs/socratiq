@@ -31,6 +31,7 @@ class PreparedCourseGeneration:
 
     payload: dict[str, Any]
     task_id: str
+    fallback_task_id: str | None
     goal: str | None
     user_id: str | None
 
@@ -138,6 +139,11 @@ async def finish_source_processing_and_enqueue_course(
 ) -> SourceProcessingCompletion:
     """Mark source processing ready and enqueue a persisted course task."""
     queued_task_id = str(uuid4())
+    previous_task_id = (
+        processing_task.celery_task_id
+        if processing_task is not None
+        else source.celery_task_id
+    )
     source.status = "ready"
     source.celery_task_id = queued_task_id
 
@@ -173,6 +179,7 @@ async def finish_source_processing_and_enqueue_course(
         course_dispatch=PreparedCourseGeneration(
             payload=payload,
             task_id=queued_task_id,
+            fallback_task_id=previous_task_id,
             goal=metadata.get("pending_goal"),
             user_id=metadata.get("pending_user_id") or str(source.created_by),
         ),
@@ -192,3 +199,70 @@ def dispatch_course_generation(
         kwargs={"goal": goal, "user_id": user_id},
         task_id=task_id,
     )
+
+
+async def recover_course_generation_dispatch_failure(
+    *,
+    session_factory,
+    source_id,
+    course_task_id: str,
+    fallback_task_id: str | None,
+    error_message: str,
+) -> None:
+    """Rollback source task pointers after post-commit dispatch failure."""
+    session_or_cm = session_factory()
+
+    if hasattr(session_or_cm, "__aenter__"):
+        async with session_or_cm as db:
+            await _recover_course_generation_dispatch_failure_in_session(
+                db=db,
+                source_id=source_id,
+                course_task_id=course_task_id,
+                fallback_task_id=fallback_task_id,
+                error_message=error_message,
+            )
+            await db.commit()
+        return
+
+    db = session_or_cm
+    await _recover_course_generation_dispatch_failure_in_session(
+        db=db,
+        source_id=source_id,
+        course_task_id=course_task_id,
+        fallback_task_id=fallback_task_id,
+        error_message=error_message,
+    )
+    await db.commit()
+
+
+async def _recover_course_generation_dispatch_failure_in_session(
+    *,
+    db: AsyncSession,
+    source_id,
+    course_task_id: str,
+    fallback_task_id: str | None,
+    error_message: str,
+) -> None:
+    """Apply dispatch recovery changes inside an existing session."""
+    source = await db.get(Source, source_id)
+    if source is not None:
+        source.status = "ready"
+        source.celery_task_id = fallback_task_id
+
+    result = await db.execute(
+        select(SourceTask)
+        .where(
+            SourceTask.source_id == source_id,
+            SourceTask.task_type == "course_generation",
+            SourceTask.celery_task_id == course_task_id,
+        )
+        .order_by(SourceTask.created_at.desc())
+        .limit(1)
+    )
+    task = result.scalar_one_or_none()
+    if task is not None:
+        task.status = "failure"
+        task.stage = "error"
+        task.error_summary = error_message
+
+    await db.flush()

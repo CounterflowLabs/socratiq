@@ -37,6 +37,8 @@ class SourceResponse(BaseModel):
     task_id: str | None = None
     latest_processing_task: SourceTaskSummary | None = None
     latest_course_task: SourceTaskSummary | None = None
+    course_count: int = 0
+    latest_course_id: uuid.UUID | None = None
     created_at: datetime
     updated_at: datetime
 

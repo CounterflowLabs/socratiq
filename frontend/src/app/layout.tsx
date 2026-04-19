@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useSyncExternalStore, useCallback, useState } from "react";
+import { useSyncExternalStore, useCallback, useState } from "react";
 import { usePathname } from "next/navigation";
 import "./globals.css";
 import { Sidebar } from "@/components/sidebar";
 
 // Pages that show the sidebar
-const SIDEBAR_PAGES = ["/", "/import", "/settings"];
+const SIDEBAR_PAGES = ["/", "/import", "/settings", "/sources"];
 
 // Use useSyncExternalStore for media queries to avoid React Compiler issues
 function useMediaQuery(query: string): boolean {
@@ -40,16 +40,11 @@ export default function RootLayout({
 function LayoutInner({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
-  const [mobileOpen, setMobileOpen] = useState(false);
+  const [mobileOpenPath, setMobileOpenPath] = useState<string | null>(null);
   const isDesktop = useMediaQuery("(min-width: 768px)");
   const showDesktopSidebar = SIDEBAR_PAGES.includes(pathname);
   const hideSidebarEntirely = pathname === "/login" || pathname === "/setup";
-
-  // Close mobile sidebar on route change
-  useEffect(() => {
-    setMobileOpen(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: only on pathname change
-  }, [pathname]);
+  const mobileOpen = mobileOpenPath === pathname;
 
   if (hideSidebarEntirely) {
     return <>{children}</>;
@@ -63,7 +58,9 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
         collapsed={collapsed}
         onToggle={() => setCollapsed(!collapsed)}
         mobileOpen={mobileOpen}
-        onMobileToggle={() => setMobileOpen(!mobileOpen)}
+        onMobileToggle={() =>
+          setMobileOpenPath((currentPath) => (currentPath === pathname ? null : pathname))
+        }
       />
       <main
         className="main-content transition-[margin] duration-200 min-h-screen"

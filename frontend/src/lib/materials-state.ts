@@ -13,6 +13,17 @@ function isTaskActive(task: SourceTaskSummary | null | undefined): boolean {
 }
 
 export function deriveMaterialPresentation(source: SourceResponse): MaterialPresentation {
+  if (source.latest_course_id) {
+    return {
+      badge: "已生成课程",
+      supportingText:
+        source.course_count > 0
+          ? `已生成 ${source.course_count} 门课程`
+          : "课程已生成，可直接进入",
+      primaryAction: "enter-course",
+    };
+  }
+
   if (source.latest_course_task?.status === "failure") {
     return {
       badge: "课程生成失败",
@@ -23,14 +34,11 @@ export function deriveMaterialPresentation(source: SourceResponse): MaterialPres
     };
   }
 
-  if (source.latest_course_id) {
+  if (source.status === "error") {
     return {
-      badge: "已生成课程",
-      supportingText:
-        source.course_count > 0
-          ? `已生成 ${source.course_count} 门课程`
-          : "课程已生成，可直接进入",
-      primaryAction: "enter-course",
+      badge: "资料处理失败",
+      supportingText: "资料处理失败，请查看详情",
+      primaryAction: "view-details",
     };
   }
 

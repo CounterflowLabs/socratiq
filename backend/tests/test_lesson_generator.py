@@ -134,6 +134,18 @@ class TestLessonGenerator:
             video_title="Python Basics",
         )
 
-        assert len(result.blocks) >= 2
-        assert result.blocks[0].type == "intro_card"
-        assert result.blocks[-1].type == "recap"
+        assert [block.type for block in result.blocks] == [
+            "intro_card",
+            "prose",
+            "concept_relation",
+            "recap",
+        ]
+        assert result.blocks[0].title == "Python Basics"
+        assert result.blocks[0].body == "Intro summary"
+        assert result.blocks[1].title == "Variables"
+        assert result.blocks[1].body == "Variables store data values."
+        assert [concept.label for concept in result.blocks[2].concepts] == [
+            "variables",
+            "assignment",
+        ]
+        assert result.blocks[3].body == "Intro summary"

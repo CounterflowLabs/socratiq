@@ -33,3 +33,19 @@ def test_planner_uses_inline_lab_for_coding_material():
     assert result.lab_mode == "inline"
     assert result.graph_mode == "inline_and_overview"
     assert result.study_surface == "reader"
+
+
+def test_planner_uses_inline_lab_when_coding_markers_appear_without_code():
+    planner = TeachingAssetPlanner()
+
+    result = planner.plan(
+        source_title="Tokenizer Internals",
+        source_type="video",
+        overall_summary="A conceptual walkthrough of tokenization.",
+        chunk_topics=["tokenizer", "training loop"],
+        has_code=False,
+    )
+
+    assert result.lab_mode == "inline"
+    assert result.graph_mode == "inline_and_overview"
+    assert result.study_surface == "reader"

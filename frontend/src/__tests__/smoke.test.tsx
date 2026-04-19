@@ -143,47 +143,22 @@ describe("Import Page", () => {
     });
   });
 
-  it("redirects successful imports to the materials hub", async () => {
-    const push = vi.fn();
-
-    vi.doMock("next/navigation", () => ({
-      useRouter: () => ({ push }),
-    }));
-
-    globalThis.fetch = vi.fn().mockResolvedValue({
+  it("allows import submission without choosing a learning goal", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
-      json: () =>
-        Promise.resolve({
-          id: "src1",
-          type: "bilibili",
-          status: "pending",
-          task_id: "t1",
-        }),
-      text: () =>
-        Promise.resolve(
-          JSON.stringify({
-            id: "src1",
-            type: "bilibili",
-            status: "pending",
-            task_id: "t1",
-          })
-        ),
+      json: () => Promise.resolve({ id: "src1", type: "bilibili", status: "pending", task_id: "t1" }),
     });
+    globalThis.fetch = fetchMock as typeof fetch;
 
-    vi.resetModules();
     const ImportPage = (await import("@/app/import/page")).default;
     render(<ImportPage />);
 
-    fireEvent.change(
-      screen.getByPlaceholderText("https://www.bilibili.com/video/BV..."),
-      { target: { value: "https://www.bilibili.com/video/BV1test" } }
-    );
-    fireEvent.click(screen.getByRole("button", { name: /快速了解大意/ }));
-    fireEvent.click(screen.getByRole("button", { name: /生成学习路径/ }));
-
-    await waitFor(() => {
-      expect(push).toHaveBeenCalledWith("/sources");
+    fireEvent.change(screen.getByPlaceholderText("https://www.bilibili.com/video/BV..."), {
+      target: { value: "https://www.bilibili.com/video/BV1xoJwzDESD" },
     });
+    fireEvent.click(screen.getByRole("button", { name: "开始导入" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
   });
 });
 

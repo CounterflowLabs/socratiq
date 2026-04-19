@@ -161,6 +161,47 @@ export interface CourseDetailResponse extends CourseResponse {
   sections: SectionResponse[];
 }
 
+export interface LessonConcept {
+  label: string;
+  description?: string | null;
+}
+
+export interface LessonBlock {
+  type:
+    | "intro_card"
+    | "prose"
+    | "diagram"
+    | "code_example"
+    | "concept_relation"
+    | "practice_trigger"
+    | "recap"
+    | "next_step";
+  title?: string | null;
+  body?: string | null;
+  concepts?: LessonConcept[];
+  metadata?: Record<string, string | number | boolean | null>;
+}
+
+export interface LessonSectionContent {
+  heading: string;
+  content: string;
+  timestamp: number;
+  code_snippets: Array<{ language: string; code: string; context: string }>;
+  key_concepts: string[];
+  diagrams: Array<{ type: string; title: string; content: string }>;
+  interactive_steps: {
+    title: string;
+    steps: Array<{ label: string; detail: string; code?: string | null }>;
+  } | null;
+}
+
+export interface LessonContent {
+  title: string;
+  summary: string;
+  sections: LessonSectionContent[];
+  blocks?: LessonBlock[] | null;
+}
+
 export async function generateCourse(
   sourceIds: string[],
   title?: string

@@ -34,9 +34,10 @@ function langFromExt(filename: string): string {
 
 interface LabEditorProps {
   lab: LabResponse;
+  embedded?: boolean;
 }
 
-export default function LabEditor({ lab }: LabEditorProps) {
+export default function LabEditor({ lab, embedded = false }: LabEditorProps) {
   const starterFiles = useMemo(() => Object.keys(lab.starter_code), [lab.starter_code]);
   const testFiles = useMemo(() => Object.keys(lab.test_code), [lab.test_code]);
 
@@ -81,9 +82,23 @@ export default function LabEditor({ lab }: LabEditorProps) {
   }
 
   return (
-    <div className="flex h-full overflow-hidden">
+    <div
+      className={clsx(
+        "overflow-hidden",
+        embedded
+          ? "flex min-h-[520px] flex-col rounded-2xl border border-gray-200 bg-white lg:flex-row"
+          : "flex h-full"
+      )}
+    >
       {/* File tree sidebar */}
-      <div className="w-[220px] flex-shrink-0 border-r border-gray-200 bg-gray-50/50 flex flex-col overflow-y-auto">
+      <div
+        className={clsx(
+          "flex flex-col overflow-y-auto bg-gray-50/50",
+          embedded
+            ? "border-b border-gray-200 lg:w-[220px] lg:flex-shrink-0 lg:border-b-0 lg:border-r"
+            : "w-[220px] flex-shrink-0 border-r border-gray-200"
+        )}
+      >
         {/* Title + confidence */}
         <div className="px-3 py-3 border-b border-gray-200">
           <h3 className="text-xs font-semibold text-gray-700 truncate mb-1">{lab.title}</h3>
@@ -171,7 +186,7 @@ export default function LabEditor({ lab }: LabEditorProps) {
       </div>
 
       {/* Editor */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex min-w-0 flex-1 flex-col">
         {/* File tab bar */}
         <div className="flex items-center px-3 py-1.5 border-b border-gray-200 bg-white gap-2">
           <FileText className="w-3.5 h-3.5 text-gray-400" />
@@ -182,7 +197,7 @@ export default function LabEditor({ lab }: LabEditorProps) {
         </div>
 
         {/* Monaco editor */}
-        <div className={clsx("flex-1", isTestFile && "bg-gray-50")}>
+        <div className={clsx(embedded ? "min-h-[360px] flex-1" : "flex-1", isTestFile && "bg-gray-50")}>
           <MonacoEditor
             height="100%"
             language={currentLang}

@@ -189,8 +189,9 @@ async def delete_model(
     if not model_obj:
         raise HTTPException(status_code=404, detail=f"Model '{name}' not found")
 
-    await db.delete(model_obj)
-    await db.flush()
+    deleted = await manager.delete_model(db, name)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Model '{name}' not found")
 
 
 @router.post("/{name}/test", response_model=ModelTestResponse)

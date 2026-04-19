@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import event
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncConnection,
     AsyncSession,
@@ -43,6 +43,11 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
     # Open a connection and begin a transaction that we will roll back
     connection = await engine.connect()
     transaction = await connection.begin()
+
+    # Keep tests isolated from rows that already exist in the shared dev DB.
+    tables = ", ".join(f'"{table.name}"' for table in reversed(Base.metadata.sorted_tables))
+    if tables:
+        await connection.execute(text(f"TRUNCATE TABLE {tables} RESTART IDENTITY CASCADE"))
 
     # Bind a session to this connection; every commit becomes a SAVEPOINT
     session = AsyncSession(

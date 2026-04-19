@@ -83,6 +83,9 @@ class ModelConfigManager:
         model = await self.get_model_by_name(db, name)
         if not model:
             return False
+        await db.execute(
+            delete(ModelRouteConfig).where(ModelRouteConfig.model_name == name)
+        )
         await db.delete(model)
         await db.flush()
         return True

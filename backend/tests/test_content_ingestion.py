@@ -7,7 +7,9 @@ from unittest.mock import AsyncMock
 import pytest
 from sqlalchemy import select
 
+from app.db.models.content_chunk import ContentChunk
 from app.worker.tasks import content_ingestion
+from app.worker import ref_subscriber
 from app.db.models.source import Source
 from app.db.models.source_task import SourceTask
 
@@ -300,6 +302,197 @@ async def test_ingest_source_queues_course_generation_when_pipeline_finishes(
         "course_generation",
     }
     assert any(meta.get("stage") == "embedding" for _, meta in task_updates)
+
+
+@pytest.mark.asyncio
+async def test_clone_source_queues_course_generation_when_clone_finishes(
+    monkeypatch, db_session, demo_user
+):
+    donor = Source(
+        type="youtube",
+        url="https://www.youtube.com/watch?v=donor",
+        title="Donor source",
+        status="ready",
+        raw_content="donor raw content",
+        metadata_={"topic": "reuse"},
+        created_by=demo_user.id,
+    )
+    target = Source(
+        type="youtube",
+        url="https://www.youtube.com/watch?v=target",
+        title=None,
+        status="pending",
+        metadata_={},
+        ref_source_id=donor.id,
+        created_by=demo_user.id,
+    )
+    db_session.add_all([donor, target])
+    await db_session.flush()
+
+    db_session.add(
+        ContentChunk(
+            source_id=donor.id,
+            text="donor chunk",
+            metadata_={"page_index": 0, "page_title": "Cloned Page"},
+        )
+    )
+    db_session.add(
+        SourceTask(
+            source_id=target.id,
+            task_type="source_processing",
+            status="running",
+            celery_task_id="clone-processing-1",
+        )
+    )
+    await db_session.flush()
+
+    class FakeAsyncContext:
+        def __init__(self, session):
+            self._session = session
+
+        async def __aenter__(self):
+            return self._session
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeSessionFactory:
+        def __init__(self, session):
+            self._session = session
+
+        def __call__(self):
+            return FakeAsyncContext(self._session)
+
+    class FakeEngine:
+        async def dispose(self):
+            return None
+
+    fake_resources = SimpleNamespace(
+        settings=SimpleNamespace(upload_dir="/tmp"),
+        engine=FakeEngine(),
+        session_factory=FakeSessionFactory(db_session),
+        model_router=SimpleNamespace(),
+    )
+
+    monkeypatch.setattr(
+        content_ingestion,
+        "_create_worker_resources",
+        lambda: fake_resources,
+    )
+    monkeypatch.setattr(
+        "app.services.source_tasks.generate_course_task.delay",
+        lambda payload, goal=None, user_id=None: SimpleNamespace(id="course-task-from-clone"),
+    )
+
+    task_updates: list[tuple[str, dict]] = []
+
+    class FakeTask:
+        def update_state(self, state, meta=None):
+            task_updates.append((state, meta or {}))
+
+    result = await content_ingestion._clone_source_async(
+        FakeTask(),
+        str(target.id),
+        str(donor.id),
+    )
+
+    target_row = await db_session.get(Source, target.id)
+    tasks = (
+        await db_session.execute(
+            select(SourceTask).where(SourceTask.source_id == target.id)
+        )
+    ).scalars().all()
+    task_by_type = {task.task_type: task for task in tasks}
+
+    assert result["status"] == "ready"
+    assert result["queued_course_task_id"] == "course-task-from-clone"
+    assert target_row.status == "ready"
+    assert task_by_type["source_processing"].status == "success"
+    assert task_by_type["source_processing"].stage == "ready"
+    assert task_by_type["course_generation"].status == "pending"
+    assert task_by_type["course_generation"].celery_task_id == "course-task-from-clone"
+    assert any(meta.get("stage") == "cloning" for _, meta in task_updates)
+
+
+@pytest.mark.asyncio
+async def test_ref_subscriber_ready_waiter_dispatches_only_clone_task(
+    monkeypatch, db_session, demo_user
+):
+    donor = Source(
+        type="youtube",
+        url="https://www.youtube.com/watch?v=donor",
+        title="Donor source",
+        status="ready",
+        metadata_={},
+        created_by=demo_user.id,
+    )
+    db_session.add(donor)
+    await db_session.flush()
+
+    waiter = Source(
+        type="youtube",
+        url="https://www.youtube.com/watch?v=waiter",
+        title="Waiting source",
+        status="waiting_donor",
+        metadata_={"pending_goal": "overview"},
+        ref_source_id=donor.id,
+        created_by=demo_user.id,
+    )
+    db_session.add(waiter)
+    await db_session.flush()
+
+    class FakeAsyncContext:
+        def __init__(self, session):
+            self._session = session
+
+        async def __aenter__(self):
+            return self._session
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeSessionFactory:
+        def __init__(self, session):
+            self._session = session
+
+        def __call__(self):
+            return FakeAsyncContext(self._session)
+
+    class FakeEngine:
+        async def dispose(self):
+            return None
+
+    monkeypatch.setattr(
+        ref_subscriber,
+        "get_settings",
+        lambda: SimpleNamespace(database_url="postgresql+asyncpg://test/test"),
+    )
+    monkeypatch.setattr(ref_subscriber, "create_async_engine", lambda *args, **kwargs: FakeEngine())
+    monkeypatch.setattr(
+        ref_subscriber,
+        "async_sessionmaker",
+        lambda *args, **kwargs: FakeSessionFactory(db_session),
+    )
+
+    clone_calls: list[tuple[str, str]] = []
+
+    class FakeCloneTask:
+        def delay(self, source_id, ref_source_id):
+            clone_calls.append((source_id, ref_source_id))
+            return SimpleNamespace(id="clone-task-1")
+
+    monkeypatch.setattr(
+        "app.worker.tasks.content_ingestion.clone_source",
+        FakeCloneTask(),
+    )
+
+    await ref_subscriber._handle_source_done(str(donor.id), "ready")
+
+    waiter_row = await db_session.get(Source, waiter.id)
+
+    assert clone_calls == [(str(waiter.id), str(donor.id))]
+    assert waiter_row.celery_task_id == "clone-task-1"
+    assert waiter_row.status == "pending"
 
 
 @pytest.mark.asyncio

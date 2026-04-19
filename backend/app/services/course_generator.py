@@ -21,6 +21,16 @@ class CourseGenerator:
     def __init__(self, model_router: ModelRouter):
         self._router = model_router
 
+    @staticmethod
+    def _resolve_asset_plan(metadata: dict) -> dict:
+        """Return an asset plan, preserving legacy inline labs when needed."""
+        asset_plan = metadata.get("asset_plan")
+        if asset_plan:
+            return asset_plan
+        if metadata.get("labs_by_page"):
+            return {"lab_mode": "inline"}
+        return {"lab_mode": "none"}
+
     async def generate(
         self,
         db: AsyncSession,
@@ -89,7 +99,7 @@ class CourseGenerator:
         source_graph_map: dict[UUID, dict] = {}
         for source in sources:
             smeta = source.metadata_ or {}
-            source_asset_plan_map[source.id] = smeta.get("asset_plan", {"lab_mode": "none"})
+            source_asset_plan_map[source.id] = self._resolve_asset_plan(smeta)
             source_graph_map[source.id] = smeta.get("graph_by_page", {})
             source_lesson_map[source.id] = smeta.get("lesson_by_page", {})
             source_lab_map[source.id] = smeta.get("labs_by_page", {})

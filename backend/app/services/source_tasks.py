@@ -32,7 +32,6 @@ class PreparedCourseGeneration:
     payload: dict[str, Any]
     task_id: str
     fallback_task_id: str | None
-    goal: str | None
     user_id: str | None
 
 
@@ -180,7 +179,6 @@ async def finish_source_processing_and_enqueue_course(
             payload=payload,
             task_id=queued_task_id,
             fallback_task_id=previous_task_id,
-            goal=metadata.get("pending_goal"),
             user_id=metadata.get("pending_user_id") or str(source.created_by),
         ),
     )
@@ -190,13 +188,12 @@ def dispatch_course_generation(
     *,
     payload: dict[str, Any],
     task_id: str,
-    goal: str | None,
     user_id: str | None,
 ):
     """Dispatch the already-persisted course-generation task."""
     return generate_course_task.apply_async(
         args=[payload],
-        kwargs={"goal": goal, "user_id": user_id},
+        kwargs={"user_id": user_id},
         task_id=task_id,
     )
 

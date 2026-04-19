@@ -433,7 +433,6 @@ async def test_course_generation_reuses_source_metadata_without_regenerating(
     result = await course_generation._generate_course_async(
         FakeTask(),
         str(source.id),
-        goal="overview",
         user_id=str(demo_user.id),
     )
 
@@ -452,6 +451,7 @@ async def test_course_generation_reuses_source_metadata_without_regenerating(
     ).scalars().all()
 
     assert result["status"] == "ready"
+    assert "goal" not in result
     assert created_course is not None
     assert len(sections) == 1
     assert sections[0].content["lesson"]["summary"] == "Persisted lesson summary"

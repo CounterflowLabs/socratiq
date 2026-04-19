@@ -204,7 +204,6 @@ async def _clone_source_async(task, source_id: str, ref_source_id: str) -> dict:
             dispatch_course_generation(
                 payload=completion.course_dispatch.payload,
                 task_id=completion.course_dispatch.task_id,
-                goal=completion.course_dispatch.goal,
                 user_id=completion.course_dispatch.user_id,
             )
         except Exception as exc:
@@ -522,7 +521,6 @@ async def _ingest_source_async(task, source_id: str) -> dict:
             dispatch_course_generation(
                 payload=completion.course_dispatch.payload,
                 task_id=completion.course_dispatch.task_id,
-                goal=completion.course_dispatch.goal,
                 user_id=completion.course_dispatch.user_id,
             )
         except Exception as exc:

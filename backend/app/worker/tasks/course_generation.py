@@ -63,20 +63,19 @@ def _create_worker_resources() -> WorkerResources:
     soft_time_limit=600,
     time_limit=660,
 )
-def generate_course_task(self, ingest_result: dict, goal: str | None = None, user_id: str | None = None) -> dict:
+def generate_course_task(self, ingest_result: dict, user_id: str | None = None) -> dict:
     """Generate course from an ingested source.
 
     Args:
         ingest_result: Result dict from ingest_source or clone_source (contains source_id).
-        goal: Learning goal — "overview", "master", or "apply".
         user_id: User UUID string for course ownership.
     """
     import asyncio
     source_id = ingest_result["source_id"]
-    return asyncio.run(_generate_course_async(self, source_id, goal, user_id))
+    return asyncio.run(_generate_course_async(self, source_id, user_id))
 
 
-async def _generate_course_async(task, source_id: str, goal: str | None, user_id: str | None) -> dict:
+async def _generate_course_async(task, source_id: str, user_id: str | None) -> dict:
     """Async implementation of course generation."""
     from sqlalchemy import select
     from app.db.models.course import Section
@@ -137,9 +136,8 @@ async def _generate_course_async(task, source_id: str, goal: str | None, user_id
             await db.commit()
 
             logger.info(
-                "Generated course '%s' (goal=%s) with %s sections",
+                "Generated course '%s' with %s sections",
                 course.title,
-                goal,
                 len(sections),
             )
             return {
@@ -148,7 +146,6 @@ async def _generate_course_async(task, source_id: str, goal: str | None, user_id
                 "title": course.title,
                 "sections_created": len(sections),
                 "labs_created": len(labs),
-                "goal": goal,
                 "status": "ready",
             }
     except Exception as exc:

@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 from sqlalchemy import select
@@ -94,13 +95,12 @@ def test_dispatch_course_generation_uses_preallocated_task_id(monkeypatch):
     dispatch_course_generation(
         payload={"source_id": "source-1"},
         task_id="course-1",
-        goal="overview",
         user_id="user-1",
     )
 
     assert captured == {
         "args": [{"source_id": "source-1"}],
-        "kwargs": {"goal": "overview", "user_id": "user-1"},
+        "kwargs": {"user_id": "user-1"},
         "task_id": "course-1",
     }
 
@@ -286,7 +286,6 @@ async def test_generate_course_marks_task_success_with_course_id(
     result = await course_generation._generate_course_async(
         FakeTask(),
         str(source.id),
-        goal="overview",
         user_id=str(demo_user.id),
     )
 
@@ -300,7 +299,152 @@ async def test_generate_course_marks_task_success_with_course_id(
     ).scalar_one()
 
     assert result["status"] == "ready"
+    assert "goal" not in result
     assert task_row.status == "success"
     assert task_row.stage == "ready"
     assert task_row.metadata_["course_id"] == result["course_id"]
     assert any(meta.get("stage") == "assembling_course" for _, meta in task_updates)
+
+
+@pytest.mark.asyncio
+async def test_generate_course_legacy_metadata_without_asset_plan_still_creates_labs(
+    monkeypatch, db_session, demo_user
+):
+    source = Source(
+        type="youtube",
+        url="https://www.youtube.com/watch?v=legacy",
+        title="Legacy Course Source",
+        status="ready",
+        metadata_={
+            "lesson_by_page": {
+                "0": {
+                    "title": "Legacy Page",
+                    "summary": "legacy lesson summary",
+                    "sections": [
+                        {
+                            "code_snippets": [],
+                            "key_concepts": ["legacy-testing"],
+                        }
+                    ],
+                    "blocks": [],
+                }
+            },
+            "labs_by_page": {
+                "0": {
+                    "title": "Legacy Lab",
+                    "description": "Still create this lab",
+                    "language": "python",
+                    "starter_code": {"files": []},
+                    "test_code": {"files": []},
+                    "solution_code": {"files": []},
+                    "run_instructions": "pytest",
+                    "confidence": 0.8,
+                }
+            },
+        },
+        created_by=demo_user.id,
+    )
+    db_session.add(source)
+    await db_session.flush()
+
+    db_session.add(
+        ContentChunk(
+            source_id=source.id,
+            text="legacy chunk text",
+            metadata_={"page_index": 0, "page_title": "Legacy Page"},
+        )
+    )
+    db_session.add(
+        SourceTask(
+            source_id=source.id,
+            task_type="course_generation",
+            status="pending",
+            celery_task_id="course-task-legacy",
+        )
+    )
+    await db_session.flush()
+
+    class FakeAsyncContext:
+        def __init__(self, session):
+            self._session = session
+
+        async def __aenter__(self):
+            return self._session
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeSessionFactory:
+        def __init__(self, session):
+            self._session = session
+
+        def __call__(self):
+            return FakeAsyncContext(self._session)
+
+    class FakeEngine:
+        async def dispose(self):
+            return None
+
+    fake_provider = SimpleNamespace(
+        chat=AsyncMock(
+            return_value=SimpleNamespace(
+                content=[SimpleNamespace(type="text", text="Legacy course description.")]
+            )
+        )
+    )
+    fake_resources = SimpleNamespace(
+        settings=SimpleNamespace(),
+        engine=FakeEngine(),
+        session_factory=FakeSessionFactory(db_session),
+        model_router=SimpleNamespace(
+            get_provider=AsyncMock(return_value=fake_provider)
+        ),
+    )
+
+    monkeypatch.setattr(
+        course_generation,
+        "_create_worker_resources",
+        lambda: fake_resources,
+    )
+
+    class FakeTask:
+        def update_state(self, *_args, **_kwargs):
+            return None
+
+    result = await course_generation._generate_course_async(
+        FakeTask(),
+        str(source.id),
+        user_id=str(demo_user.id),
+    )
+
+    task_row = (
+        await db_session.execute(
+            select(SourceTask).where(
+                SourceTask.source_id == source.id,
+                SourceTask.task_type == "course_generation",
+            )
+        )
+    ).scalar_one()
+
+    from app.db.models.course import Section
+    from app.db.models.lab import Lab
+
+    course_id = UUID(task_row.metadata_["course_id"])
+    course_sections = (
+        await db_session.execute(
+            select(Section).where(Section.course_id == course_id)
+        )
+    ).scalars().all()
+    course_labs = (
+        await db_session.execute(
+            select(Lab)
+            .join(Section, Lab.section_id == Section.id)
+            .where(Section.course_id == course_id)
+        )
+    ).scalars().all()
+
+    assert result["status"] == "ready"
+    assert result["labs_created"] == 1
+    assert len(course_sections) == 1
+    assert len(course_labs) == 1
+    assert course_sections[0].content["lab_mode"] == "inline"

@@ -1,7 +1,7 @@
 /** Zustand stores for global state management. */
 
 import { create } from "zustand";
-import type { SourceResponse, CourseResponse, ConversationResponse } from "./api";
+import type { SourceResponse, CourseResponse, ConversationResponse, Citation } from "./api";
 
 // ─── Chat Store ───────────────────────────────────────
 
@@ -9,6 +9,7 @@ interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
+  citations?: Citation[];
 }
 
 interface ChatStore {
@@ -17,6 +18,7 @@ interface ChatStore {
   isStreaming: boolean;
   addMessage: (msg: ChatMessage) => void;
   appendToLast: (text: string) => void;
+  setCitationsOnLast: (citations: Citation[]) => void;
   setConversationId: (id: string) => void;
   setStreaming: (s: boolean) => void;
   clearChat: () => void;
@@ -36,6 +38,14 @@ export const useChatStore = create<ChatStore>((set) => ({
           ...msgs[msgs.length - 1],
           content: msgs[msgs.length - 1].content + text,
         };
+      }
+      return { messages: msgs };
+    }),
+  setCitationsOnLast: (citations) =>
+    set((state) => {
+      const msgs = [...state.messages];
+      if (msgs.length > 0) {
+        msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], citations };
       }
       return { messages: msgs };
     }),
@@ -80,7 +90,6 @@ export interface PendingTask {
   state: string; // PENDING, extracting, analyzing, generating_lessons, generating_labs, storing, embedding, SUCCESS, FAILURE
   error?: string;
   courseId?: string; // set when course generated
-  estimatedRemainingSeconds?: number;
 }
 
 interface TasksStore {

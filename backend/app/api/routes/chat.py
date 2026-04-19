@@ -12,6 +12,7 @@ from sse_starlette.sse import EventSourceResponse
 from app.api.deps import get_db, get_local_user, get_model_router
 from app.db.database import async_session_factory
 from app.db.models.conversation import Conversation
+from app.db.models.course import Section
 from app.db.models.message import Message
 from app.db.models.user import User
 from app.models.chat import (
@@ -106,12 +107,20 @@ async def chat(
                     tools=tools,
                 )
 
+                # If section_id is provided, load section title for agent context
+                section_context = ""
+                if request.section_id:
+                    section = await db.get(Section, request.section_id)
+                    if section:
+                        section_context = f"\n\nThe student is currently studying section: {section.title}"
+
                 # Stream response
                 full_response = ""
                 async for chunk in agent.process(
                     user_message=request.message,
                     conversation_history=conversation_history,
                     course_id=request.course_id,
+                    system_prompt_extra=section_context,
                 ):
                     if chunk.type == "text_delta" and chunk.text:
                         full_response += chunk.text
@@ -121,6 +130,12 @@ async def chat(
                     elif chunk.type == "tool_use_end":
                         yield {"event": "tool_end", "data": "{}"}
                     elif chunk.type == "message_end":
+                        # Emit citations before message_end if any were collected
+                        if agent._collected_citations:
+                            yield {
+                                "event": "citations",
+                                "data": json.dumps({"citations": agent._collected_citations}),
+                            }
                         yield {"event": "message_end", "data": json.dumps({"conversation_id": str(conversation.id)})}
 
                 # Save assistant message

@@ -45,9 +45,6 @@ class BilibiliExtractor(ContentExtractor):
                 If None, only publicly accessible subtitles work.
             whisper_mode: Whisper ASR mode ("api" or "local").
             whisper_model: Whisper model name for local mode.
-            whisper_api_key: API key for Whisper-compatible API.
-            whisper_api_base_url: Base URL for Whisper-compatible API.
-            whisper_api_model: Model name for Whisper-compatible API.
         """
         self.credential = credential
         self._whisper_mode = whisper_mode
@@ -196,12 +193,8 @@ class BilibiliExtractor(ContentExtractor):
         if is_multi_page:
             media_url = f"{media_url}?p={page_index + 1}"
 
-        try:
-            subtitle_info = await v.get_subtitle(cid=cid)
-            subtitles = subtitle_info.get("subtitles", [])
-        except Exception as e:
-            logger.warning(f"Failed to get subtitles for {bvid} page {page_index}: {e}")
-            subtitles = []
+        subtitle_info = await v.get_subtitle(cid=cid)
+        subtitles = subtitle_info.get("subtitles", [])
 
         if not subtitles:
             logger.info(

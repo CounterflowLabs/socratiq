@@ -106,7 +106,7 @@ class ContentAnalyzer:
 
         total_text = "\n\n---\n\n".join(c.raw_text for c in chunks)
 
-        if len(total_text) < 4000:
+        if len(total_text) < 8000:
             return await self._analyze_single(provider, title, chunks, source_type)
         else:
             return await self._analyze_batched(provider, title, chunks, source_type)
@@ -131,7 +131,7 @@ class ContentAnalyzer:
         self, provider: LLMProvider, title: str,
         chunks: list[RawContentChunk], source_type: str,
     ) -> AnalysisResult:
-        BATCH_CHAR_LIMIT = 3000
+        BATCH_CHAR_LIMIT = 6000
         batches: list[list[RawContentChunk]] = []
         current_batch: list[RawContentChunk] = []
         current_chars = 0

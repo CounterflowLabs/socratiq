@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Socratiq 开源版 MVP 产品计划</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #0a0a0a;
+    --surface: #141414;
+    --surface-2: #1e1e1e;
+    --border: #2a2a2a;
+    --text: #e8e8e8;
+    --text-secondary: #888;
+    --accent: #6366f1;
+    --accent-light: #818cf8;
+    --green: #22c55e;
+    --red: #ef4444;
+    --yellow: #eab308;
+    --blue: #3b82f6;
+  }
+
+  body {
+    font-family: 'Inter', 'Noto Sans SC', -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    overflow: hidden;
+  }
+
+  .slide {
+    display: none;
+    width: 100vw;
+    height: 100vh;
+    padding: 60px 80px;
+    position: relative;
+    flex-direction: column;
+    justify-content: center;
+  }
+
+  .slide.active { display: flex; }
+
+  .slide-number {
+    position: absolute;
+    bottom: 30px;
+    right: 40px;
+    font-size: 14px;
+    color: var(--text-secondary);
+    font-weight: 300;
+  }
+
+  h1 {
+    font-size: 56px;
+    font-weight: 700;
+    line-height: 1.2;
+    margin-bottom: 20px;
+    letter-spacing: -1px;
+  }
+
+  h2 {
+    font-size: 42px;
+    font-weight: 600;
+    margin-bottom: 40px;
+    letter-spacing: -0.5px;
+  }
+
+  h3 {
+    font-size: 24px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    color: var(--accent-light);
+  }
+
+  .subtitle {
+    font-size: 24px;
+    color: var(--text-secondary);
+    font-weight: 300;
+    line-height: 1.6;
+  }
+
+  .tag {
+    display: inline-block;
+    padding: 6px 16px;
+    border-radius: 20px;
+    font-size: 14px;
+    font-weight: 500;
+    margin-right: 8px;
+    margin-bottom: 8px;
+  }
+
+  .tag-accent { background: rgba(99,102,241,0.15); color: var(--accent-light); border: 1px solid rgba(99,102,241,0.3); }
+  .tag-green { background: rgba(34,197,94,0.15); color: var(--green); border: 1px solid rgba(34,197,94,0.3); }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 30px; }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 32px;
+  }
+
+  .card h3 { margin-bottom: 12px; }
+  .card p { color: var(--text-secondary); line-height: 1.7; font-size: 16px; }
+
+  ul {
+    list-style: none;
+    padding: 0;
+  }
+
+  ul li {
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 18px;
+    line-height: 1.6;
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+  }
+
+  ul li:last-child { border-bottom: none; }
+
+  .icon {
+    flex-shrink: 0;
+    width: 24px;
+    text-align: center;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 16px;
+  }
+
+  th {
+    text-align: left;
+    padding: 14px 16px;
+    border-bottom: 2px solid var(--border);
+    color: var(--text-secondary);
+    font-weight: 500;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  td {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+    line-height: 1.5;
+  }
+
+  .status-done { color: var(--green); }
+  .status-new { color: var(--yellow); }
+  .status-no { color: var(--red); }
+
+  .highlight-box {
+    background: linear-gradient(135deg, rgba(99,102,241,0.1), rgba(99,102,241,0.05));
+    border: 1px solid rgba(99,102,241,0.2);
+    border-radius: 16px;
+    padding: 32px;
+    margin: 20px 0;
+  }
+
+  .big-number {
+    font-size: 64px;
+    font-weight: 700;
+    color: var(--accent-light);
+    line-height: 1;
+  }
+
+  .layers {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    margin-top: 20px;
+  }
+
+  .layer {
+    padding: 20px 28px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+  }
+
+  .layer-num {
+    font-size: 32px;
+    font-weight: 700;
+    opacity: 0.5;
+    width: 40px;
+  }
+
+  .layer-1 { background: linear-gradient(90deg, rgba(99,102,241,0.2), transparent); }
+  .layer-2 { background: linear-gradient(90deg, rgba(59,130,246,0.2), transparent); }
+  .layer-3 { background: linear-gradient(90deg, rgba(34,197,94,0.15), transparent); }
+
+  .code-block {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 16px;
+    line-height: 1.8;
+    color: var(--text-secondary);
+    margin: 20px 0;
+  }
+
+  .code-block .cmd { color: var(--green); }
+  .code-block .comment { color: #555; }
+
+  .nav-hint {
+    position: fixed;
+    bottom: 30px;
+    left: 40px;
+    font-size: 13px;
+    color: #444;
+  }
+
+  .versus {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    justify-content: center;
+    margin: 30px 0;
+  }
+
+  .vs-box {
+    padding: 24px 32px;
+    border-radius: 12px;
+    text-align: center;
+    flex: 1;
+    max-width: 400px;
+  }
+
+  .vs-open { background: rgba(99,102,241,0.1); border: 1px solid rgba(99,102,241,0.3); }
+  .vs-saas { background: rgba(34,197,94,0.1); border: 1px solid rgba(34,197,94,0.3); }
+  .vs-divider { font-size: 28px; color: var(--text-secondary); font-weight: 300; }
+
+  .redline {
+    background: rgba(239,68,68,0.08);
+    border: 1px solid rgba(239,68,68,0.2);
+    border-radius: 12px;
+    padding: 24px 28px;
+    margin-top: 20px;
+  }
+
+  .redline h3 { color: var(--red); }
+
+  .scroll-table {
+    max-height: 60vh;
+    overflow-y: auto;
+  }
+</style>
+</head>
+<body>
+
+<!-- Slide 1: Title -->
+<div class="slide active" id="s1">
+  <div>
+    <div style="margin-bottom: 40px;">
+      <span class="tag tag-accent">开源版 MVP</span>
+      <span class="tag tag-green">AGPL-3.0</span>
+    </div>
+    <h1>Socratiq</h1>
+    <p class="subtitle" style="max-width: 700px;">
+      把任意 YouTube / Bilibili 视频<br>变成带 AI 导师的互动课程
+    </p>
+    <div style="margin-top: 60px; color: var(--text-secondary); font-size: 16px;">
+      产品计划 &middot; 2026.04.12
+    </div>
+  </div>
+  <div class="slide-number">1 / 10</div>
+</div>
+
+<!-- Slide 2: 三层卖点 -->
+<div class="slide" id="s2">
+  <h2>三层卖点</h2>
+  <div class="layers">
+    <div class="layer layer-1">
+      <div class="layer-num">01</div>
+      <div>
+        <h3 style="margin-bottom: 4px;">Hook — 让人停下来看</h3>
+        <p style="font-size: 20px;">把任意 YouTube / Bilibili 视频变成带 AI 导师的互动课程</p>
+      </div>
+    </div>
+    <div class="layer layer-2">
+      <div class="layer-num">02</div>
+      <div>
+        <h3 style="margin-bottom: 4px;">价值 — 让人觉得值得试</h3>
+        <p style="font-size: 20px;">自托管、支持 Ollama / Claude / GPT / DeepSeek，你的数据你做主</p>
+      </div>
+    </div>
+    <div class="layer layer-3">
+      <div class="layer-num">03</div>
+      <div>
+        <h3 style="margin-bottom: 4px;">深度 — 让人觉得有技术含量</h3>
+        <p style="font-size: 20px;">5 层记忆系统 + 苏格拉底教学法 + 自适应学习路径</p>
+      </div>
+    </div>
+  </div>
+  <div class="slide-number">2 / 10</div>
+</div>
+
+<!-- Slide 3: 目标与成功标准 -->
+<div class="slide" id="s3">
+  <h2>目标与成功标准</h2>
+  <div class="grid-2">
+    <div>
+      <h3>目标用户</h3>
+      <p style="font-size: 18px; color: var(--text-secondary); line-height: 1.8;">
+        技术领域的开发者和自学者<br>
+        会用 Docker，愿意自己配 API key 或跑 Ollama
+      </p>
+      <div style="margin-top: 40px;">
+        <h3>开源目标</h3>
+        <ul>
+          <li><span class="icon">1</span>GitHub star 和社区影响力</li>
+          <li><span class="icon">2</span>建立技术口碑 → SaaS 版用户基础</li>
+          <li><span class="icon">3</span>吸引贡献者</li>
+        </ul>
+      </div>
+    </div>
+    <div>
+      <h3>成功标准</h3>
+      <div class="card" style="margin-bottom: 20px;">
+        <div class="big-number">500+</div>
+        <p style="margin-top: 8px;">首月 GitHub Stars</p>
+      </div>
+      <div class="card" style="margin-bottom: 20px;">
+        <div class="big-number" style="font-size: 48px;">5 min</div>
+        <p style="margin-top: 8px;">Clone → 跑通的时间上限</p>
+      </div>
+      <div class="card">
+        <div class="big-number" style="font-size: 48px;">5+</div>
+        <p style="margin-top: 8px;">外部 Contributor PRs</p>
+      </div>
+    </div>
+  </div>
+  <div class="slide-number">3 / 10</div>
+</div>
+
+<!-- Slide 4: 开源版 vs SaaS -->
+<div class="slide" id="s4">
+  <h2>开源版 vs SaaS 版</h2>
+  <table>
+    <tr><th style="width:20%"></th><th style="width:40%">开源版（本期）</th><th style="width:40%">SaaS 版（后续）</th></tr>
+    <tr><td>部署</td><td>自托管 docker compose</td><td>托管服务</td></tr>
+    <tr><td>用户</td><td>单用户</td><td>多用户 + 认证</td></tr>
+    <tr><td>LLM</td><td>自配 Ollama / API key</td><td>平台提供，按量计费</td></tr>
+    <tr><td>内容源</td><td>YouTube + Bilibili</td><td>+ PDF / URL / Markdown</td></tr>
+    <tr><td>游戏化</td><td>—</td><td>Streaks / 成就 / 积分</td></tr>
+    <tr><td>代码沙箱</td><td>下载 ZIP</td><td>在线执行</td></tr>
+    <tr><td>付费</td><td>免费 (AGPL-3.0)</td><td>Freemium</td></tr>
+  </table>
+  <div class="slide-number">4 / 10</div>
+</div>
+
+<!-- Slide 5: P0 功能 -->
+<div class="slide" id="s5">
+  <h2>P0 — 核心功能</h2>
+  <p class="subtitle" style="margin-bottom: 30px;">没有就不是这个产品</p>
+  <div class="grid-3">
+    <div class="card">
+      <h3>&#x1F3AC; 视频导入</h3>
+      <p>YouTube + Bilibili URL 粘贴即可，自动提取字幕和内容</p>
+    </div>
+    <div class="card">
+      <h3>&#x1F4DA; AI 课程生成</h3>
+      <p>LLM 分析内容，自动生成结构化学习路径</p>
+    </div>
+    <div class="card">
+      <h3>&#x1F9D1;&#x200D;&#x1F3EB; Mentor 对话</h3>
+      <p>SSE 流式 AI 导师，苏格拉底教学法引导思考</p>
+    </div>
+    <div class="card">
+      <h3>&#x270D;&#xFE0F; 练习与评估</h3>
+      <p>自动生成练习题，提交后 AI 评估反馈</p>
+    </div>
+    <div class="card">
+      <h3>&#x1F9E0; 5 层记忆</h3>
+      <p>工作 → Profile → 情景 → 内容 → 元认知，越用越懂你</p>
+    </div>
+    <div class="card">
+      <h3>&#x1F504; 间隔复习</h3>
+      <p>SM-2 算法科学安排复习，长期记忆留存</p>
+    </div>
+  </div>
+  <div style="margin-top: 30px; text-align: center;">
+    <span class="tag tag-green" style="font-size: 16px; padding: 8px 20px;">
+      支持 Ollama / Claude / GPT / DeepSeek 多后端
+    </span>
+  </div>
+  <div class="slide-number">5 / 10</div>
+</div>
+
+<!-- Slide 6: P1 功能 -->
+<div class="slide" id="s6">
+  <h2>P1 — 价值提升</h2>
+  <p class="subtitle" style="margin-bottom: 30px;">显著提升产品价值</p>
+  <div class="grid-2">
+    <div class="highlight-box">
+      <h3>&#x1F4CE; 引用卡片</h3>
+      <p style="font-size: 18px; line-height: 1.8; color: var(--text-secondary);">
+        Mentor 回复附带来源引用 — 视频时间戳、原文段落。<br><br>
+        <strong style="color: var(--text);">唯一需要从零开发的功能。</strong><br><br>
+        用户看到答案有据可查 → 信任感 → 愿意继续用。
+      </p>
+    </div>
+    <div>
+      <div class="card" style="margin-bottom: 20px;">
+        <h3>&#x1F3AF; 冷启动诊断</h3>
+        <p>5-10 道自适应题目，快速建立学生画像。已实现。</p>
+      </div>
+      <div class="card" style="margin-bottom: 20px;">
+        <h3>&#x1F578;&#xFE0F; 知识图谱</h3>
+        <p>D3 可视化概念关系网络。Wow factor，README 截图利器。已实现。</p>
+      </div>
+      <div class="card">
+        <h3>&#x25B6;&#xFE0F; 视频联动</h3>
+        <p>课程内嵌视频播放，时间戳点击跳转。已实现。</p>
+      </div>
+    </div>
+  </div>
+  <div class="slide-number">6 / 10</div>
+</div>
+
+<!-- Slide 7: 现状 -->
+<div class="slide" id="s7">
+  <h2>当前进度</h2>
+  <div class="grid-2">
+    <div>
+      <h3 style="color: var(--green);">已完成 ~80%</h3>
+      <table style="font-size: 15px;">
+        <tr><td class="status-done">&#x2705;</td><td>YouTube + Bilibili 提取器</td></tr>
+        <tr><td class="status-done">&#x2705;</td><td>AI 课程生成</td></tr>
+        <tr><td class="status-done">&#x2705;</td><td>结构化课程学习页面</td></tr>
+        <tr><td class="status-done">&#x2705;</td><td>Mentor SSE 流式对话</td></tr>
+        <tr><td class="status-done">&#x2705;</td><td>苏格拉底 Agent</td></tr>
+        <tr><td class="status-done">&#x2705;</td><td>练习生成与评估</td></tr>
+        <tr><td class="status-done">&#x2705;</td><td>5 层记忆系统</td></tr>
+        <tr><td class="status-done">&#x2705;</td><td>间隔复习 (SM-2)</td></tr>
+        <tr><td class="status-done">&#x2705;</td><td>多 LLM 后端路由</td></tr>
+        <tr><td class="status-done">&#x2705;</td><td>冷启动诊断</td></tr>
+        <tr><td class="status-done">&#x2705;</td><td>知识图谱 (D3)</td></tr>
+        <tr><td class="status-done">&#x2705;</td><td>20 个数据库模型</td></tr>
+        <tr><td class="status-done">&#x2705;</td><td>13 个 API 路由</td></tr>
+        <tr><td class="status-done">&#x2705;</td><td>10 个前端页面</td></tr>
+      </table>
+    </div>
+    <div>
+      <h3 style="color: var(--yellow);">待完成</h3>
+      <div class="card" style="margin-bottom: 16px; border-color: rgba(234,179,8,0.3);">
+        <h3 style="color: var(--yellow);">新开发</h3>
+        <p>引用卡片（后端 + 前端）</p>
+      </div>
+      <div class="card" style="margin-bottom: 16px;">
+        <h3>验证 & 打磨</h3>
+        <p>苏格拉底 prompt 效果验证<br>记忆系统对话质量验证<br>Ollama 零配置体验<br>YouTube/Bilibili 嵌入稳定性</p>
+      </div>
+      <div class="card">
+        <h3>开源准备</h3>
+        <p>Docker Compose 优化<br>.env.example 简化<br>README + 文档体系<br>LICENSE (AGPL-3.0)<br>CONTRIBUTING.md</p>
+      </div>
+    </div>
+  </div>
+  <div class="slide-number">7 / 10</div>
+</div>
+
+<!-- Slide 8: DX -->
+<div class="slide" id="s8">
+  <h2>开发者体验</h2>
+  <p class="subtitle" style="margin-bottom: 30px;">开源产品的 DX 就是产品本身</p>
+  <div class="grid-2">
+    <div>
+      <h3>一键启动</h3>
+      <div class="code-block">
+        <span class="cmd">git clone</span> github.com/xxx/socratiq<br>
+        <span class="cmd">cd</span> socratiq<br>
+        <span class="cmd">cp</span> .env.example .env <span class="comment"># 配一个 LLM 就行</span><br>
+        <span class="cmd">docker compose up</span><br>
+        <span class="comment"># 打开 localhost:3000 开始用</span>
+      </div>
+      <div style="margin-top: 20px;">
+        <h3>最小配置</h3>
+        <ul>
+          <li><span class="icon">&#x2192;</span>DB / Redis / JWT 全部内置默认值</li>
+          <li><span class="icon">&#x2192;</span>用户只需选：Ollama 或填一个 API key</li>
+          <li><span class="icon">&#x2192;</span>Setup 页面引导完成配置</li>
+        </ul>
+      </div>
+    </div>
+    <div>
+      <h3>README 结构</h3>
+      <ul>
+        <li><span class="icon">1</span>Hero — 一句话 + 产品截图/GIF</li>
+        <li><span class="icon">2</span>Features — 核心功能列表</li>
+        <li><span class="icon">3</span>Quick Start — 5 行命令</li>
+        <li><span class="icon">4</span>Screenshots — 关键页面截图</li>
+        <li><span class="icon">5</span>Architecture — 架构图</li>
+        <li><span class="icon">6</span>LLM Providers — 支持列表</li>
+        <li><span class="icon">7</span>Roadmap — 公开路线图</li>
+        <li><span class="icon">8</span>Contributing — 贡献引导</li>
+        <li><span class="icon">9</span>License — AGPL-3.0</li>
+      </ul>
+    </div>
+  </div>
+  <div class="slide-number">8 / 10</div>
+</div>
+
+<!-- Slide 9: 测试 -->
+<div class="slide" id="s9">
+  <h2>测试与质量保障</h2>
+  <div class="grid-2">
+    <div>
+      <h3>核心闭环测试</h3>
+      <table style="font-size: 14px;">
+        <tr><th>场景</th><th>验证点</th></tr>
+        <tr><td>YouTube 导入</td><td>URL → 字幕 → 分析 → 课程</td></tr>
+        <tr><td>Bilibili 导入</td><td>同上 + B 站差异</td></tr>
+        <tr><td>无字幕视频</td><td>优雅降级，明确报错</td></tr>
+        <tr><td>课程学习</td><td>列表 → section → 内容 + 视频</td></tr>
+        <tr><td>Mentor 对话</td><td>SSE 流式 + 基于内容回答</td></tr>
+        <tr><td>苏格拉底模式</td><td>引导提问，非直接回答</td></tr>
+        <tr><td>练习</td><td>生成 → 提交 → 评估</td></tr>
+        <tr><td>间隔复习</td><td>复习项 → 复习 → 更新间隔</td></tr>
+        <tr><td>记忆系统</td><td>多轮对话引用上下文</td></tr>
+      </table>
+      <div style="margin-top: 20px;">
+        <h3>LLM 兼容性</h3>
+        <table style="font-size: 14px;">
+          <tr><td>Ollama</td><td>零配置跑通</td></tr>
+          <tr><td>OpenAI</td><td>GPT-4o 全流程</td></tr>
+          <tr><td>Anthropic</td><td>Claude Sonnet 全流程</td></tr>
+          <tr><td>DeepSeek</td><td>全流程 + 中文质量</td></tr>
+        </table>
+      </div>
+    </div>
+    <div>
+      <h3>自动化测试</h3>
+      <div class="card" style="margin-bottom: 16px;">
+        <h3>后端</h3>
+        <p>pytest 单元测试 + API 集成测试</p>
+      </div>
+      <div class="card" style="margin-bottom: 16px;">
+        <h3>前端</h3>
+        <p>冒烟测试：关键页面可渲染、不白屏</p>
+      </div>
+      <div class="card" style="margin-bottom: 16px;">
+        <h3>E2E</h3>
+        <p>导入 → 学习 → 对话 → 练习 完整路径</p>
+      </div>
+      <div class="card" style="margin-bottom: 16px;">
+        <h3>Docker</h3>
+        <p>全新环境启动 / Ollama 最小配置 / 数据持久化</p>
+      </div>
+      <div class="redline">
+        <h3>质量红线</h3>
+        <ul style="font-size: 15px;">
+          <li><span class="icon">&#x1F6D1;</span>docker compose up 零报错</li>
+          <li><span class="icon">&#x1F6D1;</span>核心闭环手动走通</li>
+          <li><span class="icon">&#x1F6D1;</span>2+ LLM 后端验证通过</li>
+          <li><span class="icon">&#x1F6D1;</span>无安全漏洞暴露</li>
+          <li><span class="icon">&#x1F6D1;</span>README 按步骤能跑通</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <div class="slide-number">9 / 10</div>
+</div>
+
+<!-- Slide 10: Summary -->
+<div class="slide" id="s10">
+  <h2>总结</h2>
+  <div class="grid-2" style="align-items: start;">
+    <div>
+      <div class="highlight-box" style="margin-bottom: 30px;">
+        <h3 style="font-size: 20px;">核心策略</h3>
+        <ul>
+          <li><span class="icon">&#x2192;</span>开源先行，SaaS 后续</li>
+          <li><span class="icon">&#x2192;</span>代码 80% 已完成，重心在打磨和 DX</li>
+          <li><span class="icon">&#x2192;</span>唯一新功能：引用卡片</li>
+          <li><span class="icon">&#x2192;</span>AGPL-3.0 保护商业利益</li>
+        </ul>
+      </div>
+      <div class="versus">
+        <div class="vs-box vs-open">
+          <div style="font-size: 14px; color: var(--accent-light); margin-bottom: 8px;">本期</div>
+          <div style="font-size: 20px; font-weight: 600;">开源版</div>
+          <div style="font-size: 14px; color: var(--text-secondary); margin-top: 4px;">自托管 · 单用户 · 免费</div>
+        </div>
+        <div class="vs-divider">→</div>
+        <div class="vs-box vs-saas">
+          <div style="font-size: 14px; color: var(--green); margin-bottom: 8px;">后续</div>
+          <div style="font-size: 20px; font-weight: 600;">SaaS 版</div>
+          <div style="font-size: 14px; color: var(--text-secondary); margin-top: 4px;">托管 · 多用户 · Freemium</div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <h3>下一步</h3>
+      <ul>
+        <li><span class="icon" style="color: var(--accent-light);">1</span>制定实施计划（Implementation Plan）</li>
+        <li><span class="icon" style="color: var(--accent-light);">2</span>开发引用卡片</li>
+        <li><span class="icon" style="color: var(--accent-light);">3</span>Docker Compose + DX 优化</li>
+        <li><span class="icon" style="color: var(--accent-light);">4</span>测试与验证</li>
+        <li><span class="icon" style="color: var(--accent-light);">5</span>README + 文档 + 截图</li>
+        <li><span class="icon" style="color: var(--accent-light);">6</span>开源发布</li>
+      </ul>
+    </div>
+  </div>
+  <div class="slide-number">10 / 10</div>
+</div>
+
+<div class="nav-hint">← → 方向键翻页</div>
+
+<script>
+  let current = 0;
+  const slides = document.querySelectorAll('.slide');
+
+  function show(n) {
+    slides[current].classList.remove('active');
+    current = (n + slides.length) % slides.length;
+    slides[current].classList.add('active');
+  }
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'ArrowRight' || e.key === ' ') show(current + 1);
+    if (e.key === 'ArrowLeft') show(current - 1);
+  });
+
+  // Touch support
+  let touchX = 0;
+  document.addEventListener('touchstart', e => touchX = e.touches[0].clientX);
+  document.addEventListener('touchend', e => {
+    const dx = e.changedTouches[0].clientX - touchX;
+    if (dx < -50) show(current + 1);
+    if (dx > 50) show(current - 1);
+  });
+</script>
+</body>
+</html>

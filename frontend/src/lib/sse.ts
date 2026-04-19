@@ -19,14 +19,25 @@ export async function* streamSSE(
   body: Record<string, unknown>,
   signal?: AbortSignal
 ): AsyncGenerator<SSEEvent> {
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    signal,
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`无法连接后端 SSE 接口：${url}\n原始错误：${reason}`);
+  }
 
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) {
+    const bodyText = await res.text();
+    throw new Error(
+      `SSE 请求失败：${res.status} ${res.statusText}\nURL：${res.url}\n详情：${bodyText || "响应体为空"}`
+    );
+  }
   if (!res.body) throw new Error("No response body");
 
   const stream = res.body

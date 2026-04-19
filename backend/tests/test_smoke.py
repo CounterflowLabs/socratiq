@@ -241,7 +241,7 @@ class TestCourses:
             assert res.status_code == 200
             detail = res.json()
             assert len(detail["sections"]) >= 1
-            assert str(source.id) in detail["source_ids"]
+            assert any(s["id"] == str(source.id) for s in detail["sources"])
         finally:
             del the_app.dependency_overrides[get_model_router]
 

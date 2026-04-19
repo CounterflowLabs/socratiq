@@ -11,6 +11,7 @@ class ChatRequest(BaseModel):
     message: str
     conversation_id: uuid.UUID | None = None
     course_id: uuid.UUID | None = None
+    section_id: uuid.UUID | None = None
 
 
 class ConversationResponse(BaseModel):

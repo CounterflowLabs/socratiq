@@ -11,7 +11,6 @@ class CourseGenerateRequest(BaseModel):
     """Request body for generating a course from sources."""
     source_ids: list[uuid.UUID] = Field(..., min_length=1)
     title: str | None = None
-    goal: str | None = None
 
 
 class CourseResponse(BaseModel):
@@ -19,11 +18,16 @@ class CourseResponse(BaseModel):
     id: uuid.UUID
     title: str
     description: str | None = None
-    goal: str | None = None
     created_at: datetime
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class SourceSummary(BaseModel):
+    id: uuid.UUID
+    url: str | None = None
+    type: str
 
 
 class SectionResponse(BaseModel):
@@ -33,6 +37,7 @@ class SectionResponse(BaseModel):
     order_index: int | None = None
     source_start: str | None = None
     source_end: str | None = None
+    source_id: uuid.UUID | None = None
     content: dict[str, Any] = Field(default_factory=dict)
     difficulty: int = 1
 
@@ -44,8 +49,7 @@ class CourseDetailResponse(BaseModel):
     id: uuid.UUID
     title: str
     description: str | None = None
-    goal: str | None = None
-    source_ids: list[uuid.UUID] = Field(default_factory=list)
+    sources: list[SourceSummary] = Field(default_factory=list)
     sections: list[SectionResponse] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime

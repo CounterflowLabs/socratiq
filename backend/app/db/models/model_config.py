@@ -16,31 +16,27 @@ class ModelConfig(BaseMixin, Base):
     name: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
     provider_type: Mapped[str] = mapped_column(String, nullable=False)
     model_id: Mapped[str] = mapped_column(String, nullable=False)
+    model_type: Mapped[str] = mapped_column(String(20), server_default=text("'chat'"))
     api_key_encrypted: Mapped[str | None] = mapped_column(String, nullable=True)
     base_url: Mapped[str | None] = mapped_column(String, nullable=True)
     supports_tool_use: Mapped[bool] = mapped_column(server_default=text("true"))
     supports_streaming: Mapped[bool] = mapped_column(server_default=text("true"))
     max_tokens_limit: Mapped[int] = mapped_column(server_default=text("4096"))
     is_active: Mapped[bool] = mapped_column(server_default=text("true"))
-    model_type: Mapped[str] = mapped_column(String(20), server_default=text("'chat'"), nullable=False)
     user_id: Mapped[uuid_module.UUID | None] = mapped_column(
         ForeignKey("users.id"), nullable=True, index=True
     )
 
 
-class ModelTierConfig(BaseMixin, Base):
-    """Maps model tiers (primary/light/strong/embedding) to configured models."""
+class ModelRouteConfig(BaseMixin, Base):
+    """Maps task types to their configured model."""
 
     __tablename__ = "model_route_configs"
 
-    tier: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    task_type: Mapped[str] = mapped_column("tier", String, unique=True, nullable=False)
     model_name: Mapped[str] = mapped_column(
         String, ForeignKey("model_configs.name"), nullable=False
     )
     user_id: Mapped[uuid_module.UUID | None] = mapped_column(
         ForeignKey("users.id"), nullable=True, index=True
     )
-
-
-# Backwards compat alias
-ModelRouteConfig = ModelTierConfig

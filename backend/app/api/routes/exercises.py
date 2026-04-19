@@ -42,6 +42,7 @@ class SubmitAnswerResponse(BaseModel):
     score: float | None
     feedback: str | None
     correct: bool | None
+    explanation: str | None = None
 
 
 class ExerciseListResponse(BaseModel):
@@ -125,6 +126,24 @@ async def submit_answer(
     if score is not None:
         correct = float(score) >= 80.0
 
+    await db.commit()
+
+    # Auto-update section progress with best exercise score
+    if submission.score is not None:
+        from app.db.models import SectionProgress
+        progress = (await db.execute(
+            select(SectionProgress).where(
+                SectionProgress.user_id == user.id,
+                SectionProgress.section_id == exercise.section_id,
+            )
+        )).scalar_one_or_none()
+        if not progress:
+            progress = SectionProgress(user_id=user.id, section_id=exercise.section_id)
+            db.add(progress)
+        if progress.exercise_best_score is None or submission.score > progress.exercise_best_score:
+            progress.exercise_best_score = submission.score
+        await db.commit()
+
     return SubmitAnswerResponse(
         submission_id=submission.id,
         exercise_id=exercise_id,
@@ -132,6 +151,7 @@ async def submit_answer(
         score=score,
         feedback=feedback,
         correct=correct,
+        explanation=exercise.explanation,
     )
 
 

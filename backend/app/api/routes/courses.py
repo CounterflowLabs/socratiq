@@ -9,12 +9,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_local_user, get_model_router
 from app.db.models.course import Course, CourseSource, Section
+from app.db.models.source import Source
 from app.models.course import (
     CourseGenerateRequest,
     CourseResponse,
     CourseDetailResponse,
     CourseListResponse,
     SectionResponse,
+    SourceSummary,
 )
 from app.services.course_generator import CourseGenerator
 from app.services.llm.router import ModelRouter
@@ -111,16 +113,18 @@ async def get_course(
     )
     sections = result.scalars().all()
 
-    cs_result = await db.execute(
-        select(CourseSource.source_id).where(CourseSource.course_id == course_id)
-    )
-    source_ids = [row[0] for row in cs_result.all()]
+    source_rows = (await db.execute(
+        select(Source.id, Source.url, Source.type)
+        .join(CourseSource, CourseSource.source_id == Source.id)
+        .where(CourseSource.course_id == course.id)
+    )).all()
+    sources = [SourceSummary(id=r.id, url=r.url, type=r.type) for r in source_rows]
 
     return CourseDetailResponse(
         id=course.id,
         title=course.title,
         description=course.description,
-        source_ids=source_ids,
+        sources=sources,
         sections=[
             SectionResponse(
                 id=s.id,
@@ -128,6 +132,7 @@ async def get_course(
                 order_index=s.order_index,
                 source_start=s.source_start,
                 source_end=s.source_end,
+                source_id=s.source_id,
                 content=s.content,
                 difficulty=s.difficulty,
             )

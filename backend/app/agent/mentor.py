@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 import uuid
 from collections.abc import AsyncIterator
 
@@ -50,6 +51,7 @@ class MentorAgent:
         user_message: str,
         conversation_history: list[UnifiedMessage],
         course_id: uuid.UUID | None = None,
+        system_prompt_extra: str = "",
     ) -> AsyncIterator[StreamChunk]:
         """Process a user message and yield streaming response chunks.
 
@@ -61,6 +63,8 @@ class MentorAgent:
         Yields:
             StreamChunk objects for SSE streaming to the frontend.
         """
+        self._collected_citations: list[dict] = []
+
         # Load student profile for system prompt
         profile = await load_profile(self._db, self._user_id)
 
@@ -70,6 +74,8 @@ class MentorAgent:
             course_id=course_id,
             tools=list(self._tools.values()),
         )
+        if system_prompt_extra:
+            system_prompt += system_prompt_extra
 
         # Build messages
         messages = [
@@ -155,6 +161,7 @@ class MentorAgent:
             # Execute each tool and add results
             for tc in tool_calls:
                 tool_result = await self._execute_tool(tc["name"], tc["input"])
+                tool_result = self._extract_citations(tool_result)
                 messages.append(UnifiedMessage(
                     role="tool_result",
                     content=[ContentBlock(
@@ -168,6 +175,22 @@ class MentorAgent:
         if full_assistant_text:
             import asyncio
             asyncio.create_task(self._maybe_update_profile(full_assistant_text, user_message))
+
+    _CITATION_RE = re.compile(r"<!-- CITATIONS:(.*?)-->", re.DOTALL)
+
+    def _extract_citations(self, tool_result: str) -> str:
+        """Extract citation markers from a tool result and collect them.
+
+        Returns the tool result with citation markers stripped.
+        """
+        for match in self._CITATION_RE.finditer(tool_result):
+            try:
+                citations = json.loads(match.group(1))
+                if isinstance(citations, list):
+                    self._collected_citations.extend(citations)
+            except (json.JSONDecodeError, TypeError):
+                logger.warning("Failed to parse citation JSON from tool result")
+        return self._CITATION_RE.sub("", tool_result)
 
     async def _execute_tool(self, tool_name: str, params: dict) -> str:
         """Execute a tool and return its result string."""

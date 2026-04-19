@@ -3,7 +3,7 @@
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models.model_config import ModelConfig, ModelTierConfig
+from app.db.models.model_config import ModelConfig, ModelRouteConfig
 from app.services.llm.encryption import encrypt_api_key, decrypt_api_key, mask_api_key
 
 
@@ -28,6 +28,7 @@ class ModelConfigManager:
         name: str,
         provider_type: str,
         model_id: str,
+        model_type: str = "chat",
         api_key: str | None = None,
         base_url: str | None = None,
         supports_tool_use: bool = True,
@@ -42,6 +43,7 @@ class ModelConfigManager:
             name=name,
             provider_type=provider_type,
             model_id=model_id,
+            model_type=model_type,
             api_key_encrypted=encrypted_key,
             base_url=base_url,
             supports_tool_use=supports_tool_use,
@@ -96,33 +98,25 @@ class ModelConfigManager:
             return None
         return mask_api_key(key)
 
-    # Tier config management
-    async def get_tier_configs(self, db: AsyncSession) -> list[ModelTierConfig]:
-        result = await db.execute(select(ModelTierConfig))
+    # Route config management
+    async def get_route_configs(self, db: AsyncSession) -> list[ModelRouteConfig]:
+        result = await db.execute(select(ModelRouteConfig))
         return list(result.scalars().all())
 
-    async def update_tier_config(
+    async def update_route_config(
         self,
         db: AsyncSession,
-        tier: str,
+        task_type: str,
         model_name: str,
-    ) -> ModelTierConfig:
+    ) -> ModelRouteConfig:
         result = await db.execute(
-            select(ModelTierConfig).where(ModelTierConfig.tier == tier)
+            select(ModelRouteConfig).where(ModelRouteConfig.task_type == task_type)
         )
-        existing = result.scalar_one_or_none()
-        if existing:
-            existing.model_name = model_name
+        route = result.scalar_one_or_none()
+        if route:
+            route.model_name = model_name
         else:
-            existing = ModelTierConfig(tier=tier, model_name=model_name)
-            db.add(existing)
+            route = ModelRouteConfig(task_type=task_type, model_name=model_name)
+            db.add(route)
         await db.flush()
-        return existing
-
-    # Backwards compat aliases
-    get_route_configs = get_tier_configs
-
-    async def update_route_config(
-        self, db: AsyncSession, task_type: str, model_name: str
-    ) -> ModelTierConfig:
-        return await self.update_tier_config(db, task_type, model_name)
+        return route

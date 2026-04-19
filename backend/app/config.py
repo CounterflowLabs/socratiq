@@ -22,11 +22,11 @@ class Settings(BaseSettings):
     upload_dir: str = "uploads"
 
     # Whisper ASR (fallback when no subtitles available)
-    whisper_mode: str = "api"        # "api" = Whisper-compatible API, "local" = local whisper model
+    whisper_mode: str = "local"      # "api" = OpenAI Whisper API, "local" = local whisper model
     whisper_model: str = "base"      # local model size: tiny/base/small/medium/large
-    whisper_api_key: str = ""        # API key (Groq / OpenAI / SiliconFlow etc.)
-    whisper_api_base_url: str = "https://api.groq.com/openai/v1"  # Groq by default
-    whisper_api_model: str = "whisper-large-v3"  # Groq's Whisper model
+    whisper_api_key: str = ""
+    whisper_api_base_url: str = "https://api.groq.com/openai/v1"
+    whisper_api_model: str = "whisper-large-v3"
 
     # Auth
     jwt_secret_key: str = "change-me-in-production"

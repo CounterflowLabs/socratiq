@@ -1,9 +1,58 @@
 /** API client for Socratiq backend. */
 
-const API_BASE =
-  typeof window !== "undefined"
-    ? `http://${window.location.hostname}:8000/api/v1`
-    : "http://localhost:8000/api/v1";
+const API_BASE = "/api/v1";
+const nativeFetch = globalThis.fetch.bind(globalThis);
+
+function formatFetchError(url: string, error: unknown): Error {
+  const reason = error instanceof Error ? error.message : String(error);
+  return new Error(
+    [
+      `无法连接后端 API：${url}`,
+      `原始错误：${reason}`,
+      "请确认 Docker 中 backend 容器正在运行，并检查 /health 是否正常。",
+    ].join("\n")
+  );
+}
+
+async function apiFetch(
+  input: RequestInfo | URL,
+  init?: RequestInit
+): Promise<Response> {
+  const url = typeof input === "string" ? input : input.toString();
+  try {
+    return await nativeFetch(input, init);
+  } catch (error) {
+    throw formatFetchError(url, error);
+  }
+}
+
+async function responseError(res: Response): Promise<Error> {
+  const body = await res.text();
+  let detail = body.trim();
+
+  if (detail) {
+    try {
+      const parsed = JSON.parse(detail);
+      if (typeof parsed.detail === "string") {
+        detail = parsed.detail;
+      } else if (parsed.detail) {
+        detail = JSON.stringify(parsed.detail);
+      } else {
+        detail = JSON.stringify(parsed);
+      }
+    } catch {
+      // Keep the plain response body.
+    }
+  }
+
+  return new Error(
+    [
+      `API 请求失败：${res.status} ${res.statusText}`,
+      `URL：${res.url || "unknown"}`,
+      `详情：${detail || "响应体为空"}`,
+    ].join("\n")
+  );
+}
 
 // ─── Source APIs ───────────────────────────────────────
 
@@ -19,64 +68,37 @@ export interface SourceResponse {
   updated_at: string;
 }
 
-export class DuplicateSourceError extends Error {
-  existingSource: SourceResponse | null;
-  constructor(message: string, existingSource: SourceResponse | null) {
-    super(message);
-    this.name = "DuplicateSourceError";
-    this.existingSource = existingSource;
-  }
-}
-
 export async function createSourceFromURL(
   url: string,
   sourceType?: string,
-  title?: string,
-  goal?: string,
+  title?: string
 ): Promise<SourceResponse> {
   const form = new FormData();
   form.append("url", url);
   if (sourceType) form.append("source_type", sourceType);
   if (title) form.append("title", title);
-  if (goal) form.append("goal", goal);
 
-  const res = await fetch(`${API_BASE}/sources`, {
+  const res = await apiFetch(`${API_BASE}/sources`, {
     method: "POST",
     body: form,
   });
-  if (res.status === 409) {
-    const body = await res.json();
-    throw new DuplicateSourceError(
-      body.detail?.message || "该资源已导入或正在处理中",
-      body.detail?.existing_source ?? null,
-    );
-  }
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await responseError(res);
   return res.json();
 }
 
 export async function createSourceFromFile(
   file: File,
-  title?: string,
-  goal?: string,
+  title?: string
 ): Promise<SourceResponse> {
   const form = new FormData();
   form.append("file", file);
   if (title) form.append("title", title);
-  if (goal) form.append("goal", goal);
 
-  const res = await fetch(`${API_BASE}/sources`, {
+  const res = await apiFetch(`${API_BASE}/sources`, {
     method: "POST",
     body: form,
   });
-  if (res.status === 409) {
-    const body = await res.json();
-    throw new DuplicateSourceError(
-      body.detail?.message || "该资源已导入或正在处理中",
-      body.detail?.existing_source ?? null,
-    );
-  }
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await responseError(res);
   return res.json();
 }
 
@@ -84,32 +106,14 @@ export async function listSources(): Promise<{
   items: SourceResponse[];
   total: number;
 }> {
-  const res = await fetch(`${API_BASE}/sources`);
-  if (!res.ok) throw new Error(await res.text());
+  const res = await apiFetch(`${API_BASE}/sources`);
+  if (!res.ok) throw await responseError(res);
   return res.json();
 }
 
 export async function getSource(id: string): Promise<SourceResponse> {
-  const res = await fetch(`${API_BASE}/sources/${id}`);
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
-}
-
-export async function cancelSource(sourceId: string): Promise<SourceResponse> {
-  const res = await fetch(`${API_BASE}/sources/${sourceId}/cancel`, { method: "POST" });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
-}
-
-export async function retrySource(sourceId: string): Promise<SourceResponse> {
-  const res = await fetch(`${API_BASE}/sources/${sourceId}/retry`, { method: "POST" });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
-}
-
-export async function listActiveSources(): Promise<SourceResponse[]> {
-  const res = await fetch(`${API_BASE}/sources/active`);
-  if (!res.ok) throw new Error(await res.text());
+  const res = await apiFetch(`${API_BASE}/sources/${id}`);
+  if (!res.ok) throw await responseError(res);
   return res.json();
 }
 
@@ -119,10 +123,17 @@ export interface SectionResponse {
   id: string;
   title: string;
   order_index?: number;
+  source_id?: string;
   source_start?: string;
   source_end?: string;
   content: Record<string, unknown>;
   difficulty: number;
+}
+
+export interface SourceSummary {
+  id: string;
+  url: string | null;
+  type: string;
 }
 
 export interface CourseResponse {
@@ -134,7 +145,7 @@ export interface CourseResponse {
 }
 
 export interface CourseDetailResponse extends CourseResponse {
-  source_ids: string[];
+  sources: SourceSummary[];
   sections: SectionResponse[];
 }
 
@@ -142,12 +153,12 @@ export async function generateCourse(
   sourceIds: string[],
   title?: string
 ): Promise<CourseResponse> {
-  const res = await fetch(`${API_BASE}/courses/generate`, {
+  const res = await apiFetch(`${API_BASE}/courses/generate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ source_ids: sourceIds, title }),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await responseError(res);
   return res.json();
 }
 
@@ -155,43 +166,60 @@ export async function listCourses(): Promise<{
   items: CourseResponse[];
   total: number;
 }> {
-  const res = await fetch(`${API_BASE}/courses`);
-  if (!res.ok) throw new Error(await res.text());
+  const res = await apiFetch(`${API_BASE}/courses`);
+  if (!res.ok) throw await responseError(res);
   return res.json();
 }
 
 export async function getCourse(id: string): Promise<CourseDetailResponse> {
-  const res = await fetch(`${API_BASE}/courses/${id}`);
-  if (!res.ok) throw new Error(await res.text());
+  const res = await apiFetch(`${API_BASE}/courses/${id}`);
+  if (!res.ok) throw await responseError(res);
   return res.json();
 }
 
 // ─── Chat APIs (SSE) ──────────────────────────────────
 
+export interface Citation {
+  chunk_id: string;
+  source_id: string | null;
+  source_title: string | null;
+  source_type: string | null;
+  source_url: string | null;
+  text: string;
+  start_time: number | null;
+  end_time: number | null;
+  page_start: number | null;
+}
+
 export interface ChatStreamEvent {
-  event: "text_delta" | "tool_start" | "tool_end" | "message_end" | "error";
+  event: "text_delta" | "tool_start" | "tool_end" | "message_end" | "citations" | "error";
   text?: string;
   conversation_id?: string;
   message?: string;
   tool?: string;
+  citations?: Citation[];
 }
 
-export async function* streamChat(
-  message: string,
-  conversationId?: string,
-  courseId?: string,
-  signal?: AbortSignal
-): AsyncGenerator<ChatStreamEvent> {
+interface StreamChatOptions {
+  message: string;
+  conversationId?: string;
+  courseId?: string;
+  sectionId?: string;
+  signal?: AbortSignal;
+}
+
+export async function* streamChat(opts: StreamChatOptions): AsyncGenerator<ChatStreamEvent> {
   const { streamSSE } = await import("./sse");
 
   for await (const evt of streamSSE(
     `${API_BASE}/chat`,
     {
-      message,
-      conversation_id: conversationId,
-      course_id: courseId,
+      message: opts.message,
+      conversation_id: opts.conversationId,
+      course_id: opts.courseId,
+      section_id: opts.sectionId,
     },
-    signal
+    opts.signal
   )) {
     try {
       const data = JSON.parse(evt.data);
@@ -223,18 +251,18 @@ export async function listConversations(): Promise<{
   items: ConversationResponse[];
   total: number;
 }> {
-  const res = await fetch(`${API_BASE}/conversations`);
-  if (!res.ok) throw new Error(await res.text());
+  const res = await apiFetch(`${API_BASE}/conversations`);
+  if (!res.ok) throw await responseError(res);
   return res.json();
 }
 
 export async function getConversationMessages(
   conversationId: string
 ): Promise<MessageResponse[]> {
-  const res = await fetch(
+  const res = await apiFetch(
     `${API_BASE}/conversations/${conversationId}/messages`
   );
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await responseError(res);
   return res.json();
 }
 
@@ -244,63 +272,83 @@ export interface ModelConfigResponse {
   name: string;
   provider_type: string;
   model_id: string;
+  model_type: string;
   api_key_masked?: string;
   base_url?: string;
-  model_type: string;
   supports_tool_use: boolean;
   supports_streaming: boolean;
   max_tokens_limit: number;
   is_active: boolean;
 }
 
-export type ModelTier = "primary" | "light" | "strong" | "embedding";
-
-export interface ModelTierResponse {
-  tier: ModelTier;
+export interface ModelRouteResponse {
+  task_type: string;
   model_name: string;
 }
 
-// Backwards compat alias
-export type ModelRouteResponse = ModelTierResponse;
+export interface WhisperConfigResponse {
+  mode: string;
+  api_base_url?: string;
+  api_model?: string;
+  api_key_masked?: string | null;
+  local_model?: string;
+}
 
 export async function getModels(): Promise<ModelConfigResponse[]> {
-  const res = await fetch(`${API_BASE}/models`);
-  if (!res.ok) throw new Error(await res.text());
+  const res = await apiFetch(`${API_BASE}/models`);
+  if (!res.ok) throw await responseError(res);
   return res.json();
 }
 
-export async function getModelTiers(): Promise<ModelTierResponse[]> {
-  const res = await fetch(`${API_BASE}/model-tiers`);
-  if (!res.ok) throw new Error(await res.text());
+export async function getModelRoutes(): Promise<ModelRouteResponse[]> {
+  const res = await apiFetch(`${API_BASE}/model-routes`);
+  if (!res.ok) throw await responseError(res);
   return res.json();
 }
 
-export async function updateModelTiers(
-  tiers: { tier: ModelTier; model_name: string }[],
-): Promise<ModelTierResponse[]> {
-  const res = await fetch(`${API_BASE}/model-tiers`, {
+export async function updateModelRoutes(
+  routes: Array<{ task_type: string; model_name: string }>
+): Promise<ModelRouteResponse[]> {
+  const res = await apiFetch(`${API_BASE}/model-routes`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(tiers),
+    body: JSON.stringify(routes),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await responseError(res);
   return res.json();
 }
 
-// Backwards compat alias
-export const getModelRoutes = getModelTiers;
+export async function getWhisperConfig(): Promise<WhisperConfigResponse> {
+  const res = await apiFetch(`${API_BASE}/setup/whisper`);
+  if (!res.ok) throw await responseError(res);
+  return res.json();
+}
+
+export async function updateWhisperConfig(data: {
+  mode?: string;
+  api_base_url?: string;
+  api_model?: string;
+  api_key?: string;
+  local_model?: string;
+}): Promise<WhisperConfigResponse> {
+  const res = await apiFetch(`${API_BASE}/setup/whisper`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw await responseError(res);
+  return res.json();
+}
 
 export async function getTaskStatus(taskId: string): Promise<{
   task_id: string;
   state: string;
-  result?: { course_id?: string; [key: string]: unknown };
+  result?: unknown;
   error?: string;
   progress?: unknown;
-  stage?: string;
-  estimated_remaining_seconds?: number;
 }> {
-  const res = await fetch(`${API_BASE}/tasks/${taskId}/status`);
-  if (!res.ok) throw new Error(await res.text());
+  const res = await apiFetch(`${API_BASE}/tasks/${taskId}/status`);
+  if (!res.ok) throw await responseError(res);
   return res.json();
 }
 
@@ -308,24 +356,24 @@ export async function createModel(data: {
   name: string;
   provider_type: string;
   model_id: string;
+  model_type?: string;
   api_key?: string;
   base_url?: string;
-  model_type?: string;
 }): Promise<ModelConfigResponse> {
-  const res = await fetch(`${API_BASE}/models`, {
+  const res = await apiFetch(`${API_BASE}/models`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await responseError(res);
   return res.json();
 }
 
 export async function deleteModel(name: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/models/${name}`, {
+  const res = await apiFetch(`${API_BASE}/models/${name}`, {
     method: "DELETE",
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await responseError(res);
 }
 
 export async function testModel(name: string): Promise<{
@@ -333,10 +381,10 @@ export async function testModel(name: string): Promise<{
   message: string;
   model?: string;
 }> {
-  const res = await fetch(`${API_BASE}/models/${name}/test`, {
+  const res = await apiFetch(`${API_BASE}/models/${name}/test`, {
     method: "POST",
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await responseError(res);
   return res.json();
 }
 
@@ -361,10 +409,10 @@ export async function generateDiagnostic(courseId: string): Promise<{
   questions: DiagnosticQuestion[];
   concept_map: Record<string, string>;
 }> {
-  const res = await fetch(`${API_BASE}/courses/${courseId}/diagnostic/generate`, {
+  const res = await apiFetch(`${API_BASE}/courses/${courseId}/diagnostic/generate`, {
     method: "POST",
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await responseError(res);
   return res.json();
 }
 
@@ -373,12 +421,12 @@ export async function submitDiagnostic(
   questions: { id: string; correct_index: number; concept_name: string }[],
   answers: { question_id: string; selected_answer: number; time_spent_seconds: number }[],
 ): Promise<DiagnosticResult> {
-  const res = await fetch(`${API_BASE}/courses/${courseId}/diagnostic/submit`, {
+  const res = await apiFetch(`${API_BASE}/courses/${courseId}/diagnostic/submit`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ questions, answers }),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await responseError(res);
   return res.json();
 }
 
@@ -395,49 +443,59 @@ export interface ExerciseResponse {
 export interface SubmissionResult {
   submission_id: string;
   score: number | null;
-  feedback: string;
-  explanation: string;
+  feedback: string | null;
+  explanation: string | null;
 }
 
 export async function getSectionExercises(sectionId: string): Promise<{ exercises: ExerciseResponse[] }> {
-  const res = await fetch(`${API_BASE}/exercises/section/${sectionId}`);
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  const res = await apiFetch(`${API_BASE}/exercises/section/${sectionId}`);
+  if (!res.ok) throw new Error("Failed to fetch exercises");
+  const data = await res.json();
+  return { exercises: data.items ?? [] };
 }
 
 export async function submitExercise(exerciseId: string, answer: string): Promise<SubmissionResult> {
-  const res = await fetch(`${API_BASE}/exercises/${exerciseId}/submit`, {
+  const res = await apiFetch(`${API_BASE}/exercises/${exerciseId}/submit`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ answer }),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await responseError(res);
   return res.json();
 }
 
 // ─── Review APIs ────────────────────────────────────
-export async function getDueReviews(): Promise<{
-  items: { id: string; concept_id: string; easiness: number; interval_days: number; repetitions: number; review_at: string }[];
-  count: number;
-}> {
-  const res = await fetch(`${API_BASE}/reviews/due`);
-  if (!res.ok) throw new Error(await res.text());
+export interface ReviewItemDetail {
+  id: string;
+  concept_name: string;
+  concept_description: string;
+  review_question: string | null;
+  review_answer: string | null;
+  easiness: number;
+  interval_days: number;
+  repetitions: number;
+  review_at: string;
+}
+
+export async function getDueReviews(): Promise<{ items: ReviewItemDetail[]; total: number }> {
+  const res = await apiFetch(`${API_BASE}/reviews/due`);
+  if (!res.ok) throw new Error("Failed to fetch reviews");
   return res.json();
 }
 
 export async function completeReview(reviewId: string, quality: number): Promise<unknown> {
-  const res = await fetch(`${API_BASE}/reviews/${reviewId}/complete`, {
+  const res = await apiFetch(`${API_BASE}/reviews/${reviewId}/complete`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ quality }),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await responseError(res);
   return res.json();
 }
 
 export async function getReviewStats(): Promise<{ due_today: number; completed_today: number }> {
-  const res = await fetch(`${API_BASE}/reviews/stats`);
-  if (!res.ok) throw new Error(await res.text());
+  const res = await apiFetch(`${API_BASE}/reviews/stats`);
+  if (!res.ok) throw await responseError(res);
   return res.json();
 }
 
@@ -449,8 +507,8 @@ export async function estimateTranslation(sectionId: string, target: string = "z
   estimated_tokens: number;
   estimated_cost_usd: number;
 }> {
-  const res = await fetch(`${API_BASE}/sections/${sectionId}/translate/estimate?target=${target}`);
-  if (!res.ok) throw new Error(await res.text());
+  const res = await apiFetch(`${API_BASE}/sections/${sectionId}/translate/estimate?target=${target}`);
+  if (!res.ok) throw await responseError(res);
   return res.json();
 }
 
@@ -458,10 +516,10 @@ export async function translateSection(sectionId: string, target: string = "zh")
   translations: { chunk_id: string; translated_text: string | null }[];
   total: number;
 }> {
-  const res = await fetch(`${API_BASE}/sections/${sectionId}/translate?target=${target}`, {
+  const res = await apiFetch(`${API_BASE}/sections/${sectionId}/translate?target=${target}`, {
     method: "POST",
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await responseError(res);
   return res.json();
 }
 
@@ -471,9 +529,87 @@ export async function getSetupStatus(): Promise<{
   has_models: boolean;
   ollama_available: boolean;
   ollama_models: string[];
+  ollama_base_url?: string;
+  codex_available: boolean;
+  codex_logged_in: boolean;
+  codex_auth_mode?: string | null;
+  codex_status_message?: string;
+  codex_models: Array<{
+    id: string;
+    display_name: string;
+    description?: string;
+  }>;
+  codex_error?: string | null;
 }> {
-  const res = await fetch(`${API_BASE}/setup/status`);
-  if (!res.ok) throw new Error(await res.text());
+  const res = await apiFetch(`${API_BASE}/setup/status`);
+  if (!res.ok) throw await responseError(res);
+  return res.json();
+}
+
+export async function getBilibiliStatus(): Promise<{
+  logged_in: boolean;
+  dedeuserid?: string;
+}> {
+  const res = await apiFetch(`${API_BASE}/setup/bilibili/status`);
+  if (!res.ok) throw await responseError(res);
+  return res.json();
+}
+
+export async function generateBilibiliQrcode(): Promise<{
+  status: string;
+  qrcode_base64: string;
+}> {
+  const res = await apiFetch(`${API_BASE}/setup/bilibili/qrcode`, {
+    method: "POST",
+  });
+  if (!res.ok) throw await responseError(res);
+  return res.json();
+}
+
+export async function checkBilibiliQrcode(): Promise<{
+  status: string;
+  dedeuserid?: string;
+}> {
+  const res = await apiFetch(`${API_BASE}/setup/bilibili/qrcode/status`);
+  if (!res.ok) throw await responseError(res);
+  return res.json();
+}
+
+export async function logoutBilibili(): Promise<{
+  status: string;
+}> {
+  const res = await apiFetch(`${API_BASE}/setup/bilibili`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw await responseError(res);
+  return res.json();
+}
+
+export async function startCodexLogin(): Promise<{
+  session_id?: string | null;
+  status: string;
+  verification_url?: string | null;
+  user_code?: string | null;
+  message?: string | null;
+  logged_in: boolean;
+}> {
+  const res = await apiFetch(`${API_BASE}/setup/codex/login/start`, {
+    method: "POST",
+  });
+  if (!res.ok) throw await responseError(res);
+  return res.json();
+}
+
+export async function getCodexLoginSession(sessionId: string): Promise<{
+  session_id?: string | null;
+  status: string;
+  verification_url?: string | null;
+  user_code?: string | null;
+  message?: string | null;
+  logged_in: boolean;
+}> {
+  const res = await apiFetch(`${API_BASE}/setup/codex/login/${sessionId}`);
+  if (!res.ok) throw await responseError(res);
   return res.json();
 }
 
@@ -492,7 +628,7 @@ export interface LabResponse {
 }
 
 export async function getSectionLab(sectionId: string): Promise<LabResponse | null> {
-  const res = await fetch(`${API_BASE}/labs/section/${sectionId}`);
+  const res = await apiFetch(`${API_BASE}/labs/section/${sectionId}`);
   if (!res.ok) return null;
   const data = await res.json();
   return data || null;
@@ -517,64 +653,25 @@ export async function getKnowledgeGraph(courseId: string, maxDepth: number = 2):
   nodes: KnowledgeGraphNode[];
   edges: KnowledgeGraphEdge[];
 }> {
-  const res = await fetch(`${API_BASE}/courses/${courseId}/knowledge-graph?max_depth=${maxDepth}`);
-  if (!res.ok) throw new Error(await res.text());
+  const res = await apiFetch(`${API_BASE}/courses/${courseId}/knowledge-graph?max_depth=${maxDepth}`);
+  if (!res.ok) throw await responseError(res);
   return res.json();
 }
 
-// ─── Whisper ASR Config ──────────────────────────────
+// ─── Progress APIs ───────────────────────────────────
 
-export interface WhisperConfigResponse {
-  mode: string;
-  api_base_url?: string;
-  api_model?: string;
-  api_key_masked?: string;
-  local_model?: string;
-}
-
-export async function getWhisperConfig(): Promise<WhisperConfigResponse> {
-  const res = await fetch(`${API_BASE}/settings/whisper`);
-  if (!res.ok) throw new Error(await res.text());
+export async function getCourseProgress(courseId: string): Promise<
+  Array<{ section_id: string; lesson_read: boolean; lab_completed: boolean; exercise_best_score: number | null; status: string }>
+> {
+  const res = await apiFetch(`${API_BASE}/courses/${courseId}/progress`);
+  if (!res.ok) throw new Error("Failed to fetch progress");
   return res.json();
 }
 
-export async function updateWhisperConfig(data: {
-  mode?: string;
-  api_base_url?: string;
-  api_model?: string;
-  api_key?: string;
-  local_model?: string;
-}): Promise<WhisperConfigResponse> {
-  const res = await fetch(`${API_BASE}/settings/whisper`, {
-    method: "PUT",
+export async function recordProgress(sectionId: string, event: "lesson_read" | "lab_completed"): Promise<void> {
+  await apiFetch(`${API_BASE}/sections/${sectionId}/progress`, {
+    method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
+    body: JSON.stringify({ event }),
   });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
-}
-
-// ─── Bilibili Auth ───────────────────────────────────
-
-export async function getBilibiliStatus(): Promise<{ logged_in: boolean; dedeuserid?: string }> {
-  const res = await fetch(`${API_BASE}/settings/bilibili/status`);
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
-}
-
-export async function generateBilibiliQrcode(): Promise<{ qrcode_base64: string; status: string }> {
-  const res = await fetch(`${API_BASE}/settings/bilibili/qrcode`, { method: "POST" });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
-}
-
-export async function checkBilibiliQrcode(): Promise<{ status: string; dedeuserid?: string }> {
-  const res = await fetch(`${API_BASE}/settings/bilibili/qrcode/status`);
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
-}
-
-export async function logoutBilibili(): Promise<void> {
-  const res = await fetch(`${API_BASE}/settings/bilibili`, { method: "DELETE" });
-  if (!res.ok) throw new Error(await res.text());
 }

@@ -11,7 +11,6 @@ import openai
 
 from app.services.llm.base import (
     ContentBlock,
-    EmbeddingProvider,
     LLMAuthError,
     LLMError,
     LLMProvider,
@@ -45,9 +44,10 @@ class OpenAICompatProvider(LLMProvider):
         supports_tools: bool = True,
         supports_stream: bool = True,
         max_tokens_limit: int = 4096,
-        timeout: float = 300.0,
+        timeout: float = 60.0,
     ) -> None:
         self._model = model
+        self._base_url = base_url
         self._supports_tools = supports_tools
         self._supports_stream = supports_stream
         self._max_tokens_limit = max_tokens_limit
@@ -139,37 +139,20 @@ class OpenAICompatProvider(LLMProvider):
         if tools and self._supports_tools:
             params["tools"] = tools_to_openai(tools)
 
-        import logging
-        _logger = logging.getLogger(__name__)
-        input_chars = sum(len(m.get("content", "")) if isinstance(m.get("content"), str) else 0 for m in api_messages)
-        _logger.info(f"LLM request: model={self._model} messages={len(api_messages)} input_chars={input_chars} max_tokens={params.get('max_tokens')} base_url={self._client.base_url}")
-        for i, m in enumerate(api_messages):
-            role = m.get("role", "?")
-            content = m.get("content", "")
-            if isinstance(content, str):
-                preview = content[:200].replace("\n", "\\n")
-            else:
-                preview = str(content)[:200]
-            _logger.debug(f"  msg[{i}] role={role} len={len(content) if isinstance(content, str) else '?'}: {preview}...")
-
         try:
-            import time as _time
-            _t0 = _time.monotonic()
             response = await self._client.chat.completions.create(**params)
-            _elapsed = _time.monotonic() - _t0
-            _out_text = response.choices[0].message.content or ""
-            _logger.info(f"LLM response: model={response.model} elapsed={_elapsed:.1f}s output_chars={len(_out_text)} tokens_in={response.usage.prompt_tokens if response.usage else '?'} tokens_out={response.usage.completion_tokens if response.usage else '?'}")
         except openai.RateLimitError as e:
-            _logger.error(f"LLM rate limit: {e}")
             raise LLMRateLimitError(str(e)) from e
         except openai.AuthenticationError as e:
-            _logger.error(f"LLM auth error: {e}")
             raise LLMAuthError(str(e)) from e
         except openai.APITimeoutError as e:
-            _logger.error(f"LLM timeout after input_chars={input_chars}: {e}")
             raise LLMTimeoutError(str(e)) from e
+        except openai.APIConnectionError as e:
+            endpoint = self._base_url or "default OpenAI endpoint"
+            raise LLMProviderError(
+                f"Cannot connect to OpenAI-compatible endpoint {endpoint}: {e}"
+            ) from e
         except openai.APIError as e:
-            _logger.error(f"LLM API error: {e}")
             raise LLMProviderError(str(e)) from e
 
         choice = response.choices[0]
@@ -289,6 +272,11 @@ class OpenAICompatProvider(LLMProvider):
             raise LLMAuthError(str(e)) from e
         except openai.APITimeoutError as e:
             raise LLMTimeoutError(str(e)) from e
+        except openai.APIConnectionError as e:
+            endpoint = self._base_url or "default OpenAI endpoint"
+            raise LLMProviderError(
+                f"Cannot connect to OpenAI-compatible endpoint {endpoint}: {e}"
+            ) from e
         except openai.APIError as e:
             raise LLMProviderError(str(e)) from e
 
@@ -306,56 +294,8 @@ class OpenAICompatProvider(LLMProvider):
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         """Compute embeddings using the OpenAI embeddings API."""
-        import logging, time as _time
-        _logger = logging.getLogger(__name__)
-        total_chars = sum(len(t) for t in texts)
-        _logger.info(f"Embed request: model={self._model} texts={len(texts)} total_chars={total_chars}")
-        _t0 = _time.monotonic()
         response = await self._client.embeddings.create(
             model=self._model,
             input=texts,
         )
-        _elapsed = _time.monotonic() - _t0
-        _logger.info(f"Embed response: model={self._model} elapsed={_elapsed:.1f}s dims={len(response.data[0].embedding) if response.data else '?'}")
-        return [item.embedding for item in response.data]
-
-
-class OpenAICompatEmbeddingProvider(EmbeddingProvider):
-    """OpenAI-compatible embedding-only provider.
-
-    Inherits from EmbeddingProvider: chat methods raise LLMError,
-    test_connectivity uses embed.
-    """
-
-    def __init__(
-        self,
-        model: str,
-        api_key: str | None = None,
-        base_url: str | None = None,
-        timeout: float = 300.0,
-    ) -> None:
-        self._model = model
-        self._client = openai.AsyncOpenAI(
-            api_key=api_key or "not-needed",
-            base_url=base_url,
-            timeout=timeout,
-            max_retries=3,
-        )
-
-    def model_id(self) -> str:
-        return self._model
-
-    async def embed(self, texts: list[str]) -> list[list[float]]:
-        """Compute embeddings using the OpenAI embeddings API."""
-        import logging, time as _time
-        _logger = logging.getLogger(__name__)
-        total_chars = sum(len(t) for t in texts)
-        _logger.info(f"Embed request: model={self._model} texts={len(texts)} total_chars={total_chars}")
-        _t0 = _time.monotonic()
-        response = await self._client.embeddings.create(
-            model=self._model,
-            input=texts,
-        )
-        _elapsed = _time.monotonic() - _t0
-        _logger.info(f"Embed response: model={self._model} elapsed={_elapsed:.1f}s dims={len(response.data[0].embedding) if response.data else '?'}")
         return [item.embedding for item in response.data]

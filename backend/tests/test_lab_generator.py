@@ -61,19 +61,6 @@ class TestLabGenerator:
         assert result is None  # confidence < 0.3
 
     @pytest.mark.asyncio
-    async def test_overview_goal_skips_lab(self):
-        mock_provider = AsyncMock()
-        gen = LabGenerator(mock_provider)
-        result = await gen.generate(
-            code_snippets=[CodeSnippet(language="python", code="x=1", context="test")],
-            lesson_context="intro",
-            language="python",
-            goal="overview",
-        )
-        assert result is None
-        mock_provider.chat.assert_not_called()
-
-    @pytest.mark.asyncio
     async def test_llm_failure_returns_none(self):
         mock_provider = AsyncMock()
         mock_provider.chat.side_effect = Exception("LLM down")

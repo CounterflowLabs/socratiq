@@ -1,5 +1,6 @@
 """RAG knowledge retrieval tool for the MentorAgent."""
 
+import json
 import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -65,6 +66,7 @@ class KnowledgeSearchTool(AgentTool):
 
         # Format results for the LLM
         formatted = []
+        citations = []
         for i, r in enumerate(results, 1):
             source_info = ""
             meta = r.get("metadata", {})
@@ -74,4 +76,18 @@ class KnowledgeSearchTool(AgentTool):
                 source_info = f" [PDF page: {meta['page_start']}]"
             formatted.append(f"[{i}]{source_info}\n{r['text']}")
 
-        return "\n\n---\n\n".join(formatted)
+            citation = {
+                "chunk_id": r.get("chunk_id"),
+                "source_id": r.get("source_id"),
+                "source_title": r.get("source_title"),
+                "source_type": r.get("source_type"),
+                "source_url": r.get("source_url"),
+                "text": r["text"][:200],
+                "start_time": meta.get("start_time"),
+                "end_time": meta.get("end_time"),
+                "page_start": meta.get("page_start"),
+            }
+            citations.append(citation)
+
+        text_output = "\n\n---\n\n".join(formatted)
+        return f"{text_output}\n\n<!-- CITATIONS:{json.dumps(citations, ensure_ascii=False)}-->"

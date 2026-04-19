@@ -13,16 +13,16 @@ from app.services.llm.router import ModelRouter, TaskType
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_FALLBACK_EMBEDDING_DIM = 768
+
 
 class EmbeddingService:
     """Compute and store vector embeddings for content chunks and concepts."""
 
-    BATCH_SIZE = 5  # Max texts per embedding API call (conservative for local models)
+    BATCH_SIZE = 50  # Max texts per embedding API call
 
     def __init__(self, model_router: ModelRouter):
         self._router = model_router
-
-    MAX_CHARS_PER_TEXT = 2000  # Conservative limit: ~2000 chars ≈ 4000-6000 tokens for CJK text
 
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
         """Compute embeddings for a list of texts.
@@ -31,9 +31,6 @@ class EmbeddingService:
         """
         if not texts:
             return []
-
-        # Truncate long texts to avoid exceeding embedding model context
-        texts = [t[:self.MAX_CHARS_PER_TEXT] for t in texts]
 
         provider = await self._router.get_provider(TaskType.EMBEDDING)
 
@@ -57,7 +54,7 @@ class EmbeddingService:
                 "Configure an OpenAI-compatible embedding model.",
                 type(provider).__name__,
             )
-            return [[0.0] * 1536 for _ in texts]
+            return [[0.0] * DEFAULT_FALLBACK_EMBEDDING_DIM for _ in texts]
 
     async def embed_and_store_chunks(
         self, db: AsyncSession, chunk_ids: list[UUID], texts: list[str],

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db, get_local_user
 from app.config import get_settings
 from app.db.models.model_config import ModelConfig
+from app.db.models.model_config import ModelRouteConfig
 from app.db.models.user import User
 from app.models.model_schemas import (
     ModelConfigCreate,
@@ -16,7 +17,9 @@ from app.models.model_schemas import (
     ModelConfigUpdate,
     ModelTestResponse,
 )
+from app.services.llm.base_url import normalize_container_localhost_url
 from app.services.llm.config import ModelConfigManager
+from app.services.llm.codex_auth import get_codex_login_status
 
 router = APIRouter(prefix="/api/v1/models", tags=["models"])
 
@@ -28,31 +31,27 @@ def _get_config_manager() -> ModelConfigManager:
 @router.get("", response_model=list[ModelConfigResponse])
 async def list_models(
     user: Annotated[User, Depends(get_local_user)],
-    model_type: str | None = None,
     db: AsyncSession = Depends(get_db),
     manager: ModelConfigManager = Depends(_get_config_manager),
 ):
-    query = (
+    result = await db.execute(
         select(ModelConfig)
         .where(or_(ModelConfig.user_id == user.id, ModelConfig.user_id.is_(None)))
+        .order_by(ModelConfig.name)
     )
-    if model_type is not None:
-        query = query.where(ModelConfig.model_type == model_type)
-    query = query.order_by(ModelConfig.name)
-    result = await db.execute(query)
     models = list(result.scalars().all())
     return [
         ModelConfigResponse(
             name=m.name,
             provider_type=m.provider_type,
             model_id=m.model_id,
+            model_type=m.model_type,
             api_key_masked=manager.get_masked_api_key(m),
             base_url=m.base_url,
             supports_tool_use=m.supports_tool_use,
             supports_streaming=m.supports_streaming,
             max_tokens_limit=m.max_tokens_limit,
             is_active=m.is_active,
-            model_type=m.model_type,
         )
         for m in models
     ]
@@ -65,6 +64,19 @@ async def create_model(
     db: AsyncSession = Depends(get_db),
     manager: ModelConfigManager = Depends(_get_config_manager),
 ):
+    if data.provider_type == "codex":
+        if data.model_type != "chat":
+            raise HTTPException(
+                status_code=400,
+                detail="Codex provider 只能用于聊天 / 推理模型，不能作为 embedding 模型。",
+            )
+        codex_status = await get_codex_login_status()
+        if not codex_status["logged_in"]:
+            raise HTTPException(
+                status_code=400,
+                detail="Codex CLI 尚未登录。请先在 /setup 使用 ChatGPT 登录。",
+            )
+
     existing = await manager.get_model_by_name(db, data.name)
     if existing:
         raise HTTPException(status_code=409, detail=f"Model '{data.name}' already exists")
@@ -74,39 +86,46 @@ async def create_model(
         name=data.name,
         provider_type=data.provider_type,
         model_id=data.model_id,
-        api_key=data.api_key,
-        base_url=data.base_url,
-        supports_tool_use=data.supports_tool_use,
-        supports_streaming=data.supports_streaming,
+        model_type=data.model_type,
+        api_key=None if data.provider_type == "codex" else data.api_key,
+        base_url=(
+            None
+            if data.provider_type == "codex"
+            else normalize_container_localhost_url(data.base_url)
+        ),
+        supports_tool_use=(
+            False if data.provider_type == "codex" else data.supports_tool_use
+        ),
+        supports_streaming=(
+            False if data.provider_type == "codex" else data.supports_streaming
+        ),
         max_tokens_limit=data.max_tokens_limit,
     )
     model.user_id = user.id
-    model.model_type = data.model_type
     await db.flush()
 
-    # Auto-assign to tiers that don't have a model yet (type-aware)
-    existing_tiers = await manager.get_tier_configs(db)
-    assigned_tiers = {c.tier for c in existing_tiers}
-
-    if data.model_type == "embedding":
-        if "embedding" not in assigned_tiers:
-            await manager.update_tier_config(db, "embedding", model.name)
-    else:
-        for tier in ["primary", "light", "strong"]:
-            if tier not in assigned_tiers:
-                await manager.update_tier_config(db, tier, model.name)
+    existing_routes = await manager.get_route_configs(db)
+    if not existing_routes and model.model_type == "chat":
+        for task_type in ("mentor_chat", "content_analysis", "evaluation"):
+            await manager.update_route_config(db, task_type, model.name)
+    elif model.model_type == "embedding":
+        existing_embedding_route = await db.execute(
+            select(ModelRouteConfig).where(ModelRouteConfig.task_type == "embedding")
+        )
+        if not existing_embedding_route.scalar_one_or_none():
+            await manager.update_route_config(db, "embedding", model.name)
 
     return ModelConfigResponse(
         name=model.name,
         provider_type=model.provider_type,
         model_id=model.model_id,
+        model_type=model.model_type,
         api_key_masked=manager.get_masked_api_key(model),
         base_url=model.base_url,
         supports_tool_use=model.supports_tool_use,
         supports_streaming=model.supports_streaming,
         max_tokens_limit=model.max_tokens_limit,
         is_active=model.is_active,
-        model_type=model.model_type,
     )
 
 
@@ -130,6 +149,10 @@ async def update_model(
         raise HTTPException(status_code=404, detail=f"Model '{name}' not found")
 
     update_data = data.model_dump(exclude_unset=True)
+    if "base_url" in update_data:
+        update_data["base_url"] = normalize_container_localhost_url(
+            update_data["base_url"]
+        )
     model = await manager.update_model(db, name, **update_data)
     if not model:
         raise HTTPException(status_code=404, detail=f"Model '{name}' not found")
@@ -138,13 +161,13 @@ async def update_model(
         name=model.name,
         provider_type=model.provider_type,
         model_id=model.model_id,
+        model_type=model.model_type,
         api_key_masked=manager.get_masked_api_key(model),
         base_url=model.base_url,
         supports_tool_use=model.supports_tool_use,
         supports_streaming=model.supports_streaming,
         max_tokens_limit=model.max_tokens_limit,
         is_active=model.is_active,
-        model_type=model.model_type,
     )
 
 
@@ -179,6 +202,7 @@ async def test_model(
 ):
     """Test model connectivity by sending a simple prompt."""
     from app.services.llm.anthropic import AnthropicProvider
+    from app.services.llm.codex_provider import CodexProvider
     from app.services.llm.openai_compat import OpenAICompatProvider
     from app.services.llm.base import UnifiedMessage, LLMError
 
@@ -196,29 +220,43 @@ async def test_model(
     api_key = manager.get_decrypted_api_key(model)
 
     try:
-        from app.services.llm.openai_compat import OpenAICompatEmbeddingProvider
-
         if model.model_type == "embedding":
-            provider = OpenAICompatEmbeddingProvider(
+            if model.provider_type == "codex":
+                return ModelTestResponse(
+                    success=False,
+                    message="Codex provider 不支持 embedding。",
+                )
+            provider = OpenAICompatProvider(
                 model=model.model_id,
                 api_key=api_key,
-                base_url=model.base_url,
+                base_url=normalize_container_localhost_url(model.base_url),
             )
-        elif model.provider_type == "anthropic":
+            embeddings = await provider.embed(["hello"])
+            dimensions = len(embeddings[0]) if embeddings else 0
+            return ModelTestResponse(
+                success=True,
+                message=f"Embedding connection successful ({dimensions} dimensions)",
+                model=model.model_id,
+            )
+        if model.provider_type == "anthropic":
             provider = AnthropicProvider(model=model.model_id, api_key=api_key or "")
+        elif model.provider_type == "codex":
+            provider = CodexProvider(model=model.model_id)
         else:
             provider = OpenAICompatProvider(
                 model=model.model_id,
                 api_key=api_key,
-                base_url=model.base_url,
+                base_url=normalize_container_localhost_url(model.base_url),
             )
 
-        result = await provider.test_connectivity()
+        response = await provider.chat(
+            [UnifiedMessage(role="user", content="Say 'hello' in one word.")],
+            max_tokens=10,
+        )
         return ModelTestResponse(
-            success=result["success"],
-            message=result["message"],
-            model=result.get("model"),
-            output=result.get("output"),
+            success=True,
+            message="Connection successful",
+            model=response.model,
         )
     except LLMError as e:
         return ModelTestResponse(success=False, message=str(e))

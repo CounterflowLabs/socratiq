@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Plus, Play, FileText, Loader, AlertCircle, CheckCircle, RefreshCw, X } from "lucide-react";
+import { Plus, Play, FileText, Loader, AlertCircle, CheckCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { listSources, cancelSource, retrySource, type SourceResponse } from "@/lib/api";
+import { listSources, type SourceResponse } from "@/lib/api";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; bgColor: string }> = {
   pending: { label: "排队中", color: "text-blue-700", bgColor: "bg-blue-50" },
@@ -105,52 +105,38 @@ export default function SourcesPage() {
           </Card>
         ) : (
           <div className="space-y-3">
-            {sources.map((source) => (
-              <Card key={source.id} className="p-4">
-                <div className="flex items-center gap-4">
-                  <div className="w-10 h-10 rounded-xl bg-gray-50 flex items-center justify-center flex-shrink-0">
-                    <TypeIcon type={source.type} />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h3 className="text-sm font-medium text-gray-900 truncate">
-                      {source.title || source.url || "未命名资源"}
-                    </h3>
-                    <div className="flex items-center gap-2 mt-1">
-                      <StatusBadge status={source.status} />
-                      <span className="text-xs text-gray-400">
-                        {new Date(source.created_at).toLocaleDateString("zh-CN")}
-                      </span>
+            {sources.map((source) => {
+              const errorMessage =
+                source.status === "error" && typeof source.metadata_?.error !== "undefined"
+                  ? String(source.metadata_.error)
+                  : null;
+
+              return (
+                <Card key={source.id} className="p-4">
+                  <div className="flex items-center gap-4">
+                    <div className="w-10 h-10 rounded-xl bg-gray-50 flex items-center justify-center flex-shrink-0">
+                      <TypeIcon type={source.type} />
                     </div>
-                    {source.status === "error" && source.metadata_?.error && (
-                      <p className="text-xs text-red-500 mt-0.5 truncate">
-                        {String(source.metadata_.error)}
-                      </p>
-                    )}
+                    <div className="flex-1 min-w-0">
+                      <h3 className="text-sm font-medium text-gray-900 truncate">
+                        {source.title || source.url || "未命名资源"}
+                      </h3>
+                      <div className="flex items-center gap-2 mt-1">
+                        <StatusBadge status={source.status} />
+                        <span className="text-xs text-gray-400">
+                          {new Date(source.created_at).toLocaleDateString("zh-CN")}
+                        </span>
+                      </div>
+                      {errorMessage && (
+                        <p className="text-xs text-red-500 mt-0.5 truncate">
+                          {errorMessage}
+                        </p>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex-shrink-0 flex gap-2">
-                    {source.status === "error" && (
-                      <Button size="sm" variant="ghost" onClick={async () => {
-                        try { await retrySource(source.id); loadSources(); } catch {}
-                      }}>
-                        <RefreshCw className="w-3.5 h-3.5" /> 重试
-                      </Button>
-                    )}
-                    {!["ready", "error"].includes(source.status) && (
-                      <Button size="sm" variant="ghost" onClick={async () => {
-                        try {
-                          await cancelSource(source.id);
-                        } catch (e) {
-                          console.error("Cancel failed:", e);
-                        }
-                        loadSources();
-                      }}>
-                        <X className="w-3.5 h-3.5" /> 取消
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              </Card>
-            ))}
+                </Card>
+              );
+            })}
           </div>
         )}
       </div>

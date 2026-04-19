@@ -12,7 +12,7 @@ interface LabData {
 }
 
 export default function LabViewer({ lab }: { lab: LabData }) {
-  const API_BASE = "http://localhost:8000/api/v1";
+  const API_BASE = "/api/v1";
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-6">

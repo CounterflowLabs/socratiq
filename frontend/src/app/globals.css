@@ -1,57 +1,152 @@
 @import "tailwindcss";
 
-/* ─── Light Theme Custom Properties ─── */
 :root {
-  --bg: #FAFAFA;
-  --surface: #FFFFFF;
-  --surface-alt: #F5F5F5;
-  --border: #E5E5E5;
-  --border-light: #F0F0F0;
-  --text: #171717;
-  --text-secondary: #525252;
-  --text-tertiary: #A3A3A3;
-  --primary: #2563EB;
-  --primary-light: #DBEAFE;
-  --primary-dark: #1D4ED8;
-  --success: #16A34A;
-  --success-light: #DCFCE7;
-  --warning: #D97706;
-  --warning-light: #FEF3C7;
-  --error: #DC2626;
-  --error-light: #FEE2E2;
-  --accent: #7C3AED;
-  --accent-light: #EDE9FE;
+  /* Colors */
+  --bg: #fafafa;
+  --surface: #ffffff;
+  --surface-alt: #f5f5f7;
+  --border: rgba(0, 0, 0, 0.08);
+  --border-medium: rgba(0, 0, 0, 0.15);
+  --text: #1d1d1f;
+  --text-secondary: #6e6e73;
+  --text-tertiary: #86868b;
+
+  /* Brand */
+  --primary: #0071e3;
+  --primary-hover: #0077ed;
+  --primary-light: #e8f2fe;
+
+  /* Status */
+  --success: #34c759;
+  --success-light: #e8f8ed;
+  --warning: #ff9500;
+  --warning-light: #fff4e5;
+  --error: #ff3b30;
+  --error-light: #fff0ef;
+
+  /* Spacing */
+  --page-padding: 48px;
+  --section-gap: 48px;
+  --card-padding: 24px;
+
+  /* Radius */
+  --radius-sm: 8px;
   --radius: 12px;
+  --radius-lg: 16px;
+  --radius-pill: 9999px;
+
+  /* Shadow */
+  --shadow-sm: 0 1px 4px rgba(0, 0, 0, 0.04);
+  --shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 4px 20px rgba(0, 0, 0, 0.1);
+
+  /* Animation */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration: 0.3s;
+  --duration-fast: 0.2s;
 }
 
-html {
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
-  background: var(--bg);
-  color: var(--text);
+@media (max-width: 768px) {
+  :root {
+    --page-padding: 20px;
+    --section-gap: 32px;
+    --card-padding: 16px;
+  }
+}
+
+/* Typography */
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  color: var(--text);
+  background: var(--bg);
+  font-size: 16px;
+  line-height: 1.6;
 }
 
-/* ─── Scrollbar ─── */
-::-webkit-scrollbar { width: 5px; }
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--text-tertiary); }
+::-webkit-scrollbar-thumb { background: var(--border-medium); border-radius: 3px; }
 
-/* ─── Layout ─── */
-.app-layout { display: flex; min-height: 100vh; }
-.main-content { flex: 1; min-width: 0; transition: margin-left 0.2s; }
+/* Prose (lesson content) */
+.prose p { margin-bottom: 1em; line-height: 1.7; }
+.prose ul, .prose ol { margin-bottom: 1em; padding-left: 1.5em; }
+.prose pre { background: var(--surface-alt); border-radius: var(--radius); padding: 16px; overflow-x: auto; margin-bottom: 1em; }
+.prose code { font-size: 0.9em; }
+.prose h2 { font-size: 1.5rem; font-weight: 600; margin: 1.5em 0 0.5em; }
+.prose h3 { font-size: 1.25rem; font-weight: 600; margin: 1.25em 0 0.5em; }
 
-/* ─── Markdown Styles ─── */
-.prose pre {
-  background: var(--surface-alt);
-  border-radius: 8px;
-  padding: 12px;
-  overflow-x: auto;
-  margin: 8px 0;
-  font-size: 13px;
+/* Card base */
+.card {
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  padding: var(--card-padding);
+  transition: box-shadow var(--duration) var(--ease-out), transform var(--duration) var(--ease-out);
 }
-.prose code { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 13px; }
-.prose p { margin-bottom: 8px; }
-.prose p:last-child { margin-bottom: 0; }
-.prose ul, .prose ol { padding-left: 20px; margin-bottom: 8px; }
+.card:hover {
+  box-shadow: var(--shadow-lg);
+  transform: translateY(-2px);
+}
+.card-flat {
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  padding: var(--card-padding);
+}
+
+/* Button styles */
+.btn-primary {
+  background: var(--primary);
+  color: white;
+  border: none;
+  border-radius: var(--radius-pill);
+  padding: 10px 24px;
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+.btn-primary:hover { background: var(--primary-hover); }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-secondary {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius);
+  padding: 8px 20px;
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+.btn-secondary:hover { background: var(--surface-alt); }
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-secondary);
+  border: none;
+  padding: 8px 16px;
+  font-size: 15px;
+  cursor: pointer;
+  border-radius: var(--radius);
+  transition: background var(--duration-fast) var(--ease-out);
+}
+.btn-ghost:hover { background: rgba(0, 0, 0, 0.04); }
+
+/* Badge */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+/* Preserve existing layout classes used by layout.tsx and sidebar.tsx */
+.app-layout { display: flex; min-height: 100vh; }
+.main-content { flex: 1; min-width: 0; }

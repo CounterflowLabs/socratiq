@@ -21,7 +21,6 @@ class LlmUsageLog(BaseMixin, Base):
     estimated_cost_usd: Mapped[float | None] = mapped_column(
         Numeric(10, 6), nullable=True
     )
-    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     __table_args__ = (
         Index("ix_usage_user_date", "user_id", "created_at"),

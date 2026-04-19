@@ -25,14 +25,12 @@ class CostGuard:
     async def log_usage(
         self, user_id: UUID, task_type: str,
         model_name: str, tokens_in: int, tokens_out: int,
-        duration_ms: int | None = None,
     ) -> None:
         cost = (tokens_in * 0.000003) + (tokens_out * 0.000015)
         log = LlmUsageLog(
             user_id=user_id, task_type=task_type,
             model_name=model_name, tokens_in=tokens_in,
             tokens_out=tokens_out, estimated_cost_usd=cost,
-            duration_ms=duration_ms,
         )
         self._db.add(log)
         await self._db.flush()

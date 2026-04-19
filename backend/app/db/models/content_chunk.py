@@ -19,7 +19,7 @@ class ContentChunk(BaseMixin, Base):
         source_id: UUID foreign key referencing the parent source.
         section_id: Optional UUID foreign key referencing a course section.
         text: The textual content of this chunk.
-        embedding: Optional 1536-dimensional vector embedding for RAG retrieval.
+        embedding: Optional vector embedding for RAG retrieval.
         metadata_: Arbitrary JSONB metadata (named with trailing underscore
             to avoid collision with SQLAlchemy's internal ``metadata``).
     """

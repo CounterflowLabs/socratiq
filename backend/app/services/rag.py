@@ -11,6 +11,8 @@ from app.services.llm.router import ModelRouter, TaskType
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_QUERY_EMBEDDING_DIM = 768
+
 
 class RAGService:
     """Vector similarity search over content chunks using pgvector."""
@@ -34,7 +36,7 @@ class RAGService:
             top_k: Number of results to return.
 
         Returns:
-            List of dicts: [{"text": str, "metadata": dict, "score": float}]
+            List of dicts with text, metadata, score, and source info.
         """
         # 1. Compute query embedding
         query_embedding = await self._embed_query(query)
@@ -46,10 +48,13 @@ class RAGService:
         if course_id:
             # Filter by course via section → course relationship
             sql = text("""
-                SELECT cc.id, cc.text, cc.metadata_, 
+                SELECT cc.id, cc.text, cc.metadata_, cc.source_id,
+                       src.title AS source_title, src.type AS source_type,
+                       src.url AS source_url,
                        cc.embedding <=> :query_vec AS distance
                 FROM content_chunks cc
                 JOIN sections s ON cc.section_id = s.id
+                LEFT JOIN sources src ON cc.source_id = src.id
                 WHERE s.course_id = :course_id
                   AND cc.embedding IS NOT NULL
                 ORDER BY cc.embedding <=> :query_vec
@@ -61,9 +66,12 @@ class RAGService:
             )
         else:
             sql = text("""
-                SELECT cc.id, cc.text, cc.metadata_,
+                SELECT cc.id, cc.text, cc.metadata_, cc.source_id,
+                       src.title AS source_title, src.type AS source_type,
+                       src.url AS source_url,
                        cc.embedding <=> :query_vec AS distance
                 FROM content_chunks cc
+                LEFT JOIN sources src ON cc.source_id = src.id
                 WHERE cc.embedding IS NOT NULL
                 ORDER BY cc.embedding <=> :query_vec
                 LIMIT :top_k
@@ -77,6 +85,11 @@ class RAGService:
 
         return [
             {
+                "chunk_id": str(row.id),
+                "source_id": str(row.source_id) if row.source_id else None,
+                "source_title": row.source_title,
+                "source_type": row.source_type,
+                "source_url": row.source_url,
                 "text": row.text,
                 "metadata": row.metadata_ if row.metadata_ else {},
                 "score": 1 - row.distance,  # Convert distance to similarity
@@ -90,4 +103,4 @@ class RAGService:
 
         embedding_service = EmbeddingService(self._router)
         embeddings = await embedding_service.embed_texts([query])
-        return embeddings[0] if embeddings else [0.0] * 1536
+        return embeddings[0] if embeddings else [0.0] * DEFAULT_QUERY_EMBEDDING_DIM

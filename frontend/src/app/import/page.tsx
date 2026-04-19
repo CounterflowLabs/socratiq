@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Brain, Sparkles, Eye, Target, FileText, Upload, Loader, Play, X, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { clsx } from "clsx";
-import { createSourceFromURL, createSourceFromFile, DuplicateSourceError } from "@/lib/api";
+import { createSourceFromURL, createSourceFromFile } from "@/lib/api";
 import { useSourcesStore, useTasksStore } from "@/lib/stores";
 
 const goals = [
@@ -38,9 +38,9 @@ export default function ImportPage() {
     try {
       let source;
       if (sourceType === "bilibili" || sourceType === "youtube") {
-        source = await createSourceFromURL(url.trim(), undefined, undefined, goal ?? undefined);
+        source = await createSourceFromURL(url.trim());
       } else if (pdfFile) {
-        source = await createSourceFromFile(pdfFile, undefined, goal ?? undefined);
+        source = await createSourceFromFile(pdfFile);
       } else {
         setErrorMsg("请选择文件");
         setLoading(false);
@@ -64,16 +64,7 @@ export default function ImportPage() {
         router.push("/");
       }
     } catch (err) {
-      if (err instanceof DuplicateSourceError) {
-        const existing = err.existingSource;
-        if (existing?.status === "ready") {
-          setErrorMsg("该资源已导入完成，无需重复导入");
-        } else {
-          setErrorMsg("该资源正在导入中，请稍候查看");
-        }
-      } else {
-        setErrorMsg(err instanceof Error ? err.message : "导入失败，请检查链接或文件后重试");
-      }
+      setErrorMsg(err instanceof Error ? err.message : "导入失败，请检查链接或文件后重试");
       setLoading(false);
     }
   };

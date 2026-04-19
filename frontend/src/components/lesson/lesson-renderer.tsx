@@ -28,6 +28,8 @@ export default function LessonRenderer({
   lesson: LessonContent;
   onTimestampClick?: (seconds: number) => void;
 }) {
+  const canOpenTimestamp = typeof onTimestampClick === "function";
+
   return (
     <div className="max-w-3xl mx-auto px-4 py-6">
       <h1 className="text-xl font-bold text-gray-900 mb-2">{lesson.title}</h1>
@@ -37,7 +39,7 @@ export default function LessonRenderer({
         <div key={i} className="mb-8">
           <div className="flex items-center gap-2 mb-3">
             <h2 className="text-lg font-semibold text-gray-800">{section.heading}</h2>
-            {section.timestamp > 0 && (
+            {section.timestamp > 0 && canOpenTimestamp && (
               <TimestampLink seconds={section.timestamp} onClick={() => onTimestampClick?.(section.timestamp)} />
             )}
           </div>

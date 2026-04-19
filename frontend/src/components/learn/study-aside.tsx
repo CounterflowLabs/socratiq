@@ -7,7 +7,7 @@ import { clsx } from "clsx";
 
 import type { SourceSummary } from "@/lib/api";
 
-type AsidePanelId = "video" | "pdf" | "references" | "tutor";
+export type AsidePanelId = "video" | "pdf" | "references" | "tutor";
 
 interface StudyAsideProps {
   courseTitle: string;
@@ -18,6 +18,8 @@ interface StudyAsideProps {
   videoEmbed: { src: string } | null;
   pdfSource: SourceSummary | null;
   referenceSources: SourceSummary[];
+  activePanel: AsidePanelId;
+  onPanelChange: (panel: AsidePanelId) => void;
 }
 
 export default function StudyAside({
@@ -29,6 +31,8 @@ export default function StudyAside({
   videoEmbed,
   pdfSource,
   referenceSources,
+  activePanel,
+  onPanelChange,
 }: StudyAsideProps) {
   const panels: AsidePanelId[] = [];
 
@@ -37,13 +41,11 @@ export default function StudyAside({
   if (referenceSources.length > 0) panels.push("references");
   panels.push("tutor");
 
-  const [activePanel, setActivePanel] = useState<AsidePanelId>(panels[0]);
-
   useEffect(() => {
-    setActivePanel((currentPanel) =>
-      panels.includes(currentPanel) ? currentPanel : panels[0]
-    );
-  }, [videoEmbed, pdfSource, referenceSources.length]);
+    if (!panels.includes(activePanel)) {
+      onPanelChange(panels[0]);
+    }
+  }, [activePanel, onPanelChange, panels]);
 
   return (
     <aside className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -81,7 +83,7 @@ export default function StudyAside({
           {panels.includes("video") ? (
             <button
               type="button"
-              onClick={() => setActivePanel("video")}
+              onClick={() => onPanelChange("video")}
               className={clsx(
                 "inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-medium transition",
                 activePanel === "video"
@@ -96,7 +98,7 @@ export default function StudyAside({
           {panels.includes("pdf") ? (
             <button
               type="button"
-              onClick={() => setActivePanel("pdf")}
+              onClick={() => onPanelChange("pdf")}
               className={clsx(
                 "inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-medium transition",
                 activePanel === "pdf"
@@ -111,7 +113,7 @@ export default function StudyAside({
           {panels.includes("references") ? (
             <button
               type="button"
-              onClick={() => setActivePanel("references")}
+              onClick={() => onPanelChange("references")}
               className={clsx(
                 "inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-medium transition",
                 activePanel === "references"
@@ -125,7 +127,7 @@ export default function StudyAside({
           ) : null}
           <button
             type="button"
-            onClick={() => setActivePanel("tutor")}
+            onClick={() => onPanelChange("tutor")}
             className={clsx(
               "inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-medium transition",
               activePanel === "tutor"

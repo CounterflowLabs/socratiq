@@ -8,7 +8,7 @@ import { clsx } from "clsx";
 
 import CourseOutline from "@/components/learn/course-outline";
 import LearnShell from "@/components/learn/learn-shell";
-import StudyAside from "@/components/learn/study-aside";
+import StudyAside, { type AsidePanelId } from "@/components/learn/study-aside";
 import LessonRenderer from "@/components/lesson/lesson-renderer";
 import TutorDrawer from "@/components/tutor-drawer";
 import {
@@ -84,6 +84,7 @@ function LearnPageInner() {
   const [section, setSection] = useState<SectionResponse | null>(null);
   const [tutorOpen, setTutorOpen] = useState(false);
   const [asideOpen, setAsideOpen] = useState(false);
+  const [activeAsidePanel, setActiveAsidePanel] = useState<AsidePanelId>("tutor");
 
   const [showTranslation, setShowTranslation] = useState(false);
   const [translationLoading, setTranslationLoading] = useState(false);
@@ -234,6 +235,36 @@ function LearnPageInner() {
   const referenceSources = (course?.sources ?? []).filter(
     (item) => item.id !== videoSource?.id && item.id !== pdfSource?.id
   );
+  const handleTimestampClick = useCallback((_seconds: number) => {
+    if (!videoEmbed) return;
+    setAsideOpen(true);
+    setActiveAsidePanel("video");
+  }, [videoEmbed]);
+
+  useEffect(() => {
+    if (videoEmbed) {
+      setActiveAsidePanel((currentPanel) =>
+        currentPanel === "video" ? currentPanel : "video"
+      );
+      return;
+    }
+
+    if (pdfSource) {
+      setActiveAsidePanel((currentPanel) =>
+        currentPanel === "video" ? "pdf" : currentPanel
+      );
+      return;
+    }
+
+    if (referenceSources.length > 0) {
+      setActiveAsidePanel((currentPanel) =>
+        currentPanel === "video" || currentPanel === "pdf" ? "references" : currentPanel
+      );
+      return;
+    }
+
+    setActiveAsidePanel("tutor");
+  }, [videoEmbed, pdfSource, referenceSources]);
 
   const lessonStage = (
     <section className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm">
@@ -332,7 +363,7 @@ function LearnPageInner() {
             className="max-h-[75vh] overflow-y-auto px-4 py-4"
           >
             {hasLesson ? (
-              <LessonRenderer lesson={lessonData} onTimestampClick={() => {}} />
+              <LessonRenderer lesson={lessonData} onTimestampClick={videoEmbed ? handleTimestampClick : undefined} />
             ) : rawSectionContent ? (
               <div className="whitespace-pre-wrap text-sm leading-7 text-slate-700">
                 {typeof rawSectionContent === "string"
@@ -400,6 +431,8 @@ function LearnPageInner() {
             videoEmbed={videoEmbed}
             pdfSource={pdfSource}
             referenceSources={referenceSources}
+            activePanel={activeAsidePanel}
+            onPanelChange={setActiveAsidePanel}
           />
         }
       />

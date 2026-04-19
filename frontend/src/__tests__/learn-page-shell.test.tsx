@@ -220,4 +220,69 @@ describe("Learn page shell", () => {
       expect(screen.getByTitle("课程原视频")).toBeInTheDocument();
     });
   });
+
+  it("opens the video aside when a lesson timestamp is clicked", async () => {
+    globalThis.fetch = mockFetch({
+      "/api/v1/courses/c1": courseResponse,
+    }) as typeof fetch;
+
+    vi.resetModules();
+    const LearnPage = (await import("@/app/learn/page")).default;
+
+    render(
+      <LayoutInner>
+        <SuspenseWrapper>
+          <LearnPage />
+        </SuspenseWrapper>
+      </LayoutInner>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /0:12/i })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /0:12/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTitle("课程原视频")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /打开学习辅助区/i })).toHaveAttribute(
+        "aria-expanded",
+        "true"
+      );
+    });
+  });
+
+  it("does not render a clickable timestamp when no video source is available", async () => {
+    const courseWithoutVideo = {
+      ...courseResponse,
+      sources: courseResponse.sources.filter((source) => source.id !== "video-1"),
+      sections: [
+        {
+          ...courseResponse.sections[0],
+          source_id: "pdf-1",
+        },
+      ],
+    };
+
+    globalThis.fetch = mockFetch({
+      "/api/v1/courses/c1": courseWithoutVideo,
+    }) as typeof fetch;
+
+    vi.resetModules();
+    const LearnPage = (await import("@/app/learn/page")).default;
+
+    render(
+      <LayoutInner>
+        <SuspenseWrapper>
+          <LearnPage />
+        </SuspenseWrapper>
+      </LayoutInner>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("这是本节的正文内容。")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByRole("button", { name: /0:12/i })).not.toBeInTheDocument();
+  });
 });

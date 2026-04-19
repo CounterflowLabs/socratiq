@@ -252,6 +252,110 @@ describe("Learn page shell", () => {
     });
   });
 
+  it("keeps course-level video support when the current section comes from a pdf source", async () => {
+    const mixedSourceCourse = {
+      ...courseResponse,
+      sources: [
+        {
+          id: "pdf-1",
+          type: "pdf",
+          url: "https://example.com/lesson.pdf",
+        },
+        {
+          id: "ref-1",
+          type: "article",
+          url: "https://example.com/reference",
+        },
+        {
+          id: "video-1",
+          type: "youtube",
+          url: "https://www.youtube.com/watch?v=demo-video",
+        },
+      ],
+      sections: [
+        {
+          ...courseResponse.sections[0],
+          source_id: "pdf-1",
+        },
+      ],
+    };
+
+    globalThis.fetch = mockFetch({
+      "/api/v1/courses/c1": mixedSourceCourse,
+    }) as typeof fetch;
+
+    vi.resetModules();
+    const LearnPage = (await import("@/app/learn/page")).default;
+
+    render(
+      <LayoutInner>
+        <SuspenseWrapper>
+          <LearnPage />
+        </SuspenseWrapper>
+      </LayoutInner>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /0:12/i })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /0:12/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTitle("课程原视频")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "原 PDF" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "参考资料" })).toBeInTheDocument();
+    });
+  });
+
+  it("preserves bilibili page selection when the current section itself is the video source", async () => {
+    const bilibiliCourse = {
+      ...courseResponse,
+      sources: [
+        {
+          id: "video-1",
+          type: "bilibili",
+          url: "https://www.bilibili.com/video/BV1test1234",
+        },
+      ],
+      sections: [
+        {
+          ...courseResponse.sections[0],
+          order_index: 2,
+          source_id: "video-1",
+        },
+      ],
+    };
+
+    globalThis.fetch = mockFetch({
+      "/api/v1/courses/c1": bilibiliCourse,
+    }) as typeof fetch;
+
+    vi.resetModules();
+    const LearnPage = (await import("@/app/learn/page")).default;
+
+    render(
+      <LayoutInner>
+        <SuspenseWrapper>
+          <LearnPage />
+        </SuspenseWrapper>
+      </LayoutInner>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /0:12/i })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /0:12/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTitle("课程原视频")).toHaveAttribute(
+        "src",
+        expect.stringContaining("p=3")
+      );
+    });
+  });
+
   it("does not render a clickable timestamp when no video source is available", async () => {
     const courseWithoutVideo = {
       ...courseResponse,

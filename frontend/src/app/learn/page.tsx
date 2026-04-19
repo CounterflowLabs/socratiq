@@ -40,14 +40,34 @@ interface LessonContent {
   sections: LessonSection[];
 }
 
-function getVideoEmbed(section: SectionResponse, course: CourseDetailResponse) {
-  const source = course.sources.find((item) => item.id === section.source_id) ?? course.sources[0];
+function getCurrentSource(section: SectionResponse, course: CourseDetailResponse) {
+  return course.sources.find((item) => item.id === section.source_id) ?? course.sources[0] ?? null;
+}
+
+function getVideoSource(section: SectionResponse, course: CourseDetailResponse) {
+  const currentSource = getCurrentSource(section, course);
+  return (
+    (currentSource && isVideoSource(currentSource) ? currentSource : null) ??
+    course.sources.find((item) => isVideoSource(item)) ??
+    null
+  );
+}
+
+function getVideoEmbed(
+  section: SectionResponse,
+  course: CourseDetailResponse,
+  source: SourceSummary | null
+) {
   if (!source?.url) return null;
 
   const bvMatch = source.url.match(/BV[\w]+/);
   if (bvMatch && source.type === "bilibili") {
     const bvid = bvMatch[0];
-    const page = (section.order_index ?? 0) + 1;
+    const pageSection =
+      section.source_id === source.id
+        ? section
+        : course.sections.find((item) => item.source_id === source.id) ?? null;
+    const page = pageSection ? (pageSection.order_index ?? 0) + 1 : 1;
     return {
       type: "bilibili" as const,
       src: `//player.bilibili.com/player.html?bvid=${bvid}&p=${page}&high_quality=1`,
@@ -217,17 +237,13 @@ function LearnPageInner() {
 
   const lessonData = (section?.content?.lesson as LessonContent | undefined) ?? undefined;
   const hasLesson = !!(lessonData && lessonData.title && lessonData.sections);
-  const videoEmbed = section && course ? getVideoEmbed(section, course) : null;
   const completedCount = currentIdx >= 0 ? currentIdx + 1 : 0;
   const totalCount = sections.length;
   const progressLabel = totalCount > 0 ? `进度 ${completedCount}/${totalCount}` : "准备中";
   const rawSectionContent = section?.content as unknown;
-  const currentSource =
-    course?.sources.find((item) => item.id === section?.source_id) ?? course?.sources[0] ?? null;
-  const videoSource =
-    (currentSource && isVideoSource(currentSource) ? currentSource : null) ??
-    course?.sources.find((item) => isVideoSource(item)) ??
-    null;
+  const currentSource = section && course ? getCurrentSource(section, course) : null;
+  const videoSource = section && course ? getVideoSource(section, course) : null;
+  const videoEmbed = section && course ? getVideoEmbed(section, course, videoSource) : null;
   const pdfSource =
     (currentSource && isPdfSource(currentSource) ? currentSource : null) ??
     course?.sources.find((item) => isPdfSource(item)) ??

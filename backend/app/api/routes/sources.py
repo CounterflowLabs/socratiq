@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -294,6 +295,42 @@ async def get_source(
     if not source:
         raise HTTPException(404, f"Source {source_id} not found")
     return await _source_to_response(db, source, user_id=user.id)
+
+
+@router.get("/{source_id}/file")
+async def get_source_file(
+    source_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_local_user)],
+) -> FileResponse:
+    """Serve an uploaded PDF file for the owning user."""
+    result = await db.execute(
+        select(Source).where(Source.id == source_id, Source.created_by == user.id)
+    )
+    source = result.scalar_one_or_none()
+    if not source:
+        raise HTTPException(404, f"Source {source_id} not found")
+    if source.type != "pdf":
+        raise HTTPException(400, "Only uploaded PDF sources can be downloaded")
+
+    file_path_value = (source.metadata_ or {}).get("file_path")
+    if not file_path_value:
+        raise HTTPException(400, "This PDF source does not have a local file")
+
+    file_path = Path(file_path_value)
+    if not file_path.is_file():
+        raise HTTPException(404, "Source file not found")
+
+    filename = (
+        (source.metadata_ or {}).get("original_filename")
+        or source.title
+        or f"{source.id}.pdf"
+    )
+    return FileResponse(
+        path=file_path,
+        media_type="application/pdf",
+        filename=filename,
+    )
 
 
 def _detect_source_type(url: str | None) -> str:

@@ -53,6 +53,29 @@ function getVideoSource(section: SectionResponse, course: CourseDetailResponse) 
   );
 }
 
+function getSourceSections(course: CourseDetailResponse, sourceId: string) {
+  return [...course.sections]
+    .filter((item) => item.source_id === sourceId)
+    .sort((left, right) => {
+      const leftIndex = left.order_index ?? Number.MAX_SAFE_INTEGER;
+      const rightIndex = right.order_index ?? Number.MAX_SAFE_INTEGER;
+      return leftIndex - rightIndex;
+    });
+}
+
+function getBilibiliPage(
+  section: SectionResponse,
+  course: CourseDetailResponse,
+  source: SourceSummary
+) {
+  const sourceSections = getSourceSections(course, source.id);
+  if (sourceSections.length === 0) return 1;
+  if (section.source_id !== source.id) return 1;
+
+  const relativeIndex = sourceSections.findIndex((item) => item.id === section.id);
+  return relativeIndex >= 0 ? relativeIndex + 1 : 1;
+}
+
 function getVideoEmbed(
   section: SectionResponse,
   course: CourseDetailResponse,
@@ -63,11 +86,7 @@ function getVideoEmbed(
   const bvMatch = source.url.match(/BV[\w]+/);
   if (bvMatch && source.type === "bilibili") {
     const bvid = bvMatch[0];
-    const pageSection =
-      section.source_id === source.id
-        ? section
-        : course.sections.find((item) => item.source_id === source.id) ?? null;
-    const page = pageSection ? (pageSection.order_index ?? 0) + 1 : 1;
+    const page = getBilibiliPage(section, course, source);
     return {
       type: "bilibili" as const,
       src: `//player.bilibili.com/player.html?bvid=${bvid}&p=${page}&high_quality=1`,

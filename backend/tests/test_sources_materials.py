@@ -131,6 +131,36 @@ async def test_get_source_returns_latest_processing_and_course_task_summaries(
 
 
 @pytest.mark.asyncio
+async def test_get_source_file_serves_uploaded_pdf_for_owner(
+    client, db_session, demo_user, tmp_path
+):
+    pdf_path = tmp_path / "lecture-notes.pdf"
+    pdf_bytes = b"%PDF-1.4\nmock pdf\n"
+    pdf_path.write_bytes(pdf_bytes)
+
+    source = Source(
+        type="pdf",
+        url=None,
+        title="Lecture Notes",
+        status="ready",
+        created_by=demo_user.id,
+        metadata_={
+            "file_path": str(pdf_path),
+            "original_filename": "lecture-notes.pdf",
+        },
+    )
+    db_session.add(source)
+    await db_session.commit()
+
+    res = await client.get(f"/api/v1/sources/{source.id}/file")
+
+    assert res.status_code == 200
+    assert res.content == pdf_bytes
+    assert res.headers["content-type"] == "application/pdf"
+    assert "lecture-notes.pdf" in res.headers["content-disposition"]
+
+
+@pytest.mark.asyncio
 async def test_list_sources_returns_task_and_course_summaries(
     client, db_session, demo_user
 ):

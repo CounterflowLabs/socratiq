@@ -22,6 +22,12 @@ interface StudyAsideProps {
   onPanelChange: (panel: AsidePanelId) => void;
 }
 
+function getSourceHref(source: SourceSummary): string | null {
+  if (source.url) return source.url;
+  if (source.type === "pdf") return `/api/v1/sources/${source.id}/file`;
+  return null;
+}
+
 export default function StudyAside({
   courseTitle,
   currentSectionTitle,
@@ -34,6 +40,7 @@ export default function StudyAside({
   activePanel,
   onPanelChange,
 }: StudyAsideProps) {
+  const pdfHref = pdfSource ? getSourceHref(pdfSource) : null;
   const panels = useMemo(() => {
     const nextPanels: AsidePanelId[] = [];
 
@@ -171,15 +178,19 @@ export default function StudyAside({
               <p className="mt-2 text-sm leading-6 text-slate-600">
                 这份原始资料可用于和正文内容对照阅读。
               </p>
-              <a
-                href={pdfSource.url ?? "#"}
-                target="_blank"
-                rel="noreferrer"
-                className="mt-4 inline-flex items-center gap-2 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
-              >
-                打开原 PDF
-                <ExternalLink className="h-4 w-4" />
-              </a>
+              {pdfHref ? (
+                <a
+                  href={pdfHref}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-4 inline-flex items-center gap-2 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+                >
+                  打开原 PDF
+                  <ExternalLink className="h-4 w-4" />
+                </a>
+              ) : (
+                <p className="mt-4 text-sm text-slate-500">当前 PDF 暂不可直接打开。</p>
+              )}
             </>
           ) : null}
 
@@ -187,20 +198,36 @@ export default function StudyAside({
             <>
               <h3 className="text-sm font-semibold text-slate-900">参考资料</h3>
               <div className="mt-3 space-y-3">
-                {referenceSources.map((source) => (
-                  <a
-                    key={source.id}
-                    href={source.url ?? "#"}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="flex items-center justify-between rounded-2xl border border-slate-200 px-4 py-3 text-sm text-slate-700 transition hover:bg-slate-50"
-                  >
-                    <span>
-                      {source.type === "pdf" ? "PDF 资料" : "参考链接"}
-                    </span>
-                    <ExternalLink className="h-4 w-4 text-slate-400" />
-                  </a>
-                ))}
+                {referenceSources.map((source) => {
+                  const href = getSourceHref(source);
+
+                  if (!href) {
+                    return (
+                      <div
+                        key={source.id}
+                        className="rounded-2xl border border-dashed border-slate-200 px-4 py-3 text-sm text-slate-500"
+                      >
+                        <p>{source.type === "pdf" ? "PDF 资料" : "参考资料"}</p>
+                        <p className="mt-1 text-xs text-slate-400">当前资料暂不可直接打开。</p>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <a
+                      key={source.id}
+                      href={href}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-center justify-between rounded-2xl border border-slate-200 px-4 py-3 text-sm text-slate-700 transition hover:bg-slate-50"
+                    >
+                      <span>
+                        {source.type === "pdf" ? "PDF 资料" : "参考链接"}
+                      </span>
+                      <ExternalLink className="h-4 w-4 text-slate-400" />
+                    </a>
+                  );
+                })}
               </div>
             </>
           ) : null}

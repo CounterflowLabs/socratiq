@@ -259,12 +259,12 @@ describe("Learn page shell", () => {
         {
           id: "pdf-1",
           type: "pdf",
-          url: "https://example.com/lesson.pdf",
+          url: null,
         },
         {
           id: "ref-1",
           type: "article",
-          url: "https://example.com/reference",
+          url: null,
         },
         {
           id: "video-1",
@@ -306,12 +306,32 @@ describe("Learn page shell", () => {
       expect(screen.getByRole("button", { name: "原 PDF" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "参考资料" })).toBeInTheDocument();
     });
+
+    fireEvent.click(screen.getByRole("button", { name: "原 PDF" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("link", { name: /打开原 PDF/i })).toHaveAttribute(
+        "href",
+        "/api/v1/sources/pdf-1/file"
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "参考资料" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("link", { name: /参考链接/i })).not.toBeInTheDocument();
+    });
   });
 
   it("preserves bilibili page selection when the current section itself is the video source", async () => {
     const bilibiliCourse = {
       ...courseResponse,
       sources: [
+        {
+          id: "pdf-1",
+          type: "pdf",
+          url: "https://example.com/notes.pdf",
+        },
         {
           id: "video-1",
           type: "bilibili",
@@ -321,7 +341,23 @@ describe("Learn page shell", () => {
       sections: [
         {
           ...courseResponse.sections[0],
-          order_index: 2,
+          id: "s0",
+          title: "前置 PDF 节",
+          order_index: 0,
+          source_id: "pdf-1",
+        },
+        {
+          ...courseResponse.sections[0],
+          id: "s2",
+          title: "视频第一节",
+          order_index: 3,
+          source_id: "video-1",
+        },
+        {
+          ...courseResponse.sections[0],
+          id: "s1",
+          title: "视频第二节",
+          order_index: 4,
           source_id: "video-1",
         },
       ],
@@ -351,7 +387,7 @@ describe("Learn page shell", () => {
     await waitFor(() => {
       expect(screen.getByTitle("课程原视频")).toHaveAttribute(
         "src",
-        expect.stringContaining("p=3")
+        expect.stringContaining("p=2")
       );
     });
   });

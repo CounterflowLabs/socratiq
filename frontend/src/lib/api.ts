@@ -56,6 +56,14 @@ async function responseError(res: Response): Promise<Error> {
 
 // ─── Source APIs ───────────────────────────────────────
 
+export interface SourceTaskSummary {
+  task_type: string;
+  status: string;
+  stage?: string | null;
+  error_summary?: string | null;
+  celery_task_id?: string | null;
+}
+
 export interface SourceResponse {
   id: string;
   type: string;
@@ -64,6 +72,8 @@ export interface SourceResponse {
   status: string;
   metadata_: Record<string, unknown>;
   task_id?: string;
+  latest_processing_task?: SourceTaskSummary | null;
+  latest_course_task?: SourceTaskSummary | null;
   created_at: string;
   updated_at: string;
 }

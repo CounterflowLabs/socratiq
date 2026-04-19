@@ -8,6 +8,10 @@ interface SourceLike {
   status?: string;
   metadata_?: Record<string, unknown>;
   task_id?: string;
+  latest_course_task?: {
+    status?: string;
+    error_summary?: string | null;
+  } | null;
 }
 
 interface DeriveTaskSyncStateInput {
@@ -21,6 +25,7 @@ interface DeriveTaskSyncStateResult {
   state: string;
   courseId?: string;
   nextTaskId?: string;
+  error?: string;
 }
 
 function getTaskStage(status: TaskStatusLike | null): string | null {
@@ -56,6 +61,13 @@ function extractCourseId(value: unknown): string | undefined {
 export function deriveTaskSyncState(
   input: DeriveTaskSyncStateInput
 ): DeriveTaskSyncStateResult {
+  if (input.source?.latest_course_task?.status === "failure") {
+    return {
+      state: "FAILURE",
+      error: input.source.latest_course_task.error_summary || undefined,
+    };
+  }
+
   const nextTaskId =
     typeof input.source?.task_id === "string" &&
     input.source.task_id &&

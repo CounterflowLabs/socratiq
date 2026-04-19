@@ -68,3 +68,60 @@ async def test_create_clone_source_persists_processing_task(client, db_session, 
     assert tasks[0].task_type == "source_processing"
     assert tasks[0].status == "pending"
     assert tasks[0].celery_task_id == "fake-clone-task-001"
+
+
+@pytest.mark.asyncio
+async def test_get_source_returns_latest_processing_and_course_task_summaries(
+    client, db_session, demo_user
+):
+    source = Source(
+        type="youtube",
+        url="https://www.youtube.com/watch?v=test",
+        title="Summaries source",
+        status="ready",
+        celery_task_id="course-task-1",
+        created_by=demo_user.id,
+    )
+    db_session.add(source)
+    await db_session.flush()
+
+    db_session.add(
+        SourceTask(
+            source_id=source.id,
+            task_type="source_processing",
+            status="success",
+            stage="ready",
+            celery_task_id="processing-task-1",
+        )
+    )
+    db_session.add(
+        SourceTask(
+            source_id=source.id,
+            task_type="course_generation",
+            status="failure",
+            stage="error",
+            error_summary="broker unavailable",
+            celery_task_id="course-task-1",
+        )
+    )
+    await db_session.commit()
+
+    res = await client.get(f"/api/v1/sources/{source.id}")
+
+    assert res.status_code == 200
+    data = res.json()
+    assert data["task_id"] == "course-task-1"
+    assert data["latest_processing_task"] == {
+        "task_type": "source_processing",
+        "status": "success",
+        "stage": "ready",
+        "error_summary": None,
+        "celery_task_id": "processing-task-1",
+    }
+    assert data["latest_course_task"] == {
+        "task_type": "course_generation",
+        "status": "failure",
+        "stage": "error",
+        "error_summary": "broker unavailable",
+        "celery_task_id": "course-task-1",
+    }

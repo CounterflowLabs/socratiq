@@ -43,4 +43,31 @@ describe("deriveTaskSyncState", () => {
     expect(result.nextTaskId).toBeUndefined();
     expect(result.courseId).toBe("course-123");
   });
+
+  it("fails immediately when the latest backend course task has failed", () => {
+    const result = deriveTaskSyncState({
+      currentTaskId: "source-task-1",
+      currentState: "generating_course",
+      taskStatus: {
+        state: "SUCCESS",
+        result: {},
+      },
+      source: {
+        status: "ready",
+        task_id: "course-task-1",
+        metadata_: {},
+        latest_course_task: {
+          task_type: "course_generation",
+          status: "failure",
+          stage: "error",
+          error_summary: "broker unavailable",
+          celery_task_id: "course-task-1",
+        },
+      },
+    });
+
+    expect(result.state).toBe("FAILURE");
+    expect(result.error).toBe("broker unavailable");
+    expect(result.nextTaskId).toBeUndefined();
+  });
 });

@@ -168,7 +168,7 @@ export default function DashboardPage() {
             updateTask(task.taskId, {
               taskId: syncState.nextTaskId,
               state: syncState.state,
-              error: sourceError || status?.error,
+              error: syncState.error || sourceError || status?.error,
               courseId: syncState.courseId,
             });
             continue;
@@ -176,7 +176,7 @@ export default function DashboardPage() {
 
           updateTask(task.taskId, {
             state: syncState.state,
-            error: sourceError || status?.error,
+            error: syncState.error || sourceError || status?.error,
             courseId: syncState.courseId,
           });
 

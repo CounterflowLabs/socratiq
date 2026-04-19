@@ -1,5 +1,6 @@
 """API routes for content source management."""
 
+import asyncio
 import uuid
 from pathlib import Path
 from typing import Annotated
@@ -11,8 +12,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db, get_local_user
 from app.config import get_settings
 from app.db.models.source import Source
+from app.db.models.source_task import SourceTask
 from app.db.models.user import User
-from app.models.source import SourceResponse, SourceListResponse
+from app.models.source import SourceListResponse, SourceResponse, SourceTaskSummary
 from app.services.content_key import extract_content_key
 from app.services.source_tasks import create_source_task
 from app.worker.tasks.content_ingestion import ingest_source, clone_source
@@ -86,7 +88,7 @@ async def create_source(
         )
         active_source = active_result.scalar_one_or_none()
         if active_source and active_source.celery_task_id:
-            return _source_to_response(active_source)
+            return await _source_to_response(db, active_source)
 
         ready_result = await db.execute(
             select(Source)
@@ -124,17 +126,7 @@ async def create_source(
             )
             await db.commit()
             await db.refresh(source)
-            return SourceResponse(
-                id=source.id,
-                type=source.type,
-                url=source.url,
-                title=source.title,
-                status=source.status,
-                metadata_=source.metadata_,
-                task_id=task.id,
-                created_at=source.created_at,
-                updated_at=source.updated_at,
-            )
+            return await _source_to_response(db, source)
 
     source = Source(
         type=source_type,
@@ -160,17 +152,7 @@ async def create_source(
     await db.commit()
     await db.refresh(source)
 
-    return SourceResponse(
-        id=source.id,
-        type=source.type,
-        url=source.url,
-        title=source.title,
-        status=source.status,
-        metadata_=source.metadata_,
-        task_id=task.id,
-        created_at=source.created_at,
-        updated_at=source.updated_at,
-    )
+    return await _source_to_response(db, source)
 
 
 @router.get("", response_model=SourceListResponse)
@@ -196,7 +178,7 @@ async def list_sources(
     total = count_result.scalar()
 
     return SourceListResponse(
-        items=[_source_to_response(s) for s in sources],
+        items=await asyncio.gather(*[_source_to_response(db, s) for s in sources]),
         total=total,
         skip=skip,
         limit=limit,
@@ -216,7 +198,7 @@ async def get_source(
     source = result.scalar_one_or_none()
     if not source:
         raise HTTPException(404, f"Source {source_id} not found")
-    return _source_to_response(source)
+    return await _source_to_response(db, source)
 
 
 def _detect_source_type(url: str | None) -> str:
@@ -229,7 +211,48 @@ def _detect_source_type(url: str | None) -> str:
     raise HTTPException(400, f"Cannot detect source type from URL: {url}")
 
 
-def _source_to_response(source: Source) -> SourceResponse:
+async def _get_latest_task_summary(
+    db: AsyncSession,
+    *,
+    source_id: uuid.UUID,
+    task_type: str,
+) -> SourceTaskSummary | None:
+    result = await db.execute(
+        select(SourceTask)
+        .where(
+            SourceTask.source_id == source_id,
+            SourceTask.task_type == task_type,
+        )
+        .order_by(SourceTask.created_at.desc())
+        .limit(1)
+    )
+    task = result.scalar_one_or_none()
+    if task is None:
+        return None
+
+    return SourceTaskSummary(
+        task_type=task.task_type,
+        status=task.status,
+        stage=task.stage,
+        error_summary=task.error_summary,
+        celery_task_id=task.celery_task_id,
+    )
+
+
+async def _source_to_response(db: AsyncSession, source: Source) -> SourceResponse:
+    latest_processing_task, latest_course_task = await asyncio.gather(
+        _get_latest_task_summary(
+            db,
+            source_id=source.id,
+            task_type="source_processing",
+        ),
+        _get_latest_task_summary(
+            db,
+            source_id=source.id,
+            task_type="course_generation",
+        ),
+    )
+
     return SourceResponse(
         id=source.id,
         type=source.type,
@@ -238,6 +261,8 @@ def _source_to_response(source: Source) -> SourceResponse:
         status=source.status,
         metadata_=source.metadata_,
         task_id=source.celery_task_id,
+        latest_processing_task=latest_processing_task,
+        latest_course_task=latest_course_task,
         created_at=source.created_at,
         updated_at=source.updated_at,
     )

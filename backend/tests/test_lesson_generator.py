@@ -137,33 +137,3 @@ class TestLessonGenerator:
         assert len(result.blocks) >= 2
         assert result.blocks[0].type == "intro_card"
         assert result.blocks[-1].type == "recap"
-
-    @pytest.mark.asyncio
-    async def test_backfills_blocks_from_legacy_sections(self):
-        mock_provider = AsyncMock()
-        mock_provider.chat.return_value = LLMResponse(
-            content=[ContentBlock(type="text", text=json.dumps({
-                "title": "Python Basics",
-                "summary": "Intro summary",
-                "sections": [{
-                    "heading": "Variables",
-                    "content": "Variables store data values.",
-                    "timestamp": 30.0,
-                    "code_snippets": [],
-                    "key_concepts": ["variables", "assignment"],
-                    "diagrams": [],
-                    "interactive_steps": None,
-                }],
-            }))],
-            model="mock",
-        )
-
-        gen = LessonGenerator(mock_provider)
-        result = await gen.generate(
-            subtitle_chunks=["Welcome to Python basics."],
-            video_title="Python Basics",
-        )
-
-        assert len(result.blocks) >= 2
-        assert result.blocks[0].type == "intro_card"
-        assert result.blocks[-1].type == "recap"

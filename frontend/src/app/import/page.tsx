@@ -28,7 +28,9 @@ export default function ImportPage() {
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const canSubmit = goal && (sourceType === "bilibili" || sourceType === "youtube" ? url.trim() : pdfName);
+  const canSubmit = Boolean(
+    goal && (sourceType === "bilibili" || sourceType === "youtube" ? url.trim() : pdfName)
+  );
 
   const handleImport = async () => {
     if (!canSubmit) return;
@@ -50,7 +52,7 @@ export default function ImportPage() {
       addSource(source);
 
       if (source.task_id) {
-        // Add to task store and redirect — Dashboard will show progress
+        // Add to task store and redirect to the materials hub for progress tracking.
         addTask({
           taskId: source.task_id,
           sourceId: source.id,
@@ -58,10 +60,10 @@ export default function ImportPage() {
           sourceType,
           state: "PENDING",
         });
-        router.push("/");
+        router.push("/sources");
       } else {
-        // Source ready immediately, go to dashboard
-        router.push("/");
+        // Source ready immediately, return to the materials hub.
+        router.push("/sources");
       }
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : "导入失败，请检查链接或文件后重试");
@@ -249,8 +251,13 @@ export default function ImportPage() {
             </div>
           </div>
 
-          <Button size="lg" className="w-full" onClick={handleImport} disabled={!canSubmit}>
-            <Sparkles className="w-4 h-4" /> 生成学习路径
+          <Button size="lg" className="w-full" onClick={handleImport} disabled={!canSubmit || loading}>
+            {loading ? (
+              <Loader className="w-4 h-4 animate-spin" />
+            ) : (
+              <Sparkles className="w-4 h-4" />
+            )}{" "}
+            生成学习路径
           </Button>
         </div>
       </div>

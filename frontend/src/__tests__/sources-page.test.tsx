@@ -144,6 +144,7 @@ describe("/sources page", () => {
     });
 
     expect(screen.queryByRole("link", { name: "进入课程" })).not.toBeInTheDocument();
+    expect(screen.getByText("当前没有可进入的课程，请先查看失败原因。")).toBeInTheDocument();
   });
 
   it("polls active materials and updates the card and drawer state", async () => {

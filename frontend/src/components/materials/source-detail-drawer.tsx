@@ -217,7 +217,11 @@ export default function SourceDetailDrawer({
                 <ArrowRight className="w-4 h-4" />
               </Link>
             ) : (
-              <p className="text-sm text-gray-500">课程生成完成后，就可以从这里直接进入课程。</p>
+              <p className="text-sm text-gray-500">
+                {presentation.category === "error"
+                  ? "当前没有可进入的课程，请先查看失败原因。"
+                  : "课程生成完成后，就可以从这里直接进入课程。"}
+              </p>
             )}
           </div>
         </div>

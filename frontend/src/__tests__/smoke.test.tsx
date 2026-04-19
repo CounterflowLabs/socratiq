@@ -140,6 +140,49 @@ describe("Import Page", () => {
       ).toBeInTheDocument();
     });
   });
+
+  it("redirects successful imports to the materials hub", async () => {
+    const push = vi.fn();
+
+    vi.doMock("next/navigation", () => ({
+      useRouter: () => ({ push }),
+    }));
+
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          id: "src1",
+          type: "bilibili",
+          status: "pending",
+          task_id: "t1",
+        }),
+      text: () =>
+        Promise.resolve(
+          JSON.stringify({
+            id: "src1",
+            type: "bilibili",
+            status: "pending",
+            task_id: "t1",
+          })
+        ),
+    });
+
+    vi.resetModules();
+    const ImportPage = (await import("@/app/import/page")).default;
+    render(<ImportPage />);
+
+    fireEvent.change(
+      screen.getByPlaceholderText("https://www.bilibili.com/video/BV..."),
+      { target: { value: "https://www.bilibili.com/video/BV1test" } }
+    );
+    fireEvent.click(screen.getByRole("button", { name: /快速了解大意/ }));
+    fireEvent.click(screen.getByRole("button", { name: /生成学习路径/ }));
+
+    await waitFor(() => {
+      expect(push).toHaveBeenCalledWith("/sources");
+    });
+  });
 });
 
 // ─── Settings Tests ──────────────────────────────────
@@ -356,7 +399,7 @@ describe("Path Page", () => {
 
 describe("API Client", () => {
   it("createSourceFromURL calls fetch correctly", async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue({
+    const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: () =>
         Promise.resolve({
@@ -366,6 +409,7 @@ describe("API Client", () => {
           task_id: "t1",
         }),
     });
+    globalThis.fetch = fetchMock as typeof fetch;
 
     const { createSourceFromURL } = await import("@/lib/api");
     const result = await createSourceFromURL(
@@ -373,7 +417,7 @@ describe("API Client", () => {
     );
 
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-    const [url, options] = (globalThis.fetch as any).mock.calls[0];
+    const [url, options] = fetchMock.mock.calls[0] ?? [];
     expect(url).toContain("/api/v1/sources");
     expect(options.method).toBe("POST");
     expect(result.type).toBe("bilibili");

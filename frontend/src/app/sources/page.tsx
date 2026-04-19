@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { FileText, Filter, Loader, Play, Plus, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -16,7 +16,7 @@ import {
 
 const STATUS_LABELS: Record<MaterialStatusFilter, string> = {
   all: "全部状态",
-  ready: "已就绪",
+  ready: "已完成",
   processing: "处理中",
   error: "失败",
 };
@@ -35,32 +35,7 @@ export default function SourcesPage() {
   const [statusFilter, setStatusFilter] = useState<MaterialStatusFilter>("all");
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
 
-  useEffect(() => {
-    void loadSources();
-  }, []);
-
-  useEffect(() => {
-    const hasActiveSource = sources.some((source) => isMaterialActive(source));
-    if (!hasActiveSource) {
-      return;
-    }
-
-    const interval = window.setInterval(() => {
-      void loadSources({ background: true });
-    }, 3000);
-
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [sources]);
-
-  useEffect(() => {
-    if (selectedSourceId && !sources.some((source) => source.id === selectedSourceId)) {
-      setSelectedSourceId(null);
-    }
-  }, [selectedSourceId, sources]);
-
-  async function loadSources(options?: { background?: boolean }) {
+  const loadSources = useCallback(async (options?: { background?: boolean }) => {
     if (!options?.background) {
       setLoading(true);
     }
@@ -76,7 +51,32 @@ export default function SourcesPage() {
         setLoading(false);
       }
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    void loadSources();
+  }, [loadSources]);
+
+  useEffect(() => {
+    const hasActiveSource = sources.some((source) => isMaterialActive(source));
+    if (!hasActiveSource) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      void loadSources({ background: true });
+    }, 3000);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [loadSources, sources]);
+
+  useEffect(() => {
+    if (selectedSourceId && !sources.some((source) => source.id === selectedSourceId)) {
+      setSelectedSourceId(null);
+    }
+  }, [selectedSourceId, sources]);
 
   const normalizedQuery = query.trim().toLowerCase();
   const filteredSources = sources.filter((source) => {

@@ -9,6 +9,10 @@ import { Sidebar } from "@/components/sidebar";
 const SIDEBAR_PAGES = ["/", "/import", "/settings", "/sources"];
 export const SIDEBAR_DESKTOP_QUERY = "(min-width: 1280px)";
 
+function isDedicatedLearnRoute(pathname: string): boolean {
+  return pathname === "/learn" || pathname.startsWith("/learn/");
+}
+
 // Use useSyncExternalStore for media queries to avoid React Compiler issues
 function useMediaQuery(query: string): boolean {
   const subscribe = useCallback(
@@ -45,7 +49,7 @@ export function LayoutInner({ children }: { children: React.ReactNode }) {
   const isDesktop = useMediaQuery(SIDEBAR_DESKTOP_QUERY);
   const showDesktopSidebar = SIDEBAR_PAGES.includes(pathname);
   const hideSidebarEntirely =
-    pathname === "/login" || pathname === "/setup" || pathname.startsWith("/learn");
+    pathname === "/login" || pathname === "/setup" || isDedicatedLearnRoute(pathname);
   const mobileOpen = mobileOpenPath === pathname;
 
   if (hideSidebarEntirely) {

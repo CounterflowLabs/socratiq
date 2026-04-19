@@ -3,7 +3,7 @@
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, BookOpen, ChevronLeft, ChevronRight, Languages, Loader2, Play } from "lucide-react";
+import { ArrowLeft, BookOpen, ChevronLeft, ChevronRight, Languages, Loader2 } from "lucide-react";
 import { clsx } from "clsx";
 
 import CourseOutline from "@/components/learn/course-outline";
@@ -18,6 +18,7 @@ import {
   translateSection,
   type CourseDetailResponse,
   type SectionResponse,
+  type SourceSummary,
 } from "@/lib/api";
 
 interface LessonSection {
@@ -62,6 +63,15 @@ function getVideoEmbed(section: SectionResponse, course: CourseDetailResponse) {
   }
 
   return null;
+}
+
+function isPdfSource(source: SourceSummary): boolean {
+  return source.type === "pdf" || source.url?.toLowerCase().endsWith(".pdf") === true;
+}
+
+function isVideoSource(source: SourceSummary): boolean {
+  if (source.type === "youtube" || source.type === "bilibili") return true;
+  return /(?:youtube\.com|youtu\.be|bilibili\.com)/i.test(source.url ?? "");
 }
 
 function LearnPageInner() {
@@ -211,6 +221,19 @@ function LearnPageInner() {
   const totalCount = sections.length;
   const progressLabel = totalCount > 0 ? `进度 ${completedCount}/${totalCount}` : "准备中";
   const rawSectionContent = section?.content as unknown;
+  const currentSource =
+    course?.sources.find((item) => item.id === section?.source_id) ?? course?.sources[0] ?? null;
+  const videoSource =
+    (currentSource && isVideoSource(currentSource) ? currentSource : null) ??
+    course?.sources.find((item) => isVideoSource(item)) ??
+    null;
+  const pdfSource =
+    (currentSource && isPdfSource(currentSource) ? currentSource : null) ??
+    course?.sources.find((item) => isPdfSource(item)) ??
+    null;
+  const referenceSources = (course?.sources ?? []).filter(
+    (item) => item.id !== videoSource?.id && item.id !== pdfSource?.id
+  );
 
   const lessonStage = (
     <section className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm">
@@ -252,29 +275,7 @@ function LearnPageInner() {
         </div>
       </div>
 
-      <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
-        <div className="overflow-hidden rounded-3xl bg-slate-950">
-          <div className="relative w-full pb-[56.25%]">
-            {videoEmbed ? (
-              <iframe
-                src={videoEmbed.src}
-                className="absolute inset-0 h-full w-full"
-                allowFullScreen
-                sandbox="allow-scripts allow-same-origin allow-popups"
-              />
-            ) : (
-              <div className="absolute inset-0 flex items-center justify-center">
-                <div className="text-center text-white">
-                  <div className="mx-auto mb-3 flex h-16 w-16 items-center justify-center rounded-full bg-white/15">
-                    <Play className="ml-1 h-8 w-8" />
-                  </div>
-                  <p className="text-sm text-white/70">{course?.title ?? "暂无视频"}</p>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-
+      <div className="p-4">
         <div className="min-w-0 overflow-hidden rounded-3xl border border-slate-200 bg-slate-50">
           {translationEstimate && !showTranslation ? (
             <div className="border-b border-blue-100 bg-blue-50 px-4 py-3">
@@ -328,7 +329,7 @@ function LearnPageInner() {
           <div
             ref={lessonScrollRef}
             onScroll={handleLessonScroll}
-            className="max-h-[70vh] overflow-y-auto px-4 py-4"
+            className="max-h-[75vh] overflow-y-auto px-4 py-4"
           >
             {hasLesson ? (
               <LessonRenderer lesson={lessonData} onTimestampClick={() => {}} />
@@ -396,6 +397,9 @@ function LearnPageInner() {
             progressLabel={progressLabel}
             onOpenTutor={() => setTutorOpen(true)}
             onClose={() => setAsideOpen(false)}
+            videoEmbed={videoEmbed}
+            pdfSource={pdfSource}
+            referenceSources={referenceSources}
           />
         }
       />

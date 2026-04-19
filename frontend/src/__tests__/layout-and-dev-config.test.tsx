@@ -1,11 +1,15 @@
-import { render } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import nextConfig from "../../next.config";
 import { LayoutInner, SIDEBAR_DESKTOP_QUERY } from "@/app/layout";
 
+const { mockPathname } = vi.hoisted(() => ({
+  mockPathname: vi.fn(),
+}));
+
 vi.mock("next/navigation", () => ({
-  usePathname: () => "/sources",
+  usePathname: () => mockPathname(),
 }));
 
 function installMatchMedia(width: number) {
@@ -32,6 +36,7 @@ describe("frontend dev config", () => {
 describe("app layout responsiveness", () => {
   beforeEach(() => {
     installMatchMedia(1082);
+    mockPathname.mockReturnValue("/sources");
   });
 
   it("does not reserve desktop sidebar space on mid-width viewports", () => {
@@ -44,5 +49,17 @@ describe("app layout responsiveness", () => {
     const main = container.querySelector("main");
     expect(main).not.toBeNull();
     expect(main).toHaveStyle({ marginLeft: "0px" });
+  });
+
+  it("does not treat /learners as a dedicated learn route", () => {
+    mockPathname.mockReturnValue("/learners");
+
+    render(
+      <LayoutInner>
+        <div>学习者列表</div>
+      </LayoutInner>
+    );
+
+    expect(screen.getByLabelText("打开菜单")).toBeInTheDocument();
   });
 });

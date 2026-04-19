@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import React, { Suspense } from "react";
 
 import { LayoutInner, SIDEBAR_DESKTOP_QUERY } from "@/app/layout";
@@ -59,6 +59,59 @@ function SuspenseWrapper({ children }: { children: React.ReactNode }) {
 }
 
 describe("Learn page shell", () => {
+  const courseResponse = {
+    id: "c1",
+    title: "测试课程",
+    description: "desc",
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    sources: [
+      {
+        id: "video-1",
+        type: "youtube",
+        url: "https://www.youtube.com/watch?v=demo-video",
+      },
+      {
+        id: "pdf-1",
+        type: "pdf",
+        url: "https://example.com/lesson.pdf",
+      },
+      {
+        id: "ref-1",
+        type: "article",
+        url: "https://example.com/reference",
+      },
+    ],
+    sections: [
+      {
+        id: "s1",
+        title: "第一章",
+        order_index: 0,
+        difficulty: 2,
+        source_id: "video-1",
+        content: {
+          lesson: {
+            title: "课程正文",
+            summary: "课程摘要",
+            sections: [
+              {
+                heading: "从正文开始",
+                content: "这是本节的正文内容。",
+                timestamp: 12,
+                code_snippets: [],
+                key_concepts: [],
+                diagrams: [],
+                interactive_steps: null,
+              },
+            ],
+          },
+        },
+        source_start: null,
+        source_end: null,
+      },
+    ],
+  };
+
   beforeEach(() => {
     installMatchMedia(1440);
   });
@@ -71,25 +124,7 @@ describe("Learn page shell", () => {
 
   it("renders the dedicated learn shell without the global nav or legacy tabs", async () => {
     globalThis.fetch = mockFetch({
-      "/api/v1/courses/c1": {
-        id: "c1",
-        title: "测试课程",
-        description: "desc",
-        created_at: "2026-01-01T00:00:00Z",
-        updated_at: "2026-01-01T00:00:00Z",
-        sources: [],
-        sections: [
-          {
-            id: "s1",
-            title: "第一章",
-            order_index: 0,
-            difficulty: 2,
-            content: {},
-            source_start: null,
-            source_end: null,
-          },
-        ],
-      },
+      "/api/v1/courses/c1": courseResponse,
     }) as typeof fetch;
 
     vi.resetModules();
@@ -110,5 +145,79 @@ describe("Learn page shell", () => {
 
     expect(screen.queryByText("资料")).not.toBeInTheDocument();
     expect(screen.queryByText("Lab")).not.toBeInTheDocument();
+  });
+
+  it("keeps source video and pdf in the study aside instead of the main stage", async () => {
+    globalThis.fetch = mockFetch({
+      "/api/v1/courses/c1": courseResponse,
+    }) as typeof fetch;
+
+    vi.resetModules();
+    const LearnPage = (await import("@/app/learn/page")).default;
+
+    const { container } = render(
+      <LayoutInner>
+        <SuspenseWrapper>
+          <LearnPage />
+        </SuspenseWrapper>
+      </LayoutInner>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("课程目录")).toBeInTheDocument();
+      expect(screen.getByText("这是本节的正文内容。")).toBeInTheDocument();
+    });
+
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(screen.queryByText("原视频")).not.toBeInTheDocument();
+    expect(screen.queryByText("原 PDF")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /打开学习辅助区/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTitle("课程原视频")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "原 PDF" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "参考资料" })).toBeInTheDocument();
+    });
+  });
+
+  it("lets desktop users close and reopen the study aside", async () => {
+    globalThis.fetch = mockFetch({
+      "/api/v1/courses/c1": courseResponse,
+    }) as typeof fetch;
+
+    vi.resetModules();
+    const LearnPage = (await import("@/app/learn/page")).default;
+
+    render(
+      <LayoutInner>
+        <SuspenseWrapper>
+          <LearnPage />
+        </SuspenseWrapper>
+      </LayoutInner>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /打开学习辅助区/i })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /打开学习辅助区/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /关闭学习辅助区/i })).toBeInTheDocument();
+      expect(screen.getByTitle("课程原视频")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /关闭学习辅助区/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByTitle("课程原视频")).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /打开学习辅助区/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTitle("课程原视频")).toBeInTheDocument();
+    });
   });
 });

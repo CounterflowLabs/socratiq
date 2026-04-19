@@ -421,8 +421,10 @@ async def test_course_generation_reuses_source_metadata_without_regenerating(
     def fail_if_called(*_args, **_kwargs):
         raise AssertionError("lesson/lab generators should not run during course assembly")
 
-    monkeypatch.setattr(course_generation, "LessonGenerator", fail_if_called, raising=False)
-    monkeypatch.setattr(course_generation, "LabGenerator", fail_if_called, raising=False)
+    from app.services import lab_generator, lesson_generator
+
+    monkeypatch.setattr(lesson_generator, "LessonGenerator", fail_if_called)
+    monkeypatch.setattr(lab_generator, "LabGenerator", fail_if_called)
 
     class FakeTask:
         def update_state(self, *_args, **_kwargs):

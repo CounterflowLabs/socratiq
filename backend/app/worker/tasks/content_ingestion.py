@@ -236,6 +236,7 @@ async def _ingest_source_async(task, source_id: str) -> dict:
     from app.db.models.source import Source
     from app.services.content_analyzer import ContentAnalyzer
     from app.services.embedding import EmbeddingService
+    from app.services.teaching_asset_planner import TeachingAssetPlanner
 
     resources = _create_worker_resources()
     sid = UUID(source_id)
@@ -293,6 +294,15 @@ async def _ingest_source_async(task, source_id: str) -> dict:
                     len(analysis.chunks),
                 )
 
+                planner = TeachingAssetPlanner()
+                asset_plan = planner.plan(
+                    source_title=source.title or "Untitled",
+                    source_type=source.type,
+                    overall_summary=analysis.overall_summary,
+                    chunk_topics=[chunk.topic for chunk in analysis.chunks],
+                    has_code=any(chunk.has_code for chunk in analysis.chunks),
+                )
+
                 # === STEP 3: GENERATE LESSONS ===
                 await _update_status(db, sid, "generating_lessons")
                 task.update_state(state="PROGRESS", meta={"stage": "generating_lessons"})
@@ -327,48 +337,61 @@ async def _ingest_source_async(task, source_id: str) -> dict:
                         len(lesson_content.sections),
                     )
 
-                # === STEP 4: GENERATE LABS ===
-                await _update_status(db, sid, "generating_labs")
-                task.update_state(state="PROGRESS", meta={"stage": "generating_labs"})
-
-                from app.db.models.lab import Lab
-                from app.services.lab_generator import LabGenerator
-
-                lab_gen = LabGenerator(lesson_provider)
                 labs_by_page: dict[int, dict | None] = {}
+                graph_by_page: dict[int, dict[str, object]] = {}
                 for page_idx, lesson_content in lesson_by_page.items():
-                    all_snippets = []
+                    key_concepts: list[str] = []
                     for section in lesson_content.sections:
-                        all_snippets.extend(section.code_snippets)
+                        key_concepts.extend(section.key_concepts)
+                    deduped_concepts = list(dict.fromkeys(key_concepts))
+                    graph_by_page[page_idx] = {
+                        "current": deduped_concepts[:2],
+                        "prerequisites": analysis.suggested_prerequisites[:3],
+                        "unlocks": deduped_concepts[2:5],
+                        "section_anchor": page_idx,
+                    }
 
-                    if not all_snippets:
-                        labs_by_page[page_idx] = None
-                        continue
+                if asset_plan.lab_mode == "inline":
+                    # === STEP 4: GENERATE LABS ===
+                    await _update_status(db, sid, "generating_labs")
+                    task.update_state(state="PROGRESS", meta={"stage": "generating_labs"})
 
-                    lang_counts: dict[str, int] = {}
-                    for snippet in all_snippets:
-                        lang_counts[snippet.language] = (
-                            lang_counts.get(snippet.language, 0) + 1
-                        )
-                    language = max(lang_counts, key=lang_counts.__getitem__)
+                    from app.services.lab_generator import LabGenerator
 
-                    lab_result = await lab_gen.generate(
-                        code_snippets=all_snippets,
-                        lesson_context=lesson_content.summary,
-                        language=language,
-                    )
-                    labs_by_page[page_idx] = lab_result
-                    if lab_result:
-                        logger.info(
-                            "Generated lab for page %s: %s",
-                            page_idx,
-                            lab_result.get("title"),
+                    lab_gen = LabGenerator(lesson_provider)
+                    for page_idx, lesson_content in lesson_by_page.items():
+                        all_snippets = []
+                        for section in lesson_content.sections:
+                            all_snippets.extend(section.code_snippets)
+
+                        if not all_snippets:
+                            labs_by_page[page_idx] = None
+                            continue
+
+                        lang_counts: dict[str, int] = {}
+                        for snippet in all_snippets:
+                            lang_counts[snippet.language] = (
+                                lang_counts.get(snippet.language, 0) + 1
+                            )
+                        language = max(lang_counts, key=lang_counts.__getitem__)
+
+                        lab_result = await lab_gen.generate(
+                            code_snippets=all_snippets,
+                            lesson_context=lesson_content.summary,
+                            language=language,
                         )
-                    else:
-                        logger.info(
-                            "No lab generated for page %s (low confidence or error)",
-                            page_idx,
-                        )
+                        labs_by_page[page_idx] = lab_result
+                        if lab_result:
+                            logger.info(
+                                "Generated lab for page %s: %s",
+                                page_idx,
+                                lab_result.get("title"),
+                            )
+                        else:
+                            logger.info(
+                                "No lab generated for page %s (low confidence or error)",
+                                page_idx,
+                            )
 
                 # === STEP 5: STORE ===
                 await _update_status(db, sid, "storing")
@@ -426,9 +449,14 @@ async def _ingest_source_async(task, source_id: str) -> dict:
                     "chunk_count": len(analysis.chunks),
                     "estimated_study_minutes": analysis.estimated_study_minutes,
                     "suggested_prerequisites": analysis.suggested_prerequisites,
+                    "asset_plan": asset_plan.model_dump(),
                     "lesson_by_page": {
                         str(page_idx): lesson.model_dump()
                         for page_idx, lesson in lesson_by_page.items()
+                    },
+                    "graph_by_page": {
+                        str(page_idx): graph
+                        for page_idx, graph in graph_by_page.items()
                     },
                     "labs_by_page": {
                         str(page_idx): lab_data

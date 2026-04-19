@@ -2,18 +2,23 @@
 
 import json
 import uuid
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 
 from app.api.deps import LOCAL_USER_ID
+from app.db.models.course import Course, CourseSource, Section
+from app.db.models.lab import Lab
 from app.db.models.source import Source
 from app.db.models.content_chunk import ContentChunk
 from app.db.models.conversation import Conversation
 from app.db.models.message import Message
 from app.services.llm.base import ContentBlock, LLMResponse, StreamChunk
+from app.worker.tasks import course_generation
 
 
 # --- Model Config Tests ---------------------------------------------------
@@ -294,6 +299,163 @@ class TestCourses:
             assert res.status_code == 422
         finally:
             del the_app.dependency_overrides[get_model_router]
+
+
+@pytest.mark.asyncio
+async def test_course_generation_reuses_source_metadata_without_regenerating(
+    monkeypatch, db_session, demo_user
+):
+    source = Source(
+        type="youtube",
+        url="https://www.youtube.com/watch?v=reuse",
+        title="Reusable Source",
+        status="ready",
+        metadata_={
+            "asset_plan": {
+                "lab_mode": "inline",
+                "graph_mode": "inline_and_overview",
+                "study_surface": "reader",
+            },
+            "lesson_by_page": {
+                "0": {
+                    "title": "Reusable Page",
+                    "summary": "Persisted lesson summary",
+                    "sections": [
+                        {
+                            "code_snippets": [],
+                            "key_concepts": ["attention"],
+                        }
+                    ],
+                    "blocks": [],
+                }
+            },
+            "graph_by_page": {
+                "0": {
+                    "current": ["attention"],
+                    "prerequisites": ["embeddings"],
+                    "unlocks": ["decoding"],
+                    "section_anchor": 0,
+                }
+            },
+            "labs_by_page": {
+                "0": {
+                    "title": "Inline Lab",
+                    "description": "Use the persisted lab",
+                    "language": "python",
+                    "starter_code": {"files": []},
+                    "test_code": {"files": []},
+                    "solution_code": {"files": []},
+                    "run_instructions": "pytest",
+                    "confidence": 0.75,
+                }
+            },
+        },
+        created_by=demo_user.id,
+    )
+    db_session.add(source)
+    await db_session.flush()
+
+    db_session.add(
+        ContentChunk(
+            source_id=source.id,
+            text="persisted chunk",
+            metadata_={"page_index": 0, "page_title": "Reusable Page"},
+        )
+    )
+
+    from app.db.models.source_task import SourceTask
+
+    db_session.add(
+        SourceTask(
+            source_id=source.id,
+            task_type="course_generation",
+            status="pending",
+            celery_task_id="course-task-reuse",
+        )
+    )
+    await db_session.flush()
+
+    class FakeAsyncContext:
+        def __init__(self, session):
+            self._session = session
+
+        async def __aenter__(self):
+            return self._session
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeSessionFactory:
+        def __init__(self, session):
+            self._session = session
+
+        def __call__(self):
+            return FakeAsyncContext(self._session)
+
+    class FakeEngine:
+        async def dispose(self):
+            return None
+
+    fake_provider = SimpleNamespace(
+        chat=AsyncMock(
+            return_value=SimpleNamespace(
+                content=[SimpleNamespace(type="text", text="Persisted course description.")]
+            )
+        )
+    )
+    fake_resources = SimpleNamespace(
+        settings=SimpleNamespace(),
+        engine=FakeEngine(),
+        session_factory=FakeSessionFactory(db_session),
+        model_router=SimpleNamespace(
+            get_provider=AsyncMock(return_value=fake_provider)
+        ),
+    )
+
+    monkeypatch.setattr(
+        course_generation,
+        "_create_worker_resources",
+        lambda: fake_resources,
+    )
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("lesson/lab generators should not run during course assembly")
+
+    monkeypatch.setattr(course_generation, "LessonGenerator", fail_if_called, raising=False)
+    monkeypatch.setattr(course_generation, "LabGenerator", fail_if_called, raising=False)
+
+    class FakeTask:
+        def update_state(self, *_args, **_kwargs):
+            return None
+
+    result = await course_generation._generate_course_async(
+        FakeTask(),
+        str(source.id),
+        goal="overview",
+        user_id=str(demo_user.id),
+    )
+
+    created_course = await db_session.get(Course, uuid.UUID(result["course_id"]))
+    sections = (
+        await db_session.execute(
+            select(Section).where(Section.course_id == created_course.id)
+        )
+    ).scalars().all()
+    labs = (
+        await db_session.execute(
+            select(Lab)
+            .join(Section, Lab.section_id == Section.id)
+            .where(Section.course_id == created_course.id)
+        )
+    ).scalars().all()
+
+    assert result["status"] == "ready"
+    assert created_course is not None
+    assert len(sections) == 1
+    assert sections[0].content["lesson"]["summary"] == "Persisted lesson summary"
+    assert sections[0].content["graph_card"]["current"] == ["attention"]
+    assert sections[0].content["lab_mode"] == "inline"
+    assert len(labs) == 1
 
 
 # --- Chat & Conversation Tests --------------------------------------------

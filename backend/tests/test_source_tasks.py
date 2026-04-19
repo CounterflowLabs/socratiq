@@ -172,7 +172,46 @@ async def test_generate_course_marks_task_success_with_course_id(
         url="https://www.youtube.com/watch?v=test",
         title="Generated Course Source",
         status="ready",
-        metadata_={},
+        metadata_={
+            "asset_plan": {
+                "lab_mode": "inline",
+                "graph_mode": "inline_and_overview",
+                "study_surface": "reader",
+            },
+            "lesson_by_page": {
+                "0": {
+                    "title": "Page 1",
+                    "summary": "lesson summary",
+                    "sections": [
+                        {
+                            "code_snippets": [],
+                            "key_concepts": ["testing"],
+                        }
+                    ],
+                    "blocks": [],
+                }
+            },
+            "graph_by_page": {
+                "0": {
+                    "current": ["testing"],
+                    "prerequisites": ["python basics"],
+                    "unlocks": ["fixtures"],
+                    "section_anchor": 0,
+                }
+            },
+            "labs_by_page": {
+                "0": {
+                    "title": "Testing Lab",
+                    "description": "Write a test",
+                    "language": "python",
+                    "starter_code": {"files": []},
+                    "test_code": {"files": []},
+                    "solution_code": {"files": []},
+                    "run_instructions": "pytest",
+                    "confidence": 0.9,
+                }
+            },
+        },
         created_by=demo_user.id,
     )
     db_session.add(source)
@@ -236,39 +275,6 @@ async def test_generate_course_marks_task_success_with_course_id(
         course_generation,
         "_create_worker_resources",
         lambda: fake_resources,
-    )
-
-    class FakeLessonContent:
-        summary = "lesson summary"
-        sections = [SimpleNamespace(code_snippets=[], key_concepts=["testing"])]
-
-        def model_dump(self):
-            return {
-                "summary": self.summary,
-                "sections": [{"code_snippets": [], "key_concepts": ["testing"]}],
-            }
-
-    class FakeLessonGenerator:
-        def __init__(self, *_args, **_kwargs):
-            pass
-
-        async def generate(self, *_args, **_kwargs):
-            return FakeLessonContent()
-
-    class FakeLabGenerator:
-        def __init__(self, *_args, **_kwargs):
-            pass
-
-        async def generate(self, *_args, **_kwargs):
-            return None
-
-    monkeypatch.setattr(
-        "app.services.lesson_generator.LessonGenerator",
-        FakeLessonGenerator,
-    )
-    monkeypatch.setattr(
-        "app.services.lab_generator.LabGenerator",
-        FakeLabGenerator,
     )
 
     task_updates: list[tuple[str, dict]] = []

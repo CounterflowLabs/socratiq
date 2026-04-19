@@ -357,6 +357,209 @@ async def test_ingest_source_queues_course_generation_when_pipeline_finishes(
 
 
 @pytest.mark.asyncio
+async def test_ingestion_persists_asset_plan_and_graph_by_page(
+    monkeypatch, db_session, demo_user
+):
+    source = Source(
+        type="youtube",
+        url="https://www.youtube.com/watch?v=test-assets",
+        title="Pending source",
+        status="pending",
+        metadata_={},
+        created_by=demo_user.id,
+    )
+    db_session.add(source)
+    await db_session.flush()
+
+    db_session.add(
+        SourceTask(
+            source_id=source.id,
+            task_type="source_processing",
+            status="pending",
+            celery_task_id="processing-task-assets",
+        )
+    )
+    await db_session.flush()
+
+    class FakeAsyncContext:
+        def __init__(self, session):
+            self._session = session
+
+        async def __aenter__(self):
+            return self._session
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeSessionFactory:
+        def __init__(self, session):
+            self._session = session
+
+        def __call__(self):
+            return FakeAsyncContext(self._session)
+
+    class FakeEngine:
+        async def dispose(self):
+            return None
+
+    fake_resources = SimpleNamespace(
+        settings=SimpleNamespace(upload_dir="/tmp"),
+        engine=FakeEngine(),
+        session_factory=FakeSessionFactory(db_session),
+        model_router=SimpleNamespace(get_provider=AsyncMock(return_value=SimpleNamespace())),
+    )
+
+    monkeypatch.setattr(
+        content_ingestion,
+        "_create_worker_resources",
+        lambda: fake_resources,
+    )
+    monkeypatch.setattr(content_ingestion, "_get_whisper_config", AsyncMock(return_value={}))
+    monkeypatch.setattr(
+        content_ingestion,
+        "_get_bilibili_credential",
+        AsyncMock(return_value=None),
+    )
+
+    class FakeExtractor:
+        async def extract(self, _input):
+            return SimpleNamespace(
+                title="Intro to Attention",
+                metadata={"duration_seconds": 42},
+                chunks=[
+                    SimpleNamespace(raw_text="attention chunk"),
+                    SimpleNamespace(raw_text="decoder chunk"),
+                ],
+            )
+
+    monkeypatch.setattr(
+        content_ingestion,
+        "_create_extractor",
+        lambda *args, **kwargs: FakeExtractor(),
+    )
+
+    analysis = SimpleNamespace(
+        concepts=[],
+        chunks=[
+            SimpleNamespace(
+                raw_text="attention chunk",
+                metadata={"page_index": 0, "page_title": "Attention"},
+                topic="Attention",
+                summary="attention summary",
+                concepts=[],
+                difficulty=1,
+                key_terms=["attention"],
+                has_code=False,
+                has_formula=False,
+            ),
+            SimpleNamespace(
+                raw_text="decoder chunk",
+                metadata={"page_index": 1, "page_title": "Decoder"},
+                topic="Decoder",
+                summary="decoder summary",
+                concepts=[],
+                difficulty=2,
+                key_terms=["decoder"],
+                has_code=False,
+                has_formula=False,
+            ),
+        ],
+        overall_summary="Transformer overview",
+        overall_difficulty=2,
+        estimated_study_minutes=12,
+        suggested_prerequisites=["Vectors", "Embeddings"],
+    )
+
+    class FakeAnalyzer:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def analyze(self, **_kwargs):
+            return analysis
+
+    class FakeLessonContent:
+        def __init__(self, title, summary, key_concepts):
+            self.title = title
+            self.summary = summary
+            self.sections = [
+                SimpleNamespace(code_snippets=[], key_concepts=key_concepts)
+            ]
+
+        def model_dump(self):
+            return {
+                "title": self.title,
+                "summary": self.summary,
+                "sections": [
+                    {
+                        "code_snippets": [],
+                        "key_concepts": self.sections[0].key_concepts,
+                    }
+                ],
+                "blocks": [],
+            }
+
+    class FakeLessonGenerator:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def generate(self, chunk_texts, page_title, *_args, **_kwargs):
+            summary = f"{page_title} summary from {len(chunk_texts)} chunks"
+            return FakeLessonContent(page_title, summary, [page_title.lower()])
+
+    class FakeEmbeddingService:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def embed_and_store_chunks(self, *_args, **_kwargs):
+            return None
+
+        async def embed_and_store_concepts(self, *_args, **_kwargs):
+            return None
+
+    monkeypatch.setattr("app.services.content_analyzer.ContentAnalyzer", FakeAnalyzer)
+    monkeypatch.setattr(
+        "app.services.lesson_generator.LessonGenerator",
+        FakeLessonGenerator,
+    )
+    monkeypatch.setattr(
+        "app.services.embedding.EmbeddingService",
+        FakeEmbeddingService,
+    )
+    monkeypatch.setattr("app.services.source_tasks.uuid4", lambda: "course-task-assets")
+    monkeypatch.setattr(
+        content_ingestion,
+        "dispatch_course_generation",
+        lambda **kwargs: SimpleNamespace(id=kwargs["task_id"]),
+    )
+
+    class FakeTask:
+        def update_state(self, *_args, **_kwargs):
+            return None
+
+    result = await content_ingestion._ingest_source_async(FakeTask(), str(source.id))
+
+    await db_session.refresh(source)
+
+    assert result["status"] == "ready"
+    assert source.metadata_["asset_plan"]["graph_mode"] == "inline_and_overview"
+    assert source.metadata_["asset_plan"]["lab_mode"] == "none"
+    assert source.metadata_["graph_by_page"] == {
+        "0": {
+            "current": ["attention"],
+            "prerequisites": ["Vectors", "Embeddings"],
+            "unlocks": [],
+            "section_anchor": 0,
+        },
+        "1": {
+            "current": ["decoder"],
+            "prerequisites": ["Vectors", "Embeddings"],
+            "unlocks": [],
+            "section_anchor": 1,
+        },
+    }
+
+
+@pytest.mark.asyncio
 async def test_clone_source_queues_course_generation_when_clone_finishes(
     monkeypatch, db_session, demo_user
 ):

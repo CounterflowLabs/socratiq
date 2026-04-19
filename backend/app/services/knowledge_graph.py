@@ -32,6 +32,11 @@ class KnowledgeGraphEdge(BaseModel):
     relationship: str = "prerequisite"
 
 
+class KnowledgeGraphResponse(BaseModel):
+    nodes: list[KnowledgeGraphNode]
+    edges: list[KnowledgeGraphEdge]
+
+
 class KnowledgeGraphService:
     def __init__(self, db: AsyncSession):
         self._db = db
@@ -74,7 +79,7 @@ class KnowledgeGraphService:
         course_id: UUID,
         user_id: UUID,
         max_depth: int = 2,
-    ) -> dict:
+    ) -> KnowledgeGraphResponse:
         """Build knowledge graph for a course.
 
         Args:
@@ -83,7 +88,7 @@ class KnowledgeGraphService:
             max_depth: Unused depth limit (reserved for future traversal logic).
 
         Returns:
-            Dict with ``nodes`` and ``edges`` lists.
+            Knowledge graph payload with ``nodes`` and ``edges`` lists.
         """
         # Resolve source_ids for this course, then concept_ids linked to those sources
         source_ids_subq = select(CourseSource.source_id).where(
@@ -99,15 +104,9 @@ class KnowledgeGraphService:
         concepts = result.scalars().all()
 
         if not concepts:
-            return {"nodes": [], "edges": []}
+            return KnowledgeGraphResponse(nodes=[], edges=[])
 
         concept_ids_set = {c.id for c in concepts}
-        prerequisite_ids = {
-            prereq_id
-            for concept in concepts
-            for prereq_id in (concept.prerequisites or [])
-            if prereq_id in concept_ids_set
-        }
         nodes: list[KnowledgeGraphNode] = []
         edges: list[KnowledgeGraphEdge] = []
 
@@ -154,7 +153,6 @@ class KnowledgeGraphService:
                     label=concept.name,
                     category=concept.category,
                     description=concept.description,
-                    kind="current" if concept.id not in prerequisite_ids else "related",
                     mastery=round(mastery, 2),
                 )
             )
@@ -170,7 +168,4 @@ class KnowledgeGraphService:
                             )
                         )
 
-        return {
-            "nodes": [n.model_dump() for n in nodes],
-            "edges": [e.model_dump() for e in edges],
-        }
+        return KnowledgeGraphResponse(nodes=nodes, edges=edges)

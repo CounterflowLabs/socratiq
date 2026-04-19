@@ -8,18 +8,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_local_user
 from app.db.models.user import User
-from app.services.knowledge_graph import KnowledgeGraphService
+from app.services.knowledge_graph import KnowledgeGraphResponse, KnowledgeGraphService
 
 router = APIRouter(prefix="/api/v1/courses", tags=["knowledge-graph"])
 
 
-@router.get("/{course_id}/knowledge-graph")
+@router.get("/{course_id}/knowledge-graph", response_model=KnowledgeGraphResponse)
 async def get_knowledge_graph(
     course_id: uuid.UUID,
     max_depth: int = 2,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     user: Annotated[User, Depends(get_local_user)] = None,
-):
+) -> KnowledgeGraphResponse:
     """Return the knowledge graph (nodes + edges) for a course.
 
     Args:

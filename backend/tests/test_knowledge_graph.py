@@ -56,7 +56,7 @@ class TestKnowledgeGraphPayload:
         }
 
     @pytest.mark.asyncio
-    async def test_get_graph_includes_description_and_reasonable_kind(
+    async def test_get_graph_includes_description_and_defaults_kind_to_related(
         self, db_session, demo_user
     ):
         source = Source(
@@ -104,12 +104,12 @@ class TestKnowledgeGraphPayload:
         await db_session.flush()
 
         graph = await KnowledgeGraphService(db_session).get_graph(course.id, demo_user.id)
-        nodes = {node["label"]: node for node in graph["nodes"]}
+        nodes = {node.label: node for node in graph.nodes}
 
-        assert nodes["Embeddings"]["description"] == "Vector representations of tokens."
-        assert nodes["Embeddings"]["kind"] == "related"
-        assert nodes["Embeddings"]["section_id"] is None
+        assert nodes["Embeddings"].description == "Vector representations of tokens."
+        assert nodes["Embeddings"].kind == "related"
+        assert nodes["Embeddings"].section_id is None
 
-        assert nodes["Attention"]["description"] == "Mechanism for weighting token relationships."
-        assert nodes["Attention"]["kind"] == "current"
-        assert nodes["Attention"]["section_id"] is None
+        assert nodes["Attention"].description == "Mechanism for weighting token relationships."
+        assert nodes["Attention"].kind == "related"
+        assert nodes["Attention"].section_id is None

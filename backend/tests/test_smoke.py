@@ -11,6 +11,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 
 from app.api.deps import LOCAL_USER_ID
+from app.db.models.concept import Concept, ConceptSource
 from app.db.models.course import Course, CourseSource, Section
 from app.db.models.lab import Lab
 from app.db.models.source import Source
@@ -365,6 +366,86 @@ class TestCourses:
         ]
         assert sections_by_title["Graph Section"]["content"]["lab_mode"] == "inline"
         assert sections_by_title["Empty Content Section"]["content"] == {}
+
+    @pytest.mark.asyncio
+    async def test_knowledge_graph_endpoint_returns_rich_node_payload(
+        self, client: AsyncClient, db_session, demo_user
+    ):
+        source = Source(
+            type="youtube",
+            title="Graph Source",
+            status="ready",
+            url="https://example.com/graph-api",
+            created_by=demo_user.id,
+        )
+        db_session.add(source)
+        await db_session.flush()
+
+        course = Course(
+            title="Graph API Course",
+            description="Course for knowledge graph API smoke test.",
+            created_by=demo_user.id,
+        )
+        db_session.add(course)
+        await db_session.flush()
+
+        db_session.add(CourseSource(course_id=course.id, source_id=source.id))
+
+        prerequisite = Concept(
+            name="Embeddings API",
+            description="Vector representations exposed by the API.",
+            category="foundation",
+            prerequisites=[],
+        )
+        current = Concept(
+            name="Attention API",
+            description="Token weighting concept exposed by the API.",
+            category="core",
+            prerequisites=[],
+        )
+        db_session.add_all([prerequisite, current])
+        await db_session.flush()
+
+        current.prerequisites = [prerequisite.id]
+        db_session.add_all(
+            [
+                ConceptSource(
+                    concept_id=prerequisite.id,
+                    source_id=source.id,
+                ),
+                ConceptSource(
+                    concept_id=current.id,
+                    source_id=source.id,
+                ),
+            ]
+        )
+        await db_session.flush()
+
+        res = await client.get(f"/api/v1/courses/{course.id}/knowledge-graph")
+        assert res.status_code == 200
+
+        nodes = {node["label"]: node for node in res.json()["nodes"]}
+        assert nodes["Embeddings API"]["description"] == "Vector representations exposed by the API."
+        assert nodes["Embeddings API"]["kind"] == "related"
+        assert nodes["Attention API"]["description"] == "Token weighting concept exposed by the API."
+        assert nodes["Attention API"]["kind"] == "related"
+
+    @pytest.mark.asyncio
+    async def test_knowledge_graph_openapi_exposes_rich_response_model(
+        self, client: AsyncClient
+    ):
+        res = await client.get("/openapi.json")
+        assert res.status_code == 200
+
+        schema = res.json()
+        response_schema = schema["paths"]["/api/v1/courses/{course_id}/knowledge-graph"][
+            "get"
+        ]["responses"]["200"]["content"]["application/json"]["schema"]
+
+        assert response_schema["$ref"] == "#/components/schemas/KnowledgeGraphResponse"
+        node_properties = schema["components"]["schemas"]["KnowledgeGraphNode"]["properties"]
+        assert "description" in node_properties
+        assert "kind" in node_properties
 
 
 @pytest.mark.asyncio

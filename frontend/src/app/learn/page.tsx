@@ -412,6 +412,7 @@ function LearnPageInner() {
         progressLabel={progressLabel}
         asideOpen={asideOpen}
         onOpenAside={() => setAsideOpen(true)}
+        onCloseAside={() => setAsideOpen(false)}
         outline={
           <CourseOutline
             sections={sections}

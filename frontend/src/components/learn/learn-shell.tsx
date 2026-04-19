@@ -1,15 +1,41 @@
 "use client";
 
+import { useCallback, useSyncExternalStore } from "react";
 import { clsx } from "clsx";
+
+import { SIDEBAR_DESKTOP_QUERY } from "@/app/layout";
 
 interface LearnShellProps {
   courseTitle: string;
   progressLabel: string;
   asideOpen: boolean;
   onOpenAside: () => void;
+  onCloseAside: () => void;
   outline: React.ReactNode;
   lessonStage: React.ReactNode;
   aside: React.ReactNode;
+}
+
+function useMediaQuery(query: string): boolean {
+  const subscribe = useCallback(
+    (cb: () => void) => {
+      if (typeof window.matchMedia !== "function") {
+        return () => {};
+      }
+      const mq = window.matchMedia(query);
+      mq.addEventListener("change", cb);
+      return () => mq.removeEventListener("change", cb);
+    },
+    [query],
+  );
+  const getSnapshot = useCallback(() => {
+    if (typeof window.matchMedia !== "function") {
+      return false;
+    }
+    return window.matchMedia(query).matches;
+  }, [query]);
+  const getServerSnapshot = useCallback(() => false, []);
+  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 }
 
 export default function LearnShell({
@@ -17,10 +43,13 @@ export default function LearnShell({
   progressLabel,
   asideOpen,
   onOpenAside,
+  onCloseAside,
   outline,
   lessonStage,
   aside,
 }: LearnShellProps) {
+  const isDesktop = useMediaQuery(SIDEBAR_DESKTOP_QUERY);
+
   return (
     <div className="min-h-screen bg-slate-50">
       <header className="border-b border-slate-200 bg-white/95 backdrop-blur">
@@ -52,19 +81,38 @@ export default function LearnShell({
       <div
         className={clsx(
           "mx-auto flex max-w-[1600px] flex-col gap-4 px-4 py-4 sm:px-6 xl:grid xl:items-start",
-          asideOpen
+          asideOpen && isDesktop
             ? "xl:grid-cols-[280px_minmax(0,1fr)_320px]"
             : "xl:grid-cols-[280px_minmax(0,1fr)]"
         )}
       >
         <div className="xl:sticky xl:top-4">{outline}</div>
         <div className="min-w-0">{lessonStage}</div>
-        {asideOpen ? (
+        {asideOpen && isDesktop ? (
           <div className="min-w-0 xl:sticky xl:top-4">
             {aside}
           </div>
         ) : null}
       </div>
+
+      {asideOpen && !isDesktop ? (
+        <div
+          className="fixed inset-0 z-50 flex items-end bg-slate-950/40"
+          role="dialog"
+          aria-modal="true"
+          aria-label="学习辅助区"
+        >
+          <button
+            type="button"
+            aria-label="关闭学习辅助区遮罩"
+            className="absolute inset-0 bg-transparent"
+            onClick={onCloseAside}
+          />
+          <div className="relative z-10 max-h-[88vh] w-full overflow-y-auto rounded-t-[28px] bg-white p-4 shadow-2xl">
+            {aside}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

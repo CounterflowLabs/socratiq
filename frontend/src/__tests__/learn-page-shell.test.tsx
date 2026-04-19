@@ -329,4 +329,34 @@ describe("Learn page shell", () => {
     expect(screen.queryByTitle("课程原视频")).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /打开原 PDF/i })).not.toBeInTheDocument();
   });
+
+  it("shows the study aside as a visible overlay on narrow screens", async () => {
+    installMatchMedia(768);
+
+    globalThis.fetch = mockFetch({
+      "/api/v1/courses/c1": courseResponse,
+    }) as typeof fetch;
+
+    vi.resetModules();
+    const LearnPage = (await import("@/app/learn/page")).default;
+
+    render(
+      <LayoutInner>
+        <SuspenseWrapper>
+          <LearnPage />
+        </SuspenseWrapper>
+      </LayoutInner>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /0:12/i })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /0:12/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("dialog", { name: /学习辅助区/i })).toBeInTheDocument();
+      expect(screen.getByTitle("课程原视频")).toBeInTheDocument();
+    });
+  });
 });

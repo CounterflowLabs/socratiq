@@ -115,6 +115,14 @@ async def create_source(
 
             task = clone_source.delay(str(source.id), str(donor_source.id))
             source.celery_task_id = task.id
+            db.add(
+                SourceTask(
+                    source_id=source.id,
+                    task_type="source_processing",
+                    status="pending",
+                    celery_task_id=task.id,
+                )
+            )
             await db.commit()
             await db.refresh(source)
             return SourceResponse(

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import ForeignKey, String, text
+from sqlalchemy import ForeignKey, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.models.base import Base, BaseMixin
@@ -24,6 +24,8 @@ class SourceTask(BaseMixin, Base):
     status: Mapped[str] = mapped_column(
         String(50), server_default=text("'pending'"), nullable=False
     )
+    stage: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    error_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     celery_task_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     source: Mapped["Source"] = relationship(  # noqa: F821

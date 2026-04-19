@@ -600,23 +600,50 @@ async def _update_status(
     status: str,
     error_message: str | None = None,
 ) -> None:
-    """Update source status in the database."""
-    from sqlalchemy import update as sa_update
+    """Update source and source-task lifecycle state in the database."""
+
+    from sqlalchemy import select
 
     from app.db.models.source import Source
+    from app.db.models.source_task import SourceTask
 
-    if error_message:
-        source = await db.get(Source, source_id)
-        if source:
-            source.metadata_ = {**source.metadata_, "error": error_message}
-            source.status = status
-            await db.flush()
-            return
-
-    await db.execute(
-        sa_update(Source).where(Source.id == source_id).values(status=status)
+    task_status, stage, task_error_summary = _source_task_lifecycle(
+        status, error_message
     )
+
+    source = await db.get(Source, source_id)
+    if source:
+        source.status = status
+        if error_message:
+            source.metadata_ = {**source.metadata_, "error": error_message}
+
+    result = await db.execute(
+        select(SourceTask).where(
+            SourceTask.source_id == source_id,
+            SourceTask.task_type == "source_processing",
+        )
+    )
+    source_task = result.scalar_one_or_none()
+    if source_task:
+        source_task.status = task_status
+        source_task.stage = stage
+        source_task.error_summary = task_error_summary
+
     await db.flush()
+
+
+def _source_task_lifecycle(
+    status: str,
+    error_message: str | None = None,
+) -> tuple[str, str, str | None]:
+    """Map source status into persisted task lifecycle fields."""
+    if status == "pending":
+        return "pending", "pending", None
+    if status == "ready":
+        return "success", "ready", None
+    if status == "error":
+        return "failure", "error", error_message
+    return "running", status, None
 
 
 async def _mark_source_error(

@@ -2,11 +2,14 @@
 
 import uuid
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
+from sqlalchemy import select
 
 from app.worker.tasks import content_ingestion
 from app.db.models.source import Source
+from app.db.models.source_task import SourceTask
 
 
 def test_create_worker_resources_builds_dedicated_session_factory(monkeypatch):
@@ -145,7 +148,7 @@ async def test_ingest_source_returns_course_id_when_pipeline_finishes(
         settings=SimpleNamespace(upload_dir="/tmp"),
         engine=FakeEngine(),
         session_factory=FakeSessionFactory(db_session),
-        model_router=SimpleNamespace(),
+        model_router=SimpleNamespace(get_provider=AsyncMock(return_value=SimpleNamespace())),
     )
 
     monkeypatch.setattr(
@@ -282,3 +285,63 @@ async def test_ingest_source_returns_course_id_when_pipeline_finishes(
     assert result["status"] == "ready"
     assert "course_id" in result
     assert any(meta.get("stage") == "assembling_course" for _, meta in task_updates)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("source_status", "expected_task_status", "expected_stage", "error_message"),
+    [
+        ("pending", "pending", "pending", None),
+        ("extracting", "running", "extracting", None),
+        ("ready", "success", "ready", None),
+        ("error", "failure", "error", "boom"),
+    ],
+)
+async def test_update_status_syncs_source_task_lifecycle(
+    db_session,
+    demo_user,
+    source_status,
+    expected_task_status,
+    expected_stage,
+    error_message,
+):
+    source = Source(
+        type="youtube",
+        url="https://www.youtube.com/watch?v=test",
+        title="Lifecycle source",
+        status="pending",
+        metadata_={},
+        created_by=demo_user.id,
+    )
+    db_session.add(source)
+    await db_session.flush()
+
+    task = SourceTask(
+        source_id=source.id,
+        task_type="source_processing",
+        status="pending",
+        celery_task_id="fake-task-123",
+    )
+    db_session.add(task)
+    await db_session.flush()
+
+    await content_ingestion._update_status(
+        db_session,
+        source.id,
+        source_status,
+        error_message=error_message,
+    )
+
+    task_row = (
+        await db_session.execute(
+            select(SourceTask).where(SourceTask.source_id == source.id)
+        )
+    ).scalar_one()
+    source_row = await db_session.get(Source, source.id)
+
+    assert source_row.status == source_status
+    assert task_row.status == expected_task_status
+    assert task_row.stage == expected_stage
+    if error_message:
+        assert task_row.error_summary == error_message
+        assert source_row.metadata_["error"] == error_message

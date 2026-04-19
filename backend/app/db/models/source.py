@@ -55,5 +55,4 @@ class Source(BaseMixin, Base):
         "SourceTask",
         back_populates="source",
         cascade="all, delete-orphan",
-        lazy="selectin",
     )

@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, BookOpen, ChevronLeft, ChevronRight, Languages, Loader2 } from "lucide-react";
@@ -232,9 +232,24 @@ function LearnPageInner() {
     (currentSource && isPdfSource(currentSource) ? currentSource : null) ??
     course?.sources.find((item) => isPdfSource(item)) ??
     null;
-  const referenceSources = (course?.sources ?? []).filter(
-    (item) => item.id !== videoSource?.id && item.id !== pdfSource?.id
+  const referenceSources = useMemo(
+    () =>
+      (course?.sources ?? []).filter(
+        (item) => item.id !== videoSource?.id && item.id !== pdfSource?.id
+      ),
+    [course?.sources, pdfSource?.id, videoSource?.id]
   );
+  const availableAsidePanels = useMemo(() => {
+    const panels: AsidePanelId[] = [];
+
+    if (videoEmbed) panels.push("video");
+    if (pdfSource) panels.push("pdf");
+    if (referenceSources.length > 0) panels.push("references");
+    panels.push("tutor");
+
+    return panels;
+  }, [pdfSource, referenceSources, videoEmbed]);
+  const defaultAsidePanel = availableAsidePanels[0] ?? "tutor";
   const handleTimestampClick = useCallback((_seconds: number) => {
     if (!videoEmbed) return;
     setAsideOpen(true);
@@ -242,29 +257,13 @@ function LearnPageInner() {
   }, [videoEmbed]);
 
   useEffect(() => {
-    if (videoEmbed) {
-      setActiveAsidePanel((currentPanel) =>
-        currentPanel === "video" ? currentPanel : "video"
-      );
-      return;
-    }
+    setActiveAsidePanel(defaultAsidePanel);
+  }, [defaultAsidePanel, section?.id]);
 
-    if (pdfSource) {
-      setActiveAsidePanel((currentPanel) =>
-        currentPanel === "video" ? "pdf" : currentPanel
-      );
-      return;
-    }
-
-    if (referenceSources.length > 0) {
-      setActiveAsidePanel((currentPanel) =>
-        currentPanel === "video" || currentPanel === "pdf" ? "references" : currentPanel
-      );
-      return;
-    }
-
-    setActiveAsidePanel("tutor");
-  }, [videoEmbed, pdfSource, referenceSources]);
+  useEffect(() => {
+    if (availableAsidePanels.includes(activeAsidePanel)) return;
+    setActiveAsidePanel(defaultAsidePanel);
+  }, [activeAsidePanel, availableAsidePanels, defaultAsidePanel]);
 
   const lessonStage = (
     <section className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm">

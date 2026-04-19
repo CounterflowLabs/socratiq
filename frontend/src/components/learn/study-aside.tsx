@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo } from "react";
 import { BookOpen, ExternalLink, FileText, MessageCircle, PlayCircle } from "lucide-react";
 
 import { clsx } from "clsx";
@@ -34,12 +34,16 @@ export default function StudyAside({
   activePanel,
   onPanelChange,
 }: StudyAsideProps) {
-  const panels: AsidePanelId[] = [];
+  const panels = useMemo(() => {
+    const nextPanels: AsidePanelId[] = [];
 
-  if (videoEmbed) panels.push("video");
-  if (pdfSource) panels.push("pdf");
-  if (referenceSources.length > 0) panels.push("references");
-  panels.push("tutor");
+    if (videoEmbed) nextPanels.push("video");
+    if (pdfSource) nextPanels.push("pdf");
+    if (referenceSources.length > 0) nextPanels.push("references");
+    nextPanels.push("tutor");
+
+    return nextPanels;
+  }, [pdfSource, referenceSources, videoEmbed]);
 
   useEffect(() => {
     if (!panels.includes(activePanel)) {

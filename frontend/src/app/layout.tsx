@@ -44,7 +44,8 @@ export function LayoutInner({ children }: { children: React.ReactNode }) {
   const [mobileOpenPath, setMobileOpenPath] = useState<string | null>(null);
   const isDesktop = useMediaQuery(SIDEBAR_DESKTOP_QUERY);
   const showDesktopSidebar = SIDEBAR_PAGES.includes(pathname);
-  const hideSidebarEntirely = pathname === "/login" || pathname === "/setup";
+  const hideSidebarEntirely =
+    pathname === "/login" || pathname === "/setup" || pathname.startsWith("/learn");
   const mobileOpen = mobileOpenPath === pathname;
 
   if (hideSidebarEntirely) {

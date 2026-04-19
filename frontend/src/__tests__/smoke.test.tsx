@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, fireEvent } from "@testing-library/react";
 import React, { Suspense } from "react";
 
 // Mock react-markdown (ESM-only package that doesn't work in jsdom)
@@ -50,7 +50,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  cleanup();
   vi.restoreAllMocks();
+  vi.resetModules();
 });
 
 // ─── Dashboard Tests ────────────────────────────────
@@ -281,9 +283,9 @@ describe("Settings Page", () => {
 // ─── Learn Page Tests ────────────────────────────────
 
 describe("Learn Page", () => {
-  it("renders chat interface with course data", async () => {
+  it("renders the dedicated learn shell", async () => {
     vi.doMock("next/navigation", () => ({
-      useRouter: () => ({ push: vi.fn(), back: vi.fn() }),
+      useRouter: () => ({ push: vi.fn(), back: vi.fn(), replace: vi.fn() }),
       useSearchParams: () => {
         const params = new URLSearchParams();
         params.set("courseId", "c1");
@@ -300,7 +302,7 @@ describe("Learn Page", () => {
         description: "desc",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
-        source_ids: [],
+        sources: [],
         sections: [
           {
             id: "s1",
@@ -325,10 +327,11 @@ describe("Learn Page", () => {
 
     await waitFor(
       () => {
-        // The learn page should show the course title and tab bar
-        expect(screen.getByText("测试课程")).toBeInTheDocument();
-        // Tab bar should include the tutor tab
-        expect(screen.getByText("导师")).toBeInTheDocument();
+        expect(screen.getByRole("heading", { name: "测试课程" })).toBeInTheDocument();
+        expect(screen.getByText("课程目录")).toBeInTheDocument();
+        expect(
+          screen.getByRole("button", { name: /打开学习辅助区/i })
+        ).toBeInTheDocument();
       },
       { timeout: 3000 }
     );

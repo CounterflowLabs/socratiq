@@ -7,6 +7,7 @@ import { Sidebar } from "@/components/sidebar";
 
 // Pages that show the sidebar
 const SIDEBAR_PAGES = ["/", "/import", "/settings", "/sources"];
+export const SIDEBAR_DESKTOP_QUERY = "(min-width: 1280px)";
 
 // Use useSyncExternalStore for media queries to avoid React Compiler issues
 function useMediaQuery(query: string): boolean {
@@ -37,11 +38,11 @@ export default function RootLayout({
   );
 }
 
-function LayoutInner({ children }: { children: React.ReactNode }) {
+export function LayoutInner({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpenPath, setMobileOpenPath] = useState<string | null>(null);
-  const isDesktop = useMediaQuery("(min-width: 768px)");
+  const isDesktop = useMediaQuery(SIDEBAR_DESKTOP_QUERY);
   const showDesktopSidebar = SIDEBAR_PAGES.includes(pathname);
   const hideSidebarEntirely = pathname === "/login" || pathname === "/setup";
   const mobileOpen = mobileOpenPath === pathname;
@@ -56,6 +57,7 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
     <div className="app-layout">
       <Sidebar
         collapsed={collapsed}
+        desktopMode={isDesktop}
         onToggle={() => setCollapsed(!collapsed)}
         mobileOpen={mobileOpen}
         onMobileToggle={() =>

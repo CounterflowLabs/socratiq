@@ -13,11 +13,13 @@ const items = [
 
 export function Sidebar({
   collapsed,
+  desktopMode,
   onToggle,
   mobileOpen,
   onMobileToggle,
 }: {
   collapsed: boolean;
+  desktopMode: boolean;
   onToggle: () => void;
   mobileOpen: boolean;
   onMobileToggle: () => void;
@@ -27,10 +29,10 @@ export function Sidebar({
   return (
     <>
       {/* Mobile hamburger button — hidden when sidebar is open */}
-      {!mobileOpen && (
+      {!desktopMode && !mobileOpen && (
         <button
           onClick={onMobileToggle}
-          className="fixed top-3 left-3 z-40 flex md:hidden items-center justify-center w-11 h-11"
+          className="fixed left-3 top-3 z-40 flex h-11 w-11 items-center justify-center"
           style={{
             borderRadius: "var(--radius)",
             background: "var(--surface)",
@@ -44,9 +46,9 @@ export function Sidebar({
       )}
 
       {/* Mobile overlay backdrop */}
-      {mobileOpen && (
+      {!desktopMode && mobileOpen && (
         <div
-          className="fixed inset-0 z-50 bg-black/20 md:hidden"
+          className="fixed inset-0 z-50 bg-black/20"
           onClick={onMobileToggle}
         />
       )}
@@ -54,10 +56,10 @@ export function Sidebar({
       {/* Sidebar — desktop: always visible; mobile: slide-in overlay */}
       <aside
         className={clsx(
-          "fixed left-0 top-0 h-full z-[60] flex flex-col",
-          "hidden md:flex",
-          collapsed ? "md:w-16" : "md:w-56",
-          mobileOpen && "!flex w-64"
+          "fixed left-0 top-0 z-[60] flex h-full flex-col transition-[width,transform] duration-200",
+          desktopMode
+            ? [collapsed ? "w-16" : "w-56", "translate-x-0"]
+            : ["w-64", mobileOpen ? "translate-x-0" : "-translate-x-full"]
         )}
         style={{
           background: "var(--surface)",
@@ -85,10 +87,10 @@ export function Sidebar({
             </span>
           )}
           {/* Mobile close button */}
-          {mobileOpen && (
+          {!desktopMode && mobileOpen && (
             <button
               onClick={onMobileToggle}
-              className="flex md:hidden items-center justify-center w-8 h-8"
+              className="flex h-8 w-8 items-center justify-center"
               style={{
                 borderRadius: "var(--radius-sm)",
                 color: "var(--text-tertiary)",
@@ -145,34 +147,33 @@ export function Sidebar({
         </nav>
 
         {/* Toggle — desktop only */}
-        <div
-          className="hidden md:block p-2"
-          style={{ borderTop: "1px solid var(--border)" }}
-        >
-          <button
-            onClick={onToggle}
-            className="w-full flex items-center justify-center p-2"
-            style={{
-              borderRadius: "var(--radius)",
-              color: "var(--text-tertiary)",
-              transition: `background var(--duration-fast) ease, color var(--duration-fast) ease`,
-            }}
-            onMouseEnter={(e) => {
-              (e.currentTarget as HTMLElement).style.background = "var(--surface-alt)";
-              (e.currentTarget as HTMLElement).style.color = "var(--text-secondary)";
-            }}
-            onMouseLeave={(e) => {
-              (e.currentTarget as HTMLElement).style.background = "transparent";
-              (e.currentTarget as HTMLElement).style.color = "var(--text-tertiary)";
-            }}
-          >
-            {collapsed ? (
-              <ChevronRight className="w-4 h-4" />
-            ) : (
-              <ChevronLeft className="w-4 h-4" />
-            )}
-          </button>
-        </div>
+        {desktopMode && (
+          <div className="p-2" style={{ borderTop: "1px solid var(--border)" }}>
+            <button
+              onClick={onToggle}
+              className="w-full flex items-center justify-center p-2"
+              style={{
+                borderRadius: "var(--radius)",
+                color: "var(--text-tertiary)",
+                transition: `background var(--duration-fast) ease, color var(--duration-fast) ease`,
+              }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLElement).style.background = "var(--surface-alt)";
+                (e.currentTarget as HTMLElement).style.color = "var(--text-secondary)";
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLElement).style.background = "transparent";
+                (e.currentTarget as HTMLElement).style.color = "var(--text-tertiary)";
+              }}
+            >
+              {collapsed ? (
+                <ChevronRight className="w-4 h-4" />
+              ) : (
+                <ChevronLeft className="w-4 h-4" />
+              )}
+            </button>
+          </div>
+        )}
       </aside>
     </>
   );

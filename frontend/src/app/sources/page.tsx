@@ -91,22 +91,22 @@ export default function SourcesPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="mx-auto max-w-5xl px-4 pb-6 pt-14 sm:px-6 md:pt-6">
-        <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+        <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <h1 className="text-xl font-bold text-gray-900">资料</h1>
             <p className="mt-1 text-sm text-gray-500">
               在这里查看已导入资料的处理进度、课程生成状态和下一步入口。
             </p>
           </div>
-          <Link href="/import">
-            <Button size="sm">
+          <Link className="w-full sm:w-auto" href="/import">
+            <Button className="w-full sm:w-auto" size="sm">
               <Plus className="w-3.5 h-3.5" /> 导入资料
             </Button>
           </Link>
         </div>
 
         <Card className="mb-6 p-4">
-          <div className="flex flex-col gap-3 md:flex-row">
+          <div className="flex flex-col gap-3 sm:flex-row">
             <label className="relative flex-1">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
               <input
@@ -117,7 +117,7 @@ export default function SourcesPage() {
               />
             </label>
 
-            <label className="relative md:w-48">
+            <label className="relative sm:w-48">
               <span className="sr-only">状态筛选</span>
               <Filter className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
               <select

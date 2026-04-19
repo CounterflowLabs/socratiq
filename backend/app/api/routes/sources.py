@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db, get_local_user
 from app.config import get_settings
 from app.db.models.source import Source
+from app.db.models.source_task import SourceTask
 from app.db.models.user import User
 from app.models.source import SourceResponse, SourceListResponse
 from app.services.content_key import extract_content_key
@@ -142,6 +143,14 @@ async def create_source(
 
     task = ingest_source.delay(str(source.id))
     source.celery_task_id = task.id
+    db.add(
+        SourceTask(
+            source_id=source.id,
+            task_type="source_processing",
+            status="pending",
+            celery_task_id=task.id,
+        )
+    )
     await db.commit()
     await db.refresh(source)
 

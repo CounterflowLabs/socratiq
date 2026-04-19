@@ -3,6 +3,7 @@
 from app.db.models.base import Base, BaseMixin
 from app.db.models.user import User
 from app.db.models.source import Source
+from app.db.models.source_task import SourceTask
 from app.db.models.course import Course, CourseSource, Section
 from app.db.models.concept import Concept, ConceptSource
 from app.db.models.content_chunk import ContentChunk
@@ -27,6 +28,7 @@ __all__ = [
     "BaseMixin",
     "User",
     "Source",
+    "SourceTask",
     "Course",
     "CourseSource",
     "Section",

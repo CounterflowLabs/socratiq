@@ -49,3 +49,19 @@ def test_planner_uses_inline_lab_when_coding_markers_appear_without_code():
     assert result.lab_mode == "inline"
     assert result.graph_mode == "inline_and_overview"
     assert result.study_surface == "reader"
+
+
+def test_planner_does_not_match_accidental_substrings_in_plain_text():
+    planner = TeachingAssetPlanner()
+
+    result = planner.plan(
+        source_title="Capital Markets Overview",
+        source_type="video",
+        overall_summary="A rapid industrialization overview for non-coding learners.",
+        chunk_topics=["capital", "rapid", "markets"],
+        has_code=False,
+    )
+
+    assert result.lab_mode == "none"
+    assert result.graph_mode == "inline_and_overview"
+    assert result.study_surface == "reader"

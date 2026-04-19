@@ -1,5 +1,7 @@
 """Lightweight planner for lesson teaching assets."""
 
+import re
+
 from app.models.lesson_blocks import TeachingAssetPlan
 
 
@@ -15,6 +17,11 @@ class TeachingAssetPlanner:
         "backpropagation",
     )
 
+    _MARKER_PATTERNS = tuple(
+        re.compile(rf"\b{re.escape(marker)}\b", re.IGNORECASE)
+        for marker in _CODING_MARKERS
+    )
+
     def plan(
         self,
         source_title: str,
@@ -27,7 +34,9 @@ class TeachingAssetPlanner:
 
         del source_type
         haystack = " ".join([source_title, overall_summary, *chunk_topics]).lower()
-        lab_mode = "inline" if has_code or any(marker in haystack for marker in self._CODING_MARKERS) else "none"
+        lab_mode = "inline" if has_code or any(
+            pattern.search(haystack) for pattern in self._MARKER_PATTERNS
+        ) else "none"
         return TeachingAssetPlan(
             lab_mode=lab_mode,
             graph_mode="inline_and_overview",

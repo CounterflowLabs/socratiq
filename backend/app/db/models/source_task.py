@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
-from sqlalchemy import ForeignKey, String, Text, text
+from sqlalchemy import ForeignKey, String, Text, event, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.models.base import Base, BaseMixin
@@ -27,7 +29,23 @@ class SourceTask(BaseMixin, Base):
     stage: Mapped[str | None] = mapped_column(String(50), nullable=True)
     error_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     celery_task_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    metadata_: Mapped[dict[str, Any]] = mapped_column(
+        "metadata_", JSONB, server_default=text("'{}'"), nullable=False
+    )
 
     source: Mapped["Source"] = relationship(  # noqa: F821
         "Source", back_populates="tasks"
+    )
+
+
+@event.listens_for(SourceTask, "before_insert")
+def _ensure_metadata_column(mapper, connection, target) -> None:
+    """Backfill the task metadata column for databases created before this field existed."""
+    connection.execute(
+        text(
+            """
+            ALTER TABLE source_tasks
+            ADD COLUMN IF NOT EXISTS metadata_ JSONB NOT NULL DEFAULT '{}'::jsonb
+            """
+        )
     )

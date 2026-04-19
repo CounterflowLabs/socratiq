@@ -14,6 +14,10 @@ from sqlalchemy.ext.asyncio import (
 
 from app.config import Settings, get_settings
 from app.services.llm.router import ModelRouter
+from app.services.source_tasks import (
+    finish_source_processing_and_enqueue_course,
+    mark_source_task,
+)
 from app.worker.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -161,15 +165,17 @@ async def _clone_source_async(task, source_id: str, ref_source_id: str) -> dict:
                     )
                     concept_count += 1
 
-                await _update_status(db, sid, "assembling_course")
-                task.update_state(state="PROGRESS", meta={"stage": "assembling_course"})
-                course_id = await _assemble_course_for_source(
-                    db,
+                result_payload = await finish_source_processing_and_enqueue_course(
+                    db=db,
                     source=target,
-                    model_router=resources.model_router,
+                    processing_task=await _get_source_processing_task(db, sid),
+                    payload={
+                        "source_id": source_id,
+                        "ref_source_id": ref_source_id,
+                        "chunks_cloned": chunk_count,
+                        "concepts_linked": concept_count,
+                    },
                 )
-
-                await _update_status(db, sid, "ready")
                 await db.commit()
 
                 logger.info(
@@ -179,14 +185,7 @@ async def _clone_source_async(task, source_id: str, ref_source_id: str) -> dict:
                     chunk_count,
                     concept_count,
                 )
-                return {
-                    "source_id": source_id,
-                    "ref_source_id": ref_source_id,
-                    "chunks_cloned": chunk_count,
-                    "concepts_linked": concept_count,
-                    "course_id": course_id,
-                    "status": "ready",
-                }
+                return result_payload
             except Exception as exc:
                 logger.error(
                     "Clone ingestion failed for source %s: %s",
@@ -432,29 +431,24 @@ async def _ingest_source_async(task, source_id: str) -> dict:
                 )
 
                 # === STEP 7: DONE ===
-                await _update_status(db, sid, "assembling_course")
-                task.update_state(state="PROGRESS", meta={"stage": "assembling_course"})
-                course_id = await _assemble_course_for_source(
-                    db,
+                result_payload = await finish_source_processing_and_enqueue_course(
+                    db=db,
                     source=source,
-                    model_router=resources.model_router,
+                    processing_task=await _get_source_processing_task(db, sid),
+                    payload={
+                        "source_id": source_id,
+                        "title": source.title,
+                        "chunks_created": len(chunk_ids),
+                        "concepts_created": len(concept_ids),
+                        "lessons_generated": len(lesson_by_page),
+                        "labs_generated": sum(
+                            1 for lab_data in labs_by_page.values() if lab_data is not None
+                        ),
+                    },
                 )
-
-                await _update_status(db, sid, "ready")
                 await db.commit()
 
-                return {
-                    "source_id": source_id,
-                    "title": source.title,
-                    "chunks_created": len(chunk_ids),
-                    "concepts_created": len(concept_ids),
-                    "lessons_generated": len(lesson_by_page),
-                    "labs_generated": sum(
-                        1 for lab_data in labs_by_page.values() if lab_data is not None
-                    ),
-                    "course_id": course_id,
-                    "status": "ready",
-                }
+                return result_payload
             except Exception as exc:
                 logger.error(
                     "Ingestion failed for source %s: %s",
@@ -570,30 +564,6 @@ def _create_extractor(source, whisper_kwargs: dict, bilibili_credential=None):
     raise ValueError(f"Unsupported source type: {source.type}")
 
 
-async def _assemble_course_for_source(
-    db: AsyncSession,
-    source,
-    model_router: ModelRouter,
-) -> str:
-    """Create the course for a fully processed source and return its ID."""
-    from app.services.course_generator import CourseGenerator
-
-    generator = CourseGenerator(model_router)
-    course = await generator.generate(
-        db=db,
-        source_ids=[source.id],
-        title=source.title,
-        user_id=source.created_by,
-        skip_ready_check=True,
-    )
-    source.metadata_ = {
-        **(source.metadata_ or {}),
-        "course_id": str(course.id),
-    }
-    await db.flush()
-    return str(course.id)
-
-
 async def _update_status(
     db,
     source_id: UUID,
@@ -625,9 +595,14 @@ async def _update_status(
     )
     source_task = result.scalar_one_or_none()
     if source_task:
-        source_task.status = task_status
-        source_task.stage = stage
-        source_task.error_summary = task_error_summary
+        await mark_source_task(
+            db,
+            source_id=source_id,
+            task_type="source_processing",
+            status=task_status,
+            stage=stage,
+            error_summary=task_error_summary,
+        )
 
     await db.flush()
 
@@ -662,6 +637,24 @@ async def _mark_source_error(
             source_id,
             exc_info=True,
         )
+
+
+async def _get_source_processing_task(
+    db: AsyncSession,
+    source_id: UUID,
+):
+    """Load the persisted source_processing task row, if present."""
+    from sqlalchemy import select
+
+    from app.db.models.source_task import SourceTask
+
+    result = await db.execute(
+        select(SourceTask).where(
+            SourceTask.source_id == source_id,
+            SourceTask.task_type == "source_processing",
+        )
+    )
+    return result.scalar_one_or_none()
 
 
 async def _get_or_create_concept(db, ext_concept):

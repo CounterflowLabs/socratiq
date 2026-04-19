@@ -11,10 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db, get_local_user
 from app.config import get_settings
 from app.db.models.source import Source
-from app.db.models.source_task import SourceTask
 from app.db.models.user import User
 from app.models.source import SourceResponse, SourceListResponse
 from app.services.content_key import extract_content_key
+from app.services.source_tasks import create_source_task
 from app.worker.tasks.content_ingestion import ingest_source, clone_source
 
 router = APIRouter(prefix="/api/v1/sources", tags=["sources"])
@@ -115,13 +115,12 @@ async def create_source(
 
             task = clone_source.delay(str(source.id), str(donor_source.id))
             source.celery_task_id = task.id
-            db.add(
-                SourceTask(
-                    source_id=source.id,
-                    task_type="source_processing",
-                    status="pending",
-                    celery_task_id=task.id,
-                )
+            await create_source_task(
+                db,
+                source_id=source.id,
+                task_type="source_processing",
+                status="pending",
+                celery_task_id=task.id,
             )
             await db.commit()
             await db.refresh(source)
@@ -151,13 +150,12 @@ async def create_source(
 
     task = ingest_source.delay(str(source.id))
     source.celery_task_id = task.id
-    db.add(
-        SourceTask(
-            source_id=source.id,
-            task_type="source_processing",
-            status="pending",
-            celery_task_id=task.id,
-        )
+    await create_source_task(
+        db,
+        source_id=source.id,
+        task_type="source_processing",
+        status="pending",
+        celery_task_id=task.id,
     )
     await db.commit()
     await db.refresh(source)

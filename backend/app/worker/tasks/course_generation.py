@@ -1,11 +1,58 @@
 """Course generation Celery task — generates lessons, labs, and assembles course."""
 
 import logging
+from dataclasses import dataclass
 from uuid import UUID
 
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+
+from app.config import Settings, get_settings
+from app.services.llm.router import ModelRouter
+from app.services.source_tasks import mark_source_task
 from app.worker.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class WorkerResources:
+    """Loop-local resources for a single Celery task run."""
+
+    settings: Settings
+    engine: AsyncEngine
+    session_factory: async_sessionmaker[AsyncSession]
+    model_router: ModelRouter
+
+
+def _create_worker_resources() -> WorkerResources:
+    """Create a fresh async engine/session factory/router for the current loop."""
+    settings = get_settings()
+    engine = create_async_engine(
+        settings.database_url,
+        echo=False,
+        pool_size=5,
+        max_overflow=10,
+    )
+    session_factory = async_sessionmaker(
+        engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    )
+    model_router = ModelRouter(
+        session_factory=session_factory,
+        encryption_key=settings.llm_encryption_key,
+    )
+    return WorkerResources(
+        settings=settings,
+        engine=engine,
+        session_factory=session_factory,
+        model_router=model_router,
+    )
 
 
 @celery_app.task(
@@ -33,32 +80,34 @@ async def _generate_course_async(task, source_id: str, goal: str | None, user_id
     """Async implementation of course generation."""
     import time
     from sqlalchemy import select
-    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
     from app.db.models.source import Source
     from app.db.models.content_chunk import ContentChunk as ContentChunkModel
     from app.db.models.course import Course, CourseSource, Section
     from app.db.models.lab import Lab
     from app.services.lesson_generator import LessonGenerator
     from app.services.lab_generator import LabGenerator
-    from app.services.llm.router import ModelRouter, TaskType
+    from app.services.llm.router import TaskType
     from app.services.llm.base import UnifiedMessage
     from app.services.cost_guard import CostGuard
-    from app.config import get_settings
 
-    settings = get_settings()
-    worker_engine = create_async_engine(settings.database_url, echo=False, pool_size=5, max_overflow=10)
-    worker_session_factory = async_sessionmaker(worker_engine, class_=AsyncSession, expire_on_commit=False)
-    model_router = ModelRouter(session_factory=worker_session_factory, encryption_key=settings.llm_encryption_key)
+    resources = _create_worker_resources()
 
     sid = UUID(source_id)
     uid = UUID(user_id) if user_id else None
 
     try:
-        async with worker_session_factory() as db:
+        async with resources.session_factory() as db:
             source = await db.get(Source, sid)
             if not source or source.status != "ready":
                 raise ValueError(f"Source {source_id} not ready for course generation")
 
+            await mark_source_task(
+                db,
+                source_id=sid,
+                task_type="course_generation",
+                status="running",
+                stage="generating_lessons",
+            )
             cost_guard = CostGuard(db)
 
             # Load chunks grouped by page
@@ -77,7 +126,7 @@ async def _generate_course_async(task, source_id: str, goal: str | None, user_id
             # === STEP 1: GENERATE LESSONS ===
             task.update_state(state="PROGRESS", meta={"stage": "generating_lessons"})
 
-            lesson_provider = await model_router.get_provider(TaskType.CONTENT_ANALYSIS)
+            lesson_provider = await resources.model_router.get_provider(TaskType.CONTENT_ANALYSIS)
             lesson_gen = LessonGenerator(lesson_provider)
 
             lesson_by_page: dict[int, object] = {}
@@ -88,16 +137,21 @@ async def _generate_course_async(task, source_id: str, goal: str | None, user_id
 
                 t0 = time.monotonic()
                 lesson_content = await lesson_gen.generate(chunk_texts, page_title, goal=goal)
-                lesson_ms = int((time.monotonic() - t0) * 1000)
                 await cost_guard.log_usage(
                     user_id=uid, task_type="lesson_gen",
                     model_name="unknown", tokens_in=0, tokens_out=0,
-                    duration_ms=lesson_ms,
                 )
                 lesson_by_page[page_idx] = lesson_content
                 logger.info(f"Generated lesson for page {page_idx}: {len(lesson_content.sections)} sections")
 
             # === STEP 2: GENERATE LABS ===
+            await mark_source_task(
+                db,
+                source_id=sid,
+                task_type="course_generation",
+                status="running",
+                stage="generating_labs",
+            )
             task.update_state(state="PROGRESS", meta={"stage": "generating_labs"})
 
             lab_gen = LabGenerator(lesson_provider)
@@ -124,19 +178,24 @@ async def _generate_course_async(task, source_id: str, goal: str | None, user_id
                     language=language,
                     goal=goal,
                 )
-                lab_ms = int((time.monotonic() - t0) * 1000)
                 await cost_guard.log_usage(
                     user_id=uid, task_type="lab_gen",
                     model_name="unknown", tokens_in=0, tokens_out=0,
-                    duration_ms=lab_ms,
                 )
                 labs_by_page[page_idx] = lab_result
 
             # === STEP 3: ASSEMBLE COURSE ===
+            await mark_source_task(
+                db,
+                source_id=sid,
+                task_type="course_generation",
+                status="running",
+                stage="assembling_course",
+            )
             task.update_state(state="PROGRESS", meta={"stage": "assembling_course"})
 
             course_title = source.title or "Untitled Course"
-            course = Course(title=course_title, description="", created_by=uid, goal=goal)
+            course = Course(title=course_title, description="", created_by=uid)
             db.add(course)
             await db.flush()
 
@@ -195,7 +254,7 @@ async def _generate_course_async(task, source_id: str, goal: str | None, user_id
 
             # Generate course description via LLM
             try:
-                provider = await model_router.get_provider(TaskType.CONTENT_ANALYSIS)
+                provider = await resources.model_router.get_provider(TaskType.CONTENT_ANALYSIS)
                 response = await provider.chat(
                     messages=[UnifiedMessage(
                         role="user",
@@ -208,6 +267,14 @@ async def _generate_course_async(task, source_id: str, goal: str | None, user_id
             except Exception:
                 course.description = f"A course based on {source.title or 'imported content'} with {section_order} sections."
 
+            await mark_source_task(
+                db,
+                source_id=sid,
+                task_type="course_generation",
+                status="success",
+                stage="ready",
+                metadata_={"course_id": str(course.id)},
+            )
             await db.commit()
 
             logger.info(f"Generated course '{course_title}' (goal={goal}) with {section_order} sections")
@@ -220,5 +287,17 @@ async def _generate_course_async(task, source_id: str, goal: str | None, user_id
                 "goal": goal,
                 "status": "ready",
             }
+    except Exception as exc:
+        async with resources.session_factory() as db:
+            await mark_source_task(
+                db,
+                source_id=sid,
+                task_type="course_generation",
+                status="failure",
+                stage="error",
+                error_summary=str(exc),
+            )
+            await db.commit()
+        raise
     finally:
-        await worker_engine.dispose()
+        await resources.engine.dispose()

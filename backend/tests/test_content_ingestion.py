@@ -109,7 +109,7 @@ def test_create_worker_resources_returns_fresh_session_factory_each_time(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_ingest_source_returns_course_id_when_pipeline_finishes(
+async def test_ingest_source_queues_course_generation_when_pipeline_finishes(
     monkeypatch, db_session, demo_user
 ):
     source = Source(
@@ -121,6 +121,15 @@ async def test_ingest_source_returns_course_id_when_pipeline_finishes(
         created_by=demo_user.id,
     )
     db_session.add(source)
+    await db_session.flush()
+
+    processing_task = SourceTask(
+        source_id=source.id,
+        task_type="source_processing",
+        status="pending",
+        celery_task_id="processing-task-1",
+    )
+    db_session.add(processing_task)
     await db_session.flush()
 
     class FakeAsyncContext:
@@ -246,13 +255,6 @@ async def test_ingest_source_returns_course_id_when_pipeline_finishes(
         async def embed_and_store_concepts(self, *_args, **_kwargs):
             return None
 
-    class FakeCourseGenerator:
-        def __init__(self, *_args, **_kwargs):
-            pass
-
-        async def generate(self, **_kwargs):
-            return SimpleNamespace(id=uuid.uuid4())
-
     monkeypatch.setattr(
         "app.services.content_analyzer.ContentAnalyzer",
         FakeAnalyzer,
@@ -270,8 +272,8 @@ async def test_ingest_source_returns_course_id_when_pipeline_finishes(
         FakeEmbeddingService,
     )
     monkeypatch.setattr(
-        "app.services.course_generator.CourseGenerator",
-        FakeCourseGenerator,
+        "app.services.source_tasks.generate_course_task.delay",
+        lambda payload, goal=None, user_id=None: SimpleNamespace(id="course-task-1"),
     )
 
     task_updates: list[tuple[str, dict]] = []
@@ -283,8 +285,21 @@ async def test_ingest_source_returns_course_id_when_pipeline_finishes(
     result = await content_ingestion._ingest_source_async(FakeTask(), str(source.id))
 
     assert result["status"] == "ready"
-    assert "course_id" in result
-    assert any(meta.get("stage") == "assembling_course" for _, meta in task_updates)
+    assert result["queued_course_task_id"] == "course-task-1"
+
+    source_row = await db_session.get(Source, source.id)
+    assert source_row.status == "ready"
+
+    tasks = (
+        await db_session.execute(
+            select(SourceTask).where(SourceTask.source_id == source.id)
+        )
+    ).scalars().all()
+    assert {task.task_type for task in tasks} == {
+        "source_processing",
+        "course_generation",
+    }
+    assert any(meta.get("stage") == "embedding" for _, meta in task_updates)
 
 
 @pytest.mark.asyncio

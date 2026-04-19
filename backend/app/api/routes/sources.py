@@ -1,6 +1,5 @@
 """API routes for content source management."""
 
-import asyncio
 import uuid
 from pathlib import Path
 from typing import Annotated
@@ -178,7 +177,7 @@ async def list_sources(
     total = count_result.scalar()
 
     return SourceListResponse(
-        items=await asyncio.gather(*[_source_to_response(db, s) for s in sources]),
+        items=[await _source_to_response(db, source) for source in sources],
         total=total,
         skip=skip,
         limit=limit,
@@ -240,17 +239,15 @@ async def _get_latest_task_summary(
 
 
 async def _source_to_response(db: AsyncSession, source: Source) -> SourceResponse:
-    latest_processing_task, latest_course_task = await asyncio.gather(
-        _get_latest_task_summary(
-            db,
-            source_id=source.id,
-            task_type="source_processing",
-        ),
-        _get_latest_task_summary(
-            db,
-            source_id=source.id,
-            task_type="course_generation",
-        ),
+    latest_processing_task = await _get_latest_task_summary(
+        db,
+        source_id=source.id,
+        task_type="source_processing",
+    )
+    latest_course_task = await _get_latest_task_summary(
+        db,
+        source_id=source.id,
+        task_type="course_generation",
     )
 
     return SourceResponse(

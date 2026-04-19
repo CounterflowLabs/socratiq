@@ -22,6 +22,7 @@ venv/
 *.swo
 *~
 .DS_Store
+.worktrees/
 
 # Next.js
 .next/

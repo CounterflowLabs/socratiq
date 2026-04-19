@@ -20,6 +20,8 @@ class KnowledgeGraphNode(BaseModel):
     id: str
     label: str
     category: str | None = None
+    description: str | None = None
+    kind: str = "related"
     mastery: float = 0.0
     section_id: str | None = None
 
@@ -100,6 +102,12 @@ class KnowledgeGraphService:
             return {"nodes": [], "edges": []}
 
         concept_ids_set = {c.id for c in concepts}
+        prerequisite_ids = {
+            prereq_id
+            for concept in concepts
+            for prereq_id in (concept.prerequisites or [])
+            if prereq_id in concept_ids_set
+        }
         nodes: list[KnowledgeGraphNode] = []
         edges: list[KnowledgeGraphEdge] = []
 
@@ -145,6 +153,8 @@ class KnowledgeGraphService:
                     id=str(concept.id),
                     label=concept.name,
                     category=concept.category,
+                    description=concept.description,
+                    kind="current" if concept.id not in prerequisite_ids else "related",
                     mastery=round(mastery, 2),
                 )
             )

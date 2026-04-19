@@ -300,6 +300,72 @@ class TestCourses:
         finally:
             del the_app.dependency_overrides[get_model_router]
 
+    @pytest.mark.asyncio
+    async def test_course_detail_preserves_richer_section_content(
+        self, client: AsyncClient, db_session, demo_user
+    ):
+        source = Source(
+            type="youtube",
+            title="Rich Content Source",
+            status="ready",
+            url="https://example.com/rich-content",
+            created_by=demo_user.id,
+        )
+        db_session.add(source)
+        await db_session.flush()
+
+        course = Course(
+            title="Rich Content Course",
+            description="A course with richer section content.",
+            created_by=demo_user.id,
+        )
+        db_session.add(course)
+        await db_session.flush()
+
+        db_session.add(CourseSource(course_id=course.id, source_id=source.id))
+        db_session.add_all(
+            [
+                Section(
+                    course_id=course.id,
+                    title="Graph Section",
+                    order_index=0,
+                    source_id=source.id,
+                    content={
+                        "graph_card": {
+                            "current": ["attention"],
+                            "prerequisites": ["embeddings"],
+                        },
+                        "lab_mode": "inline",
+                        "lesson": {
+                            "summary": "Attention builds on token embeddings.",
+                        },
+                    },
+                    difficulty=2,
+                ),
+                Section(
+                    course_id=course.id,
+                    title="Empty Content Section",
+                    order_index=1,
+                    source_id=source.id,
+                    content=None,
+                    difficulty=1,
+                ),
+            ]
+        )
+        await db_session.flush()
+
+        res = await client.get(f"/api/v1/courses/{course.id}")
+        assert res.status_code == 200
+
+        detail = res.json()
+        sections_by_title = {section["title"]: section for section in detail["sections"]}
+
+        assert sections_by_title["Graph Section"]["content"]["graph_card"]["current"] == [
+            "attention"
+        ]
+        assert sections_by_title["Graph Section"]["content"]["lab_mode"] == "inline"
+        assert sections_by_title["Empty Content Section"]["content"] == {}
+
 
 @pytest.mark.asyncio
 async def test_course_generation_reuses_source_metadata_without_regenerating(

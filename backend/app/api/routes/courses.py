@@ -133,7 +133,7 @@ async def get_course(
                 source_start=s.source_start,
                 source_end=s.source_end,
                 source_id=s.source_id,
-                content=s.content,
+                content=s.content or {},
                 difficulty=s.difficulty,
             )
             for s in sections

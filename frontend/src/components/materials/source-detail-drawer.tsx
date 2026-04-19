@@ -208,7 +208,7 @@ export default function SourceDetailDrawer({
           </div>
 
           <div className="border-t border-gray-200 bg-white p-5">
-            {source.latest_course_id ? (
+            {presentation.primaryAction === "enter-course" && source.latest_course_id ? (
               <Link
                 className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-blue-700"
                 href={`/path?courseId=${source.latest_course_id}`}

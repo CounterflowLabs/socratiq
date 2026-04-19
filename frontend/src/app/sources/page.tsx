@@ -7,9 +7,14 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { listSources, type SourceResponse } from "@/lib/api";
 import SourceDetailDrawer from "@/components/materials/source-detail-drawer";
-import { deriveMaterialPresentation } from "@/lib/materials-state";
+import {
+  deriveMaterialPresentation,
+  isMaterialActive,
+  matchesMaterialStatusFilter,
+  type MaterialStatusFilter,
+} from "@/lib/materials-state";
 
-const STATUS_LABELS: Record<string, string> = {
+const STATUS_LABELS: Record<MaterialStatusFilter, string> = {
   all: "全部状态",
   ready: "已就绪",
   processing: "处理中",
@@ -22,32 +27,44 @@ function TypeIcon({ type }: { type: string }) {
   return <FileText className="w-5 h-5 text-gray-400" />;
 }
 
-function matchesStatusFilter(source: SourceResponse, filter: string): boolean {
-  if (filter === "all") {
-    return true;
-  }
-
-  if (filter === "processing") {
-    return source.status !== "ready" && source.status !== "error";
-  }
-
-  return source.status === filter;
-}
-
 export default function SourcesPage() {
   const [sources, setSources] = useState<SourceResponse[]>([]);
   const [loading, setLoading] = useState(true);
   const [total, setTotal] = useState(0);
   const [query, setQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
-  const [selectedSource, setSelectedSource] = useState<SourceResponse | null>(null);
+  const [statusFilter, setStatusFilter] = useState<MaterialStatusFilter>("all");
+  const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
 
   useEffect(() => {
-    loadSources();
+    void loadSources();
   }, []);
 
-  async function loadSources() {
-    setLoading(true);
+  useEffect(() => {
+    const hasActiveSource = sources.some((source) => isMaterialActive(source));
+    if (!hasActiveSource) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      void loadSources({ background: true });
+    }, 3000);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [sources]);
+
+  useEffect(() => {
+    if (selectedSourceId && !sources.some((source) => source.id === selectedSourceId)) {
+      setSelectedSourceId(null);
+    }
+  }, [selectedSourceId, sources]);
+
+  async function loadSources(options?: { background?: boolean }) {
+    if (!options?.background) {
+      setLoading(true);
+    }
+
     try {
       const res = await listSources();
       setSources(res.items);
@@ -55,7 +72,9 @@ export default function SourcesPage() {
     } catch (e) {
       console.error("Failed to load sources:", e);
     } finally {
-      setLoading(false);
+      if (!options?.background) {
+        setLoading(false);
+      }
     }
   }
 
@@ -63,8 +82,11 @@ export default function SourcesPage() {
   const filteredSources = sources.filter((source) => {
     const title = (source.title || source.url || "").toLowerCase();
     const matchesQuery = normalizedQuery.length === 0 || title.includes(normalizedQuery);
-    return matchesQuery && matchesStatusFilter(source, statusFilter);
+    return matchesQuery && matchesMaterialStatusFilter(source, statusFilter);
   });
+  const selectedSource = selectedSourceId
+    ? sources.find((source) => source.id === selectedSourceId) ?? null
+    : null;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -101,7 +123,7 @@ export default function SourcesPage() {
               <select
                 aria-label="状态筛选"
                 className="h-10 w-full appearance-none rounded-lg border border-gray-200 bg-white pl-9 pr-3 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                onChange={(event) => setStatusFilter(event.target.value)}
+                onChange={(event) => setStatusFilter(event.target.value as MaterialStatusFilter)}
                 value={statusFilter}
               >
                 {Object.entries(STATUS_LABELS).map(([value, label]) => (
@@ -145,7 +167,7 @@ export default function SourcesPage() {
                 <Card key={source.id} className="p-0 transition hover:border-blue-200 hover:shadow-sm">
                   <button
                     className="w-full bg-transparent p-4 text-left"
-                    onClick={() => setSelectedSource(source)}
+                    onClick={() => setSelectedSourceId(source.id)}
                     type="button"
                   >
                     <div className="flex items-start gap-4">
@@ -178,7 +200,7 @@ export default function SourcesPage() {
         )}
 
         <SourceDetailDrawer
-          onClose={() => setSelectedSource(null)}
+          onClose={() => setSelectedSourceId(null)}
           open={selectedSource !== null}
           source={selectedSource}
         />

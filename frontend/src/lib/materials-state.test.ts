@@ -40,7 +40,7 @@ describe("deriveMaterialPresentation", () => {
     expect(result.supportingText).toContain("LLM timeout");
   });
 
-  it("keeps enter-course when a course already exists even if the latest generation failed", () => {
+  it("does not offer enter-course when the latest generation failed even with a stale course id", () => {
     const result = deriveMaterialPresentation(
       makeSource({
         latest_course_id: "course-123",
@@ -54,8 +54,8 @@ describe("deriveMaterialPresentation", () => {
       })
     );
 
-    expect(result.badge).toBe("已生成课程");
-    expect(result.primaryAction).toBe("enter-course");
+    expect(result.badge).toBe("课程生成失败");
+    expect(result.primaryAction).toBe("view-details");
   });
 
   it("marks error sources as failed instead of processing", () => {
@@ -68,5 +68,20 @@ describe("deriveMaterialPresentation", () => {
     expect(result.badge).toBe("资料处理失败");
     expect(result.primaryAction).toBe("view-details");
     expect(result.supportingText).toContain("失败");
+  });
+
+  it("treats ready sources with active course generation as processing", () => {
+    const result = deriveMaterialPresentation(
+      makeSource({
+        latest_course_task: {
+          task_type: "course_generation",
+          status: "running",
+          stage: "assembling_course",
+        },
+      })
+    );
+
+    expect(result.badge).toBe("课程生成中");
+    expect(result.primaryAction).toBe("view-details");
   });
 });

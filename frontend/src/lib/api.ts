@@ -166,6 +166,15 @@ export interface LessonConcept {
   description?: string | null;
 }
 
+export interface GraphCard {
+  current: string[];
+  prerequisites: string[];
+  unlocks: string[];
+  section_anchor?: string | number | null;
+}
+
+export type LabMode = "inline" | "none";
+
 export interface LessonBlock {
   type:
     | "intro_card"
@@ -179,6 +188,10 @@ export interface LessonBlock {
   title?: string | null;
   body?: string | null;
   concepts?: LessonConcept[];
+  code?: string | null;
+  language?: string | null;
+  diagram_type?: string | null;
+  diagram_content?: string | null;
   metadata?: Record<string, string | number | boolean | null>;
 }
 

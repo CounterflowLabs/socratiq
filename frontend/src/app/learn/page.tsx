@@ -17,28 +17,12 @@ import {
   recordProgress,
   translateSection,
   type CourseDetailResponse,
+  type GraphCard,
+  type LabMode,
+  type LessonContent,
   type SectionResponse,
   type SourceSummary,
 } from "@/lib/api";
-
-interface LessonSection {
-  heading: string;
-  content: string;
-  timestamp: number;
-  code_snippets: { language: string; code: string; context: string }[];
-  key_concepts: string[];
-  diagrams: { type: string; title: string; content: string }[];
-  interactive_steps: {
-    title: string;
-    steps: { label: string; detail: string; code?: string | null }[];
-  } | null;
-}
-
-interface LessonContent {
-  title: string;
-  summary: string;
-  sections: LessonSection[];
-}
 
 function getCurrentSource(section: SectionResponse, course: CourseDetailResponse) {
   return course.sources.find((item) => item.id === section.source_id) ?? course.sources[0] ?? null;
@@ -111,6 +95,34 @@ function isPdfSource(source: SourceSummary): boolean {
 function isVideoSource(source: SourceSummary): boolean {
   if (source.type === "youtube" || source.type === "bilibili") return true;
   return /(?:youtube\.com|youtu\.be|bilibili\.com)/i.test(source.url ?? "");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function readLabMode(content: unknown): LabMode | null {
+  if (!isRecord(content)) return null;
+  const value = content.lab_mode;
+  return value === "inline" || value === "none" ? value : null;
+}
+
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function readGraphCard(content: unknown): GraphCard | null {
+  if (!isRecord(content) || !isRecord(content.graph_card)) return null;
+
+  return {
+    current: readStringArray(content.graph_card.current),
+    prerequisites: readStringArray(content.graph_card.prerequisites),
+    unlocks: readStringArray(content.graph_card.unlocks),
+    section_anchor:
+      typeof content.graph_card.section_anchor === "string" || typeof content.graph_card.section_anchor === "number"
+        ? content.graph_card.section_anchor
+        : null,
+  };
 }
 
 function LearnPageInner() {
@@ -255,6 +267,8 @@ function LearnPageInner() {
   }
 
   const lessonData = (section?.content?.lesson as LessonContent | undefined) ?? undefined;
+  const lessonLabMode = readLabMode(section?.content);
+  const lessonGraphCard = readGraphCard(section?.content);
   const hasLesson = !!(lessonData && lessonData.title && lessonData.sections);
   const completedCount = currentIdx >= 0 ? currentIdx + 1 : 0;
   const totalCount = sections.length;
@@ -397,7 +411,13 @@ function LearnPageInner() {
             className="max-h-[75vh] overflow-y-auto px-4 py-4"
           >
             {hasLesson ? (
-              <LessonRenderer lesson={lessonData} onTimestampClick={videoEmbed ? handleTimestampClick : undefined} />
+              <LessonRenderer
+                lesson={lessonData}
+                onTimestampClick={videoEmbed ? handleTimestampClick : undefined}
+                sectionId={section?.id ?? null}
+                labMode={lessonLabMode}
+                graphCard={lessonGraphCard}
+              />
             ) : rawSectionContent ? (
               <div className="whitespace-pre-wrap text-sm leading-7 text-slate-700">
                 {typeof rawSectionContent === "string"

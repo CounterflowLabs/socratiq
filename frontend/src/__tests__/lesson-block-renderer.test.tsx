@@ -34,4 +34,83 @@ describe("LessonBlockRenderer", () => {
     expect(screen.getByText("你将学到什么")).toBeInTheDocument();
     expect(screen.getByText("动手试一试")).toBeInTheDocument();
   });
+
+  it("renders backend-native code and diagram block fields instead of only body metadata fallbacks", async () => {
+    const { default: LessonBlockRenderer } = await import("@/components/lesson/lesson-block-renderer");
+
+    render(
+      <LessonBlockRenderer
+        lesson={{
+          title: "Backend Shape",
+          summary: "真实 payload",
+          blocks: [
+            {
+              type: "code_example",
+              title: "示例代码",
+              body: "这段说明不应该替代真正代码",
+              code: "print('hello from block.code')",
+              language: "python",
+            },
+            {
+              type: "diagram",
+              title: "结构图",
+              body: "这段 prose 不应该替代 diagram_content",
+              diagram_type: "plain",
+              diagram_content: "A --> B --> C",
+            },
+          ],
+          sections: [],
+        }}
+      />
+    );
+
+    expect(screen.getByText("print('hello from block.code')")).toBeInTheDocument();
+    expect(screen.getByText("python")).toBeInTheDocument();
+    expect(screen.getByText("A --> B --> C")).toBeInTheDocument();
+    expect(screen.queryByText("这段 prose 不应该替代 diagram_content")).not.toBeInTheDocument();
+  });
+
+  it("adds an inline practice entry when runtime lab mode is inline even without a practice block", async () => {
+    const { default: LessonBlockRenderer } = await import("@/components/lesson/lesson-block-renderer");
+
+    render(
+      <LessonBlockRenderer
+        lesson={{
+          title: "Runtime Fallback",
+          summary: "只给后端真实 lesson blocks",
+          blocks: [{ type: "prose", title: "正文", body: "先学习，再动手。" }],
+          sections: [],
+        }}
+        sectionId="section-inline-1"
+        labMode="inline"
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "开始练习" })).toBeInTheDocument();
+  });
+
+  it("adds a concept relation fallback from graph card runtime data", async () => {
+    const { default: LessonBlockRenderer } = await import("@/components/lesson/lesson-block-renderer");
+
+    render(
+      <LessonBlockRenderer
+        lesson={{
+          title: "Graph Runtime",
+          summary: "图谱兜底",
+          blocks: [{ type: "prose", title: "正文", body: "注意 prerequisite 关系。" }],
+          sections: [],
+        }}
+        graphCard={{
+          current: ["attention"],
+          prerequisites: ["linear algebra"],
+          unlocks: ["transformer"],
+          section_anchor: 1,
+        }}
+      />
+    );
+
+    expect(screen.getByText("attention")).toBeInTheDocument();
+    expect(screen.getByText("linear algebra")).toBeInTheDocument();
+    expect(screen.getByText("transformer")).toBeInTheDocument();
+  });
 });

@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 
-import { type LessonBlock, type LessonContent } from "@/lib/api";
+import { type GraphCard, type LabMode, type LessonBlock, type LessonConcept, type LessonContent } from "@/lib/api";
 
 import CodeBlock from "./code-block";
 import TimestampLink from "./timestamp-link";
@@ -10,6 +10,12 @@ import { ConceptRelationCard } from "./blocks/concept-relation-card";
 import { PracticeTriggerCard } from "./blocks/practice-trigger-card";
 
 const MermaidDiagram = dynamic(() => import("./mermaid-diagram"), { ssr: false });
+
+const GRAPH_BUCKET_LABELS = {
+  prerequisites: "先修概念",
+  current: "当前聚焦",
+  unlocks: "继续深入",
+} as const;
 
 function readStringMetadata(block: LessonBlock, key: string): string | null {
   const value = block.metadata?.[key];
@@ -55,16 +61,18 @@ export function blocksFromLegacy(lesson: LessonContent): LessonBlock[] {
         type: "diagram",
         title: diagram.title || section.heading,
         body: diagram.content,
-        metadata: { diagramType: diagram.type },
+        diagram_type: diagram.type,
+        diagram_content: diagram.content,
       });
     });
 
     section.code_snippets.forEach((snippet) => {
       blocks.push({
         type: "code_example",
-        title: snippet.context || section.heading,
-        body: snippet.code,
-        metadata: { language: snippet.language },
+        title: section.heading,
+        body: snippet.context || section.content,
+        code: snippet.code,
+        language: snippet.language,
       });
     });
 
@@ -87,6 +95,72 @@ export function blocksFromLegacy(lesson: LessonContent): LessonBlock[] {
 
   if (lesson.summary) {
     blocks.push({ type: "recap", title: "本节小结", body: lesson.summary });
+  }
+
+  return blocks;
+}
+
+function readBlockSectionId(block: LessonBlock): string | null {
+  const direct = block.metadata?.sectionId;
+  if (typeof direct === "string") return direct;
+
+  const snakeCase = block.metadata?.section_id;
+  return typeof snakeCase === "string" ? snakeCase : null;
+}
+
+function graphCardToConcepts(graphCard: GraphCard | null | undefined): LessonConcept[] {
+  if (!graphCard) return [];
+
+  const seen = new Set<string>();
+  const concepts: LessonConcept[] = [];
+
+  (["prerequisites", "current", "unlocks"] as const).forEach((bucket) => {
+    graphCard[bucket].forEach((label) => {
+      if (!label || seen.has(label)) return;
+      seen.add(label);
+      concepts.push({
+        label,
+        description: GRAPH_BUCKET_LABELS[bucket],
+      });
+    });
+  });
+
+  return concepts;
+}
+
+function withRuntimeFallbacks(
+  baseBlocks: LessonBlock[],
+  runtime: {
+    sectionId?: string | null;
+    labMode?: LabMode | null;
+    graphCard?: GraphCard | null;
+  }
+): LessonBlock[] {
+  const blocks = [...baseBlocks];
+  const recapIndex = blocks.findIndex((block) => block.type === "recap");
+  const insertIndex = recapIndex >= 0 ? recapIndex : blocks.length;
+
+  const hasPracticeTrigger = blocks.some((block) => block.type === "practice_trigger");
+  if (!hasPracticeTrigger && runtime.labMode === "inline" && runtime.sectionId) {
+    blocks.splice(insertIndex, 0, {
+      type: "practice_trigger",
+      title: "动手试一试",
+      body: "打开本节 Lab，把刚学到的内容马上跑起来。",
+      metadata: { sectionId: runtime.sectionId },
+    });
+  }
+
+  const hasConceptRelation = blocks.some(
+    (block) => block.type === "concept_relation" && (block.concepts?.length ?? 0) > 0
+  );
+  const graphConcepts = graphCardToConcepts(runtime.graphCard);
+  if (!hasConceptRelation && graphConcepts.length > 0) {
+    blocks.splice(insertIndex, 0, {
+      type: "concept_relation",
+      title: "知识关系",
+      concepts: graphConcepts,
+      metadata: runtime.sectionId ? { sectionId: runtime.sectionId } : undefined,
+    });
   }
 
   return blocks;
@@ -132,11 +206,21 @@ function TextBlock({
 export default function LessonBlockRenderer({
   lesson,
   onTimestampClick,
+  sectionId,
+  labMode,
+  graphCard,
 }: {
   lesson: LessonContent;
   onTimestampClick?: (seconds: number) => void;
+  sectionId?: string | null;
+  labMode?: LabMode | null;
+  graphCard?: GraphCard | null;
 }) {
-  const blocks = blocksFromLegacy(lesson);
+  const blocks = withRuntimeFallbacks(blocksFromLegacy(lesson), {
+    sectionId,
+    labMode,
+    graphCard,
+  });
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-4 px-4 py-6">
@@ -157,39 +241,43 @@ export default function LessonBlockRenderer({
               />
             );
           case "diagram": {
-            const diagramType = readStringMetadata(block, "diagramType");
-            if (!block.body) return null;
+            const diagramType = block.diagram_type ?? readStringMetadata(block, "diagramType");
+            const diagramContent = block.diagram_content ?? block.body;
+            if (!diagramContent) return null;
             return diagramType === "mermaid" ? (
-              <MermaidDiagram key={blockKey} content={block.body} title={block.title ?? undefined} />
+              <MermaidDiagram key={blockKey} content={diagramContent} title={block.title ?? ""} />
             ) : (
               <section key={blockKey} className="rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4">
                 {block.title ? <h3 className="text-base font-semibold text-slate-900">{block.title}</h3> : null}
                 <pre className="mt-3 overflow-x-auto rounded-xl bg-slate-900 p-4 text-xs text-slate-100">
-                  {block.body}
+                  {diagramContent}
                 </pre>
               </section>
             );
           }
-          case "code_example":
-            return block.body ? (
+          case "code_example": {
+            const code = block.code ?? block.body;
+            if (!code) return null;
+            return (
               <section key={blockKey} className="rounded-2xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
                 <CodeBlock
-                  language={readStringMetadata(block, "language") ?? "plaintext"}
-                  code={block.body}
-                  context={block.title ?? undefined}
+                  language={block.language ?? readStringMetadata(block, "language") ?? "plaintext"}
+                  code={code}
+                  context={block.body && block.body !== code ? block.body : block.title ?? undefined}
                 />
               </section>
-            ) : null;
+            );
+          }
           case "concept_relation":
             return <ConceptRelationCard key={blockKey} title={block.title} concepts={block.concepts} />;
           case "practice_trigger": {
-            const sectionId = readStringMetadata(block, "sectionId");
-            return sectionId ? (
+            const blockSectionId = readBlockSectionId(block) ?? sectionId ?? null;
+            return blockSectionId ? (
               <PracticeTriggerCard
                 key={blockKey}
                 title={block.title ?? "动手练习"}
                 body={block.body ?? "打开练习，边学边做。"}
-                sectionId={sectionId}
+                sectionId={blockSectionId}
                 enabled
               />
             ) : null;

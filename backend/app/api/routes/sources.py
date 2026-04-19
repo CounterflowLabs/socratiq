@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_local_user
@@ -33,8 +33,6 @@ _ACTIVE_SOURCE_STATUSES = {
 }
 _ACTIVE_TASK_STATUSES = {"pending", "running", "progress"}
 _ACTIONABLE_RANK = {"failure": 0, "processing": 1, "ready": 2}
-
-
 
 @router.post("", response_model=SourceResponse, status_code=201)
 async def create_source(
@@ -101,7 +99,7 @@ async def create_source(
         )
         active_source = active_result.scalar_one_or_none()
         if active_source and active_source.celery_task_id:
-            return await _source_to_response(db, active_source)
+            return await _source_to_response(db, active_source, user_id=user.id)
 
         ready_result = await db.execute(
             select(Source)
@@ -139,7 +137,7 @@ async def create_source(
             )
             await db.commit()
             await db.refresh(source)
-            return await _source_to_response(db, source)
+            return await _source_to_response(db, source, user_id=user.id)
 
     source = Source(
         type=source_type,
@@ -165,7 +163,7 @@ async def create_source(
     await db.commit()
     await db.refresh(source)
 
-    return await _source_to_response(db, source)
+    return await _source_to_response(db, source, user_id=user.id)
 
 
 @router.get("", response_model=SourceListResponse)
@@ -180,11 +178,53 @@ async def list_sources(
     limit: int = 20,
 ) -> SourceListResponse:
     """List all content sources with filtering, sorting, and pagination."""
-    result = await db.execute(
-        select(Source)
-        .where(Source.created_by == user.id)
-        .order_by(Source.created_at.desc())
+    base_query = _build_source_base_query(
+        user_id=user.id,
+        query=query,
+        source_type=source_type,
     )
+
+    if sort == "recent" and status == "all":
+        count_result = await db.execute(
+            select(func.count()).select_from(base_query.subquery())
+        )
+        total = count_result.scalar_one()
+
+        page_result = await db.execute(
+            base_query.order_by(Source.created_at.desc()).offset(skip).limit(limit)
+        )
+        page_sources = page_result.scalars().all()
+        if not page_sources:
+            return SourceListResponse(items=[], total=total, skip=skip, limit=limit)
+
+        source_ids = [source.id for source in page_sources]
+        latest_task_summaries = await _get_latest_task_summaries(db, source_ids)
+        course_summaries = await _get_course_summaries(db, source_ids, user_id=user.id)
+        page_items = [
+            await _source_to_response(
+                db,
+                source,
+                user_id=user.id,
+                latest_processing_task=latest_task_summaries.get(source.id, {}).get(
+                    "source_processing"
+                ),
+                latest_course_task=latest_task_summaries.get(source.id, {}).get(
+                    "course_generation"
+                ),
+                course_count=course_summaries.get(source.id, (0, None))[0],
+                latest_course_id=course_summaries.get(source.id, (0, None))[1],
+            )
+            for source in page_sources
+        ]
+
+        return SourceListResponse(
+            items=page_items,
+            total=total,
+            skip=skip,
+            limit=limit,
+        )
+
+    result = await db.execute(base_query.order_by(Source.created_at.desc()))
     sources = result.scalars().all()
 
     if not sources:
@@ -192,7 +232,7 @@ async def list_sources(
 
     source_ids = [source.id for source in sources]
     latest_task_summaries = await _get_latest_task_summaries(db, source_ids)
-    course_summaries = await _get_course_summaries(db, source_ids)
+    course_summaries = await _get_course_summaries(db, source_ids, user_id=user.id)
 
     items_with_meta: list[tuple[str, SourceResponse, object]] = []
     for source in sources:
@@ -206,10 +246,6 @@ async def list_sources(
             latest_course_task=latest_course_task,
         )
 
-        if query and not _source_matches_query(source, query):
-            continue
-        if source_type and source.type != source_type:
-            continue
         if status != "all" and material_status != status:
             continue
 
@@ -218,6 +254,7 @@ async def list_sources(
             await _source_to_response(
                 db,
                 source,
+                user_id=user.id,
                 latest_processing_task=latest_processing_task,
                 latest_course_task=latest_course_task,
                 course_count=course_count,
@@ -256,7 +293,7 @@ async def get_source(
     source = result.scalar_one_or_none()
     if not source:
         raise HTTPException(404, f"Source {source_id} not found")
-    return await _source_to_response(db, source)
+    return await _source_to_response(db, source, user_id=user.id)
 
 
 def _detect_source_type(url: str | None) -> str:
@@ -335,6 +372,8 @@ async def _get_latest_task_summaries(
 async def _get_course_summaries(
     db: AsyncSession,
     source_ids: list[uuid.UUID],
+    *,
+    user_id: uuid.UUID,
 ) -> dict[uuid.UUID, tuple[int, uuid.UUID | None]]:
     if not source_ids:
         return {}
@@ -342,7 +381,10 @@ async def _get_course_summaries(
     result = await db.execute(
         select(CourseSource.source_id, CourseSource.course_id)
         .join(Course, Course.id == CourseSource.course_id)
-        .where(CourseSource.source_id.in_(source_ids))
+        .where(
+            CourseSource.source_id.in_(source_ids),
+            Course.created_by == user_id,
+        )
         .order_by(
             CourseSource.source_id,
             Course.created_at.desc(),
@@ -365,6 +407,7 @@ async def _source_to_response(
     db: AsyncSession,
     source: Source,
     *,
+    user_id: uuid.UUID,
     latest_processing_task: SourceTaskSummary | None = None,
     latest_course_task: SourceTaskSummary | None = None,
     course_count: int | None = None,
@@ -383,10 +426,9 @@ async def _source_to_response(
             task_type="course_generation",
         )
     if course_count is None or latest_course_id is None:
-        course_count, latest_course_id = (await _get_course_summaries(db, [source.id])).get(
-            source.id,
-            (0, None),
-        )
+        course_count, latest_course_id = (
+            await _get_course_summaries(db, [source.id], user_id=user_id)
+        ).get(source.id, (0, None))
 
     return SourceResponse(
         id=source.id,
@@ -405,17 +447,29 @@ async def _source_to_response(
     )
 
 
-def _source_matches_query(source: Source, query: str) -> bool:
-    normalized = query.casefold()
-    values = (
-        source.title,
-        source.url,
-        source.metadata_.get("original_filename") if source.metadata_ else None,
-    )
-    return any(
-        isinstance(value, str) and normalized in value.casefold()
-        for value in values
-    )
+def _build_source_base_query(
+    *,
+    user_id: uuid.UUID,
+    query: str | None,
+    source_type: str | None,
+):
+    filters = [Source.created_by == user_id]
+
+    if query:
+        pattern = f"%{query}%"
+        original_filename = Source.metadata_["original_filename"].as_string()
+        filters.append(
+            or_(
+                Source.title.ilike(pattern),
+                Source.url.ilike(pattern),
+                func.coalesce(original_filename, "").ilike(pattern),
+            )
+        )
+
+    if source_type:
+        filters.append(Source.type == source_type)
+
+    return select(Source).where(*filters)
 
 
 def _source_material_status(

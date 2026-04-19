@@ -8,6 +8,7 @@ from sqlalchemy import select
 from app.db.models.course import Course, CourseSource
 from app.db.models.source import Source
 from app.db.models.source_task import SourceTask
+from app.db.models.user import User
 
 
 @pytest.mark.asyncio
@@ -302,6 +303,83 @@ async def test_list_sources_uses_course_sources_for_course_summary(
     item = next(entry for entry in res.json()["items"] if entry["id"] == str(source.id))
     assert item["course_count"] == 2
     assert item["latest_course_id"] == str(newer_course.id)
+
+
+@pytest.mark.asyncio
+async def test_list_sources_excludes_other_users_course_sources(
+    client, db_session, demo_user
+):
+    source = Source(
+        type="pdf",
+        title="Isolated Source",
+        status="ready",
+        created_by=demo_user.id,
+    )
+    db_session.add(source)
+    await db_session.flush()
+
+    other_user = User(
+        id=uuid.uuid4(),
+        email="other@socratiq.local",
+        name="Other User",
+    )
+    db_session.add(other_user)
+    await db_session.flush()
+
+    own_course = Course(
+        title="Own Course",
+        description=None,
+        created_by=demo_user.id,
+    )
+    own_course.created_at = datetime(2026, 1, 2, 10, 0, 0)
+    own_course.updated_at = own_course.created_at
+    other_course = Course(
+        title="Other Course",
+        description=None,
+        created_by=other_user.id,
+    )
+    other_course.created_at = datetime(2026, 1, 3, 10, 0, 0)
+    other_course.updated_at = other_course.created_at
+    db_session.add_all([own_course, other_course])
+    await db_session.flush()
+
+    db_session.add_all([
+        CourseSource(course_id=own_course.id, source_id=source.id),
+        CourseSource(course_id=other_course.id, source_id=source.id),
+    ])
+    await db_session.flush()
+
+    res = await client.get("/api/v1/sources")
+    assert res.status_code == 200
+    item = next(entry for entry in res.json()["items"] if entry["id"] == str(source.id))
+    assert item["course_count"] == 1
+    assert item["latest_course_id"] == str(own_course.id)
+
+
+@pytest.mark.asyncio
+async def test_list_sources_recent_pagination_returns_requested_page(
+    client, db_session, demo_user
+):
+    sources = []
+    for index in range(3):
+        source = Source(
+            type="pdf",
+            title=f"Recent {index}",
+            status="ready",
+            created_by=demo_user.id,
+        )
+        source.created_at = datetime(2026, 1, index + 1, 9, 0, 0)
+        source.updated_at = source.created_at
+        sources.append(source)
+
+    db_session.add_all(sources)
+    await db_session.flush()
+
+    res = await client.get("/api/v1/sources?sort=recent&skip=1&limit=1")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["total"] == 3
+    assert [item["id"] for item in data["items"]] == [str(sources[1].id)]
 
 
 @pytest.mark.asyncio

@@ -323,6 +323,107 @@ describe("Learn page shell", () => {
     });
   });
 
+  it("uses a deterministic course-material fallback when multiple videos and pdfs are available", async () => {
+    const courseWithMultipleMaterials = {
+      ...courseResponse,
+      sources: [
+        {
+          id: "video-b",
+          type: "youtube",
+          url: "https://www.youtube.com/watch?v=late-video",
+        },
+        {
+          id: "pdf-b",
+          type: "pdf",
+          url: "https://example.com/later.pdf",
+        },
+        {
+          id: "article-1",
+          type: "article",
+          url: "https://example.com/article",
+        },
+        {
+          id: "video-a",
+          type: "youtube",
+          url: "https://www.youtube.com/watch?v=primary-video",
+        },
+        {
+          id: "pdf-a",
+          type: "pdf",
+          url: "https://example.com/primary.pdf",
+        },
+      ],
+      sections: [
+        {
+          ...courseResponse.sections[0],
+          id: "s-pdf",
+          title: "主 PDF",
+          order_index: 0,
+          source_id: "pdf-a",
+        },
+        {
+          ...courseResponse.sections[0],
+          id: "s-article",
+          title: "当前文章节",
+          order_index: 1,
+          source_id: "article-1",
+        },
+        {
+          ...courseResponse.sections[0],
+          id: "s-video-a",
+          title: "主视频节",
+          order_index: 2,
+          source_id: "video-a",
+        },
+        {
+          ...courseResponse.sections[0],
+          id: "s-video-b",
+          title: "备选视频节",
+          order_index: 3,
+          source_id: "video-b",
+        },
+      ],
+    };
+
+    globalThis.fetch = mockFetch({
+      "/api/v1/courses/c1": courseWithMultipleMaterials,
+    }) as typeof fetch;
+
+    vi.resetModules();
+    const LearnPage = (await import("@/app/learn/page")).default;
+
+    render(
+      <LayoutInner>
+        <SuspenseWrapper>
+          <LearnPage />
+        </SuspenseWrapper>
+      </LayoutInner>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("当前文章节")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /打开学习辅助区/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTitle("课程原视频")).toHaveAttribute(
+        "src",
+        expect.stringContaining("primary-video")
+      );
+      expect(screen.getByRole("button", { name: "原 PDF" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "原 PDF" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("link", { name: /打开原 PDF/i })).toHaveAttribute(
+        "href",
+        "https://example.com/primary.pdf"
+      );
+    });
+  });
+
   it("preserves bilibili page selection when the current section itself is the video source", async () => {
     const bilibiliCourse = {
       ...courseResponse,
@@ -352,6 +453,10 @@ describe("Learn page shell", () => {
           title: "视频第一节",
           order_index: 3,
           source_id: "video-1",
+          content: {
+            ...courseResponse.sections[0].content,
+            page_index: 0,
+          },
         },
         {
           ...courseResponse.sections[0],
@@ -359,6 +464,10 @@ describe("Learn page shell", () => {
           title: "视频第二节",
           order_index: 4,
           source_id: "video-1",
+          content: {
+            ...courseResponse.sections[0].content,
+            page_index: 1,
+          },
         },
       ],
     };
@@ -388,6 +497,63 @@ describe("Learn page shell", () => {
       expect(screen.getByTitle("课程原视频")).toHaveAttribute(
         "src",
         expect.stringContaining("p=2")
+      );
+    });
+  });
+
+  it("keeps bilibili single-part videos on p=1 even when one source is split into multiple sections", async () => {
+    const singlePartBilibiliCourse = {
+      ...courseResponse,
+      sources: [
+        {
+          id: "video-1",
+          type: "bilibili",
+          url: "https://www.bilibili.com/video/BV1single123",
+        },
+      ],
+      sections: [
+        {
+          ...courseResponse.sections[0],
+          id: "s1",
+          title: "视频切片一",
+          order_index: 0,
+          source_id: "video-1",
+        },
+        {
+          ...courseResponse.sections[0],
+          id: "s2",
+          title: "视频切片二",
+          order_index: 1,
+          source_id: "video-1",
+        },
+      ],
+    };
+
+    globalThis.fetch = mockFetch({
+      "/api/v1/courses/c1": singlePartBilibiliCourse,
+    }) as typeof fetch;
+
+    vi.resetModules();
+    const LearnPage = (await import("@/app/learn/page")).default;
+
+    render(
+      <LayoutInner>
+        <SuspenseWrapper>
+          <LearnPage />
+        </SuspenseWrapper>
+      </LayoutInner>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /0:12/i })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /0:12/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTitle("课程原视频")).toHaveAttribute(
+        "src",
+        expect.stringContaining("p=1")
       );
     });
   });

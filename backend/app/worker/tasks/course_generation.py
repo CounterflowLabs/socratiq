@@ -63,14 +63,21 @@ def _create_worker_resources() -> WorkerResources:
     soft_time_limit=600,
     time_limit=660,
 )
-def generate_course_task(self, ingest_result: dict, user_id: str | None = None) -> dict:
+def generate_course_task(
+    self,
+    ingest_result: dict,
+    user_id: str | None = None,
+    goal: str | None = None,
+) -> dict:
     """Generate course from an ingested source.
 
     Args:
         ingest_result: Result dict from ingest_source or clone_source (contains source_id).
         user_id: User UUID string for course ownership.
+        goal: Legacy compatibility kwarg from older producers; ignored by the worker.
     """
     import asyncio
+
     source_id = ingest_result["source_id"]
     return asyncio.run(_generate_course_async(self, source_id, user_id))
 

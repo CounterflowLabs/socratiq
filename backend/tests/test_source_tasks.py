@@ -105,6 +105,40 @@ def test_dispatch_course_generation_uses_preallocated_task_id(monkeypatch):
     }
 
 
+def test_generate_course_task_ignores_legacy_goal_kwarg(monkeypatch):
+    captured: dict[str, object] = {}
+
+    async def fake_generate_course_async(task, source_id, user_id):
+        captured.update(
+            {
+                "task": task,
+                "source_id": source_id,
+                "user_id": user_id,
+            }
+        )
+        return {"status": "ready"}
+
+    monkeypatch.setattr(
+        course_generation,
+        "_generate_course_async",
+        fake_generate_course_async,
+    )
+
+    task_obj = course_generation.generate_course_task
+    result = task_obj.run(
+        {"source_id": "source-1"},
+        user_id="user-1",
+        goal="legacy-goal",
+    )
+
+    assert result == {"status": "ready"}
+    assert captured == {
+        "task": task_obj,
+        "source_id": "source-1",
+        "user_id": "user-1",
+    }
+
+
 @pytest.mark.asyncio
 async def test_recover_course_generation_dispatch_failure_rolls_back_source_task_pointer(
     db_session, demo_user

@@ -252,6 +252,112 @@ class TestCourses:
             del the_app.dependency_overrides[get_model_router]
 
     @pytest.mark.asyncio
+    async def test_course_detail_orders_sources_and_marks_only_real_bilibili_pages(
+        self,
+        client: AsyncClient,
+        db_session,
+        demo_user,
+    ):
+        user_id = LOCAL_USER_ID
+        course = Course(
+            title="Ordered course",
+            description="Course detail ordering",
+            created_by=user_id,
+        )
+        db_session.add(course)
+        await db_session.flush()
+
+        video_source = Source(
+            id=uuid.UUID("00000000-0000-0000-0000-0000000000b2"),
+            type="bilibili",
+            title="Multipart video",
+            status="ready",
+            url="https://www.bilibili.com/video/BV1multi123",
+            metadata_={"lesson_by_page": {"0": {"title": "P1"}, "1": {"title": "P2"}}},
+            created_by=user_id,
+        )
+        article_source = Source(
+            id=uuid.UUID("00000000-0000-0000-0000-0000000000c3"),
+            type="article",
+            title="Article",
+            status="ready",
+            url="https://example.com/article",
+            created_by=user_id,
+        )
+        single_part_source = Source(
+            id=uuid.UUID("00000000-0000-0000-0000-0000000000a1"),
+            type="bilibili",
+            title="Single part video",
+            status="ready",
+            url="https://www.bilibili.com/video/BV1single123",
+            metadata_={"lesson_by_page": {"0": {"title": "Only page"}}},
+            created_by=user_id,
+        )
+        db_session.add_all([video_source, article_source, single_part_source])
+        await db_session.flush()
+
+        db_session.add_all(
+            [
+                CourseSource(course_id=course.id, source_id=video_source.id),
+                CourseSource(course_id=course.id, source_id=article_source.id),
+                CourseSource(course_id=course.id, source_id=single_part_source.id),
+            ]
+        )
+
+        db_session.add_all(
+            [
+                Section(
+                    course_id=course.id,
+                    title="Single part section",
+                    order_index=0,
+                    source_id=single_part_source.id,
+                    content={"lesson": {"title": "Single"}},
+                    difficulty=1,
+                ),
+                Section(
+                    course_id=course.id,
+                    title="Article section",
+                    order_index=1,
+                    source_id=article_source.id,
+                    content={"lesson": {"title": "Article"}},
+                    difficulty=1,
+                ),
+                Section(
+                    course_id=course.id,
+                    title="Multipart P1",
+                    order_index=2,
+                    source_id=video_source.id,
+                    content={"lesson": {"title": "P1"}},
+                    difficulty=1,
+                ),
+                Section(
+                    course_id=course.id,
+                    title="Multipart P2",
+                    order_index=3,
+                    source_id=video_source.id,
+                    content={"lesson": {"title": "P2"}},
+                    difficulty=1,
+                ),
+            ]
+        )
+        await db_session.commit()
+
+        res = await client.get(f"/api/v1/courses/{course.id}")
+        assert res.status_code == 200
+        detail = res.json()
+
+        assert [source["id"] for source in detail["sources"]] == [
+            str(single_part_source.id),
+            str(article_source.id),
+            str(video_source.id),
+        ]
+
+        sections_by_title = {section["title"]: section for section in detail["sections"]}
+        assert "page_index" not in sections_by_title["Single part section"]["content"]
+        assert sections_by_title["Multipart P1"]["content"]["page_index"] == 0
+        assert sections_by_title["Multipart P2"]["content"]["page_index"] == 1
+
+    @pytest.mark.asyncio
     async def test_source_not_ready_returns_400(self, client: AsyncClient, db_session):
         source = Source(
             type="bilibili", title="Pending", status="pending",

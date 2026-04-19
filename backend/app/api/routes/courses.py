@@ -1,7 +1,9 @@
 """API routes for course management."""
 
 import uuid
-from typing import Annotated
+from collections import defaultdict
+from math import inf
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
@@ -24,6 +26,27 @@ from app.services.llm.router import ModelRouter
 from app.db.models.user import User
 
 router = APIRouter(prefix="/api/v1/courses", tags=["courses"])
+
+
+def _extract_page_indices(metadata: dict[str, Any]) -> list[int]:
+    """Read explicit page indices from source metadata when available."""
+    for key in ("lesson_by_page", "graph_by_page", "labs_by_page"):
+        raw_pages = metadata.get(key)
+        if not isinstance(raw_pages, dict):
+            continue
+
+        page_indices: list[int] = []
+        for page_key in raw_pages.keys():
+            try:
+                page_indices.append(int(page_key))
+            except (TypeError, ValueError):
+                continue
+
+        deduped = sorted(set(page_indices))
+        if deduped:
+            return deduped
+
+    return []
 
 
 @router.post("/generate", response_model=CourseResponse, status_code=201)
@@ -114,11 +137,39 @@ async def get_course(
     sections = result.scalars().all()
 
     source_rows = (await db.execute(
-        select(Source.id, Source.url, Source.type)
+        select(Source.id, Source.url, Source.type, Source.metadata_)
         .join(CourseSource, CourseSource.source_id == Source.id)
         .where(CourseSource.course_id == course.id)
     )).all()
-    sources = [SourceSummary(id=r.id, url=r.url, type=r.type) for r in source_rows]
+
+    source_first_section_order: dict[uuid.UUID, int] = {}
+    sections_by_source: dict[uuid.UUID, list[Section]] = defaultdict(list)
+    for index, section in enumerate(sections):
+        if not section.source_id:
+            continue
+        sections_by_source[section.source_id].append(section)
+        source_first_section_order.setdefault(section.source_id, index)
+
+    ordered_source_rows = sorted(
+        source_rows,
+        key=lambda row: (
+            source_first_section_order.get(row.id, inf),
+            str(row.id),
+        ),
+    )
+    sources = [SourceSummary(id=r.id, url=r.url, type=r.type) for r in ordered_source_rows]
+
+    source_page_index_by_section: dict[uuid.UUID, dict[uuid.UUID, int]] = {}
+    for row in ordered_source_rows:
+        page_indices = _extract_page_indices(row.metadata_ or {})
+        source_sections = sections_by_source.get(row.id, [])
+        if len(page_indices) <= 1 or len(source_sections) != len(page_indices):
+            continue
+
+        source_page_index_by_section[row.id] = {
+            section.id: page_index
+            for section, page_index in zip(source_sections, page_indices, strict=False)
+        }
 
     return CourseDetailResponse(
         id=course.id,
@@ -133,7 +184,15 @@ async def get_course(
                 source_start=s.source_start,
                 source_end=s.source_end,
                 source_id=s.source_id,
-                content=s.content or {},
+                content={
+                    **(s.content or {}),
+                    **(
+                        {"page_index": source_page_index_by_section[s.source_id][s.id]}
+                        if s.source_id in source_page_index_by_section
+                        and s.id in source_page_index_by_section[s.source_id]
+                        else {}
+                    ),
+                },
                 difficulty=s.difficulty,
             )
             for s in sections

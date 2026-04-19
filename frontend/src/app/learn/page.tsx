@@ -24,15 +24,39 @@ import {
   type SourceSummary,
 } from "@/lib/api";
 
+function getOrderedSources(course: CourseDetailResponse) {
+  const sourceFirstSectionOrder = new Map<string, number>();
+
+  [...course.sections]
+    .sort((left, right) => {
+      const leftIndex = left.order_index ?? Number.MAX_SAFE_INTEGER;
+      const rightIndex = right.order_index ?? Number.MAX_SAFE_INTEGER;
+      return leftIndex - rightIndex;
+    })
+    .forEach((section, index) => {
+      if (!section.source_id || sourceFirstSectionOrder.has(section.source_id)) return;
+      sourceFirstSectionOrder.set(section.source_id, index);
+    });
+
+  return [...course.sources].sort((left, right) => {
+    const leftRank = sourceFirstSectionOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER;
+    const rightRank = sourceFirstSectionOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER;
+    if (leftRank !== rightRank) return leftRank - rightRank;
+    return left.id.localeCompare(right.id);
+  });
+}
+
 function getCurrentSource(section: SectionResponse, course: CourseDetailResponse) {
-  return course.sources.find((item) => item.id === section.source_id) ?? course.sources[0] ?? null;
+  const orderedSources = getOrderedSources(course);
+  return orderedSources.find((item) => item.id === section.source_id) ?? orderedSources[0] ?? null;
 }
 
 function getVideoSource(section: SectionResponse, course: CourseDetailResponse) {
   const currentSource = getCurrentSource(section, course);
+  const orderedSources = getOrderedSources(course);
   return (
     (currentSource && isVideoSource(currentSource) ? currentSource : null) ??
-    course.sources.find((item) => isVideoSource(item)) ??
+    orderedSources.find((item) => isVideoSource(item)) ??
     null
   );
 }
@@ -47,17 +71,40 @@ function getSourceSections(course: CourseDetailResponse, sourceId: string) {
     });
 }
 
+function readPageIndex(content: unknown): number | null {
+  if (!isRecord(content)) return null;
+
+  if (typeof content.page_index === "number" && Number.isInteger(content.page_index) && content.page_index >= 0) {
+    return content.page_index;
+  }
+
+  if (
+    isRecord(content.graph_card) &&
+    typeof content.graph_card.section_anchor === "number" &&
+    Number.isInteger(content.graph_card.section_anchor) &&
+    content.graph_card.section_anchor >= 0
+  ) {
+    return content.graph_card.section_anchor;
+  }
+
+  return null;
+}
+
 function getBilibiliPage(
   section: SectionResponse,
   course: CourseDetailResponse,
   source: SourceSummary
 ) {
-  const sourceSections = getSourceSections(course, source.id);
-  if (sourceSections.length === 0) return 1;
   if (section.source_id !== source.id) return 1;
 
-  const relativeIndex = sourceSections.findIndex((item) => item.id === section.id);
-  return relativeIndex >= 0 ? relativeIndex + 1 : 1;
+  const sourceSections = getSourceSections(course, source.id);
+  const pageIndices = sourceSections
+    .map((item) => readPageIndex(item.content))
+    .filter((value): value is number => value !== null);
+  const explicitPageIndex = readPageIndex(section.content);
+
+  if (explicitPageIndex === null || new Set(pageIndices).size <= 1) return 1;
+  return explicitPageIndex + 1;
 }
 
 function getVideoEmbed(
@@ -274,19 +321,20 @@ function LearnPageInner() {
   const totalCount = sections.length;
   const progressLabel = totalCount > 0 ? `进度 ${completedCount}/${totalCount}` : "准备中";
   const rawSectionContent = section?.content as unknown;
+  const orderedSources = useMemo(() => (course ? getOrderedSources(course) : []), [course]);
   const currentSource = section && course ? getCurrentSource(section, course) : null;
   const videoSource = section && course ? getVideoSource(section, course) : null;
   const videoEmbed = section && course ? getVideoEmbed(section, course, videoSource) : null;
   const pdfSource =
     (currentSource && isPdfSource(currentSource) ? currentSource : null) ??
-    course?.sources.find((item) => isPdfSource(item)) ??
+    orderedSources.find((item) => isPdfSource(item)) ??
     null;
   const referenceSources = useMemo(
     () =>
-      (course?.sources ?? []).filter(
+      orderedSources.filter(
         (item) => item.id !== videoSource?.id && item.id !== pdfSource?.id
       ),
-    [course?.sources, pdfSource?.id, videoSource?.id]
+    [orderedSources, pdfSource?.id, videoSource?.id]
   );
   const availableAsidePanels = useMemo(() => {
     const panels: AsidePanelId[] = [];

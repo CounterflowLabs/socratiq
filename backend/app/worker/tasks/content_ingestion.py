@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import (
 from app.config import Settings, get_settings
 from app.services.llm.router import ModelRouter
 from app.services.source_tasks import (
+    dispatch_course_generation,
     finish_source_processing_and_enqueue_course,
     mark_source_task,
 )
@@ -108,6 +109,7 @@ async def _clone_source_async(task, source_id: str, ref_source_id: str) -> dict:
         async with resources.session_factory() as db:
             target = await db.get(Source, sid)
             ref = await db.get(Source, ref_sid)
+            completion = None
 
             if not target or not ref or ref.status != "ready":
                 if target:
@@ -165,7 +167,7 @@ async def _clone_source_async(task, source_id: str, ref_source_id: str) -> dict:
                     )
                     concept_count += 1
 
-                result_payload = await finish_source_processing_and_enqueue_course(
+                completion = await finish_source_processing_and_enqueue_course(
                     db=db,
                     source=target,
                     processing_task=await _get_source_processing_task(db, sid),
@@ -185,7 +187,6 @@ async def _clone_source_async(task, source_id: str, ref_source_id: str) -> dict:
                     chunk_count,
                     concept_count,
                 )
-                return result_payload
             except Exception as exc:
                 logger.error(
                     "Clone ingestion failed for source %s: %s",
@@ -196,6 +197,15 @@ async def _clone_source_async(task, source_id: str, ref_source_id: str) -> dict:
                 await _update_status(db, sid, "error", error_message=str(exc))
                 await db.commit()
                 raise
+        if completion is None:
+            raise RuntimeError("Clone finished without preparing course generation")
+        dispatch_course_generation(
+            payload=completion.course_dispatch.payload,
+            task_id=completion.course_dispatch.task_id,
+            goal=completion.course_dispatch.goal,
+            user_id=completion.course_dispatch.user_id,
+        )
+        return completion.result
     finally:
         await resources.engine.dispose()
 
@@ -216,6 +226,7 @@ async def _ingest_source_async(task, source_id: str) -> dict:
     try:
         async with resources.session_factory() as db:
             source = await db.get(Source, sid)
+            completion = None
             if not source:
                 raise ValueError(f"Source {source_id} not found")
 
@@ -431,7 +442,7 @@ async def _ingest_source_async(task, source_id: str) -> dict:
                 )
 
                 # === STEP 7: DONE ===
-                result_payload = await finish_source_processing_and_enqueue_course(
+                completion = await finish_source_processing_and_enqueue_course(
                     db=db,
                     source=source,
                     processing_task=await _get_source_processing_task(db, sid),
@@ -447,8 +458,6 @@ async def _ingest_source_async(task, source_id: str) -> dict:
                     },
                 )
                 await db.commit()
-
-                return result_payload
             except Exception as exc:
                 logger.error(
                     "Ingestion failed for source %s: %s",
@@ -462,6 +471,15 @@ async def _ingest_source_async(task, source_id: str) -> dict:
                     str(exc),
                 )
                 raise
+        if completion is None:
+            raise RuntimeError("Ingestion finished without preparing course generation")
+        dispatch_course_generation(
+            payload=completion.course_dispatch.payload,
+            task_id=completion.course_dispatch.task_id,
+            goal=completion.course_dispatch.goal,
+            user_id=completion.course_dispatch.user_id,
+        )
+        return completion.result
     finally:
         await resources.engine.dispose()
 

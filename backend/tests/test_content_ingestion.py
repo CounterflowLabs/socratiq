@@ -274,8 +274,13 @@ async def test_ingest_source_queues_course_generation_when_pipeline_finishes(
         FakeEmbeddingService,
     )
     monkeypatch.setattr(
-        "app.services.source_tasks.generate_course_task.delay",
-        lambda payload, goal=None, user_id=None: SimpleNamespace(id="course-task-1"),
+        "app.services.source_tasks.uuid4",
+        lambda: "course-task-1",
+    )
+    monkeypatch.setattr(
+        content_ingestion,
+        "dispatch_course_generation",
+        lambda **kwargs: SimpleNamespace(id=kwargs["task_id"]),
     )
 
     task_updates: list[tuple[str, dict]] = []
@@ -291,6 +296,7 @@ async def test_ingest_source_queues_course_generation_when_pipeline_finishes(
 
     source_row = await db_session.get(Source, source.id)
     assert source_row.status == "ready"
+    assert source_row.celery_task_id == "course-task-1"
 
     tasks = (
         await db_session.execute(
@@ -380,8 +386,13 @@ async def test_clone_source_queues_course_generation_when_clone_finishes(
         lambda: fake_resources,
     )
     monkeypatch.setattr(
-        "app.services.source_tasks.generate_course_task.delay",
-        lambda payload, goal=None, user_id=None: SimpleNamespace(id="course-task-from-clone"),
+        "app.services.source_tasks.uuid4",
+        lambda: "course-task-from-clone",
+    )
+    monkeypatch.setattr(
+        content_ingestion,
+        "dispatch_course_generation",
+        lambda **kwargs: SimpleNamespace(id=kwargs["task_id"]),
     )
 
     task_updates: list[tuple[str, dict]] = []
@@ -407,6 +418,7 @@ async def test_clone_source_queues_course_generation_when_clone_finishes(
     assert result["status"] == "ready"
     assert result["queued_course_task_id"] == "course-task-from-clone"
     assert target_row.status == "ready"
+    assert target_row.celery_task_id == "course-task-from-clone"
     assert task_by_type["source_processing"].status == "success"
     assert task_by_type["source_processing"].stage == "ready"
     assert task_by_type["course_generation"].status == "pending"
@@ -489,10 +501,22 @@ async def test_ref_subscriber_ready_waiter_dispatches_only_clone_task(
     await ref_subscriber._handle_source_done(str(donor.id), "ready")
 
     waiter_row = await db_session.get(Source, waiter.id)
+    task_row = (
+        await db_session.execute(
+            select(SourceTask).where(
+                SourceTask.source_id == waiter.id,
+                SourceTask.task_type == "source_processing",
+            )
+        )
+    ).scalar_one_or_none()
 
     assert clone_calls == [(str(waiter.id), str(donor.id))]
     assert waiter_row.celery_task_id == "clone-task-1"
     assert waiter_row.status == "pending"
+    assert task_row is not None
+    assert task_row.status == "pending"
+    assert task_row.stage == "pending"
+    assert task_row.celery_task_id == "clone-task-1"
 
 
 @pytest.mark.asyncio

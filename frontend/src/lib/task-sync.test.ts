@@ -3,8 +3,9 @@ import { describe, expect, it } from "vitest";
 import { deriveTaskSyncState } from "./task-sync";
 
 describe("deriveTaskSyncState", () => {
-  it("keeps the task in course generation while source is ready but no course exists yet", () => {
+  it("hands polling off to the backend-created next task id when source processing completes", () => {
     const result = deriveTaskSyncState({
+      currentTaskId: "source-task-1",
       currentState: "embedding",
       taskStatus: {
         state: "SUCCESS",
@@ -12,17 +13,19 @@ describe("deriveTaskSyncState", () => {
       },
       source: {
         status: "ready",
+        task_id: "course-task-1",
         metadata_: {},
       },
     });
 
     expect(result.state).toBe("generating_course");
-    expect(result.shouldGenerateCourse).toBe(true);
+    expect(result.nextTaskId).toBe("course-task-1");
     expect(result.courseId).toBeUndefined();
   });
 
   it("marks the task successful once the backend reports a course id", () => {
     const result = deriveTaskSyncState({
+      currentTaskId: "course-task-1",
       currentState: "generating_course",
       taskStatus: {
         state: "SUCCESS",
@@ -37,7 +40,7 @@ describe("deriveTaskSyncState", () => {
     });
 
     expect(result.state).toBe("SUCCESS");
-    expect(result.shouldGenerateCourse).toBe(false);
+    expect(result.nextTaskId).toBeUndefined();
     expect(result.courseId).toBe("course-123");
   });
 });

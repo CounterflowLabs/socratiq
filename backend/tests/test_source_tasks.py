@@ -8,7 +8,10 @@ from sqlalchemy import select
 from app.db.models.content_chunk import ContentChunk
 from app.db.models.source import Source
 from app.db.models.source_task import SourceTask
-from app.services.source_tasks import finish_source_processing_and_enqueue_course
+from app.services.source_tasks import (
+    dispatch_course_generation,
+    finish_source_processing_and_enqueue_course,
+)
 from app.worker.tasks import course_generation
 
 
@@ -53,26 +56,51 @@ async def test_finish_source_processing_enqueues_course_generation_task(
     await db_session.flush()
 
     monkeypatch.setattr(
-        "app.services.source_tasks.generate_course_task.delay",
-        lambda payload, goal=None, user_id=None: SimpleNamespace(id="course-1"),
+        "app.services.source_tasks.uuid4",
+        lambda: "course-1",
     )
 
-    result = await finish_source_processing_and_enqueue_course(
+    completion = await finish_source_processing_and_enqueue_course(
         db=db_session,
         source=source,
         processing_task=processing_task,
         payload={"source_id": str(source.id)},
     )
 
-    assert result["queued_course_task_id"] == "course-1"
+    assert completion.result["queued_course_task_id"] == "course-1"
+    assert source.celery_task_id == "course-1"
     tasks = (
         await db_session.execute(
             select(SourceTask).where(SourceTask.source_id == source.id)
         )
     ).scalars().all()
-    assert {task.task_type for task in tasks} == {
-        "source_processing",
-        "course_generation",
+    task_by_type = {task.task_type: task for task in tasks}
+    assert set(task_by_type) == {"source_processing", "course_generation"}
+    assert task_by_type["course_generation"].celery_task_id == "course-1"
+    assert task_by_type["course_generation"].status == "pending"
+
+
+def test_dispatch_course_generation_uses_preallocated_task_id(monkeypatch):
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "app.services.source_tasks.generate_course_task.apply_async",
+        lambda args=None, kwargs=None, task_id=None: captured.update(
+            {"args": args, "kwargs": kwargs, "task_id": task_id}
+        ),
+    )
+
+    dispatch_course_generation(
+        payload={"source_id": "source-1"},
+        task_id="course-1",
+        goal="overview",
+        user_id="user-1",
+    )
+
+    assert captured == {
+        "args": [{"source_id": "source-1"}],
+        "kwargs": {"goal": "overview", "user_id": "user-1"},
+        "task_id": "course-1",
     }
 
 

@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import get_settings
+from app.services.source_tasks import mark_source_task
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,15 @@ async def _handle_source_done(ref_source_id: str, status: str) -> None:
                     result = clone_source.delay(str(waiter.id), ref_source_id)
                     waiter.celery_task_id = result.id
                     waiter.status = "pending"
+                    await mark_source_task(
+                        db,
+                        source_id=waiter.id,
+                        task_type="source_processing",
+                        status="pending",
+                        stage="pending",
+                        celery_task_id=result.id,
+                        error_summary=None,
+                    )
                     logger.info(f"Dispatched clone_source for {waiter.id}")
             else:
                 for waiter in waiters:

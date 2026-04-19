@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Brain, Plus, ChevronRight, BookOpen, Loader, AlertCircle, CheckCircle } from "lucide-react";
@@ -9,7 +9,6 @@ import {
   getSetupStatus,
   getTaskStatus,
   getSource,
-  generateCourse,
   getDueReviews,
   completeReview,
   getCourseProgress,
@@ -63,7 +62,6 @@ export default function DashboardPage() {
   const router = useRouter();
   const { courses, setCourses, loading, setLoading } = useCoursesStore();
   const { tasks, updateTask, removeTask } = useTasksStore();
-  const generatingCourseTaskIds = useRef<Set<string>>(new Set());
 
   const [dueReviews, setDueReviews] = useState<ReviewItemDetail[]>([]);
   const [ratingIds, setRatingIds] = useState<Set<string>>(new Set());
@@ -160,10 +158,21 @@ export default function DashboardPage() {
           }
 
           const syncState = deriveTaskSyncState({
+            currentTaskId: task.taskId,
             currentState: task.state,
             taskStatus: status,
             source,
           });
+
+          if (syncState.nextTaskId && syncState.nextTaskId !== task.taskId) {
+            updateTask(task.taskId, {
+              taskId: syncState.nextTaskId,
+              state: syncState.state,
+              error: sourceError || status?.error,
+              courseId: syncState.courseId,
+            });
+            continue;
+          }
 
           updateTask(task.taskId, {
             state: syncState.state,
@@ -174,26 +183,6 @@ export default function DashboardPage() {
           if (syncState.courseId) {
             listCourses().then((res) => setCourses(res.items)).catch(() => {});
             continue;
-          }
-
-          if (
-            syncState.shouldGenerateCourse &&
-            !task.courseId &&
-            !generatingCourseTaskIds.current.has(task.taskId)
-          ) {
-            generatingCourseTaskIds.current.add(task.taskId);
-            try {
-              const course = await generateCourse([task.sourceId]);
-              updateTask(task.taskId, { courseId: course.id, state: "SUCCESS" });
-              listCourses().then((res) => setCourses(res.items)).catch(() => {});
-            } catch (error) {
-              updateTask(task.taskId, {
-                state: "FAILURE",
-                error: error instanceof Error ? error.message : "课程生成失败",
-              });
-            } finally {
-              generatingCourseTaskIds.current.delete(task.taskId);
-            }
           }
         } catch {
           // silently retry on next interval

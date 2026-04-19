@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,13 +16,31 @@ from app.db.models.source_task import SourceTask
 class _GenerateCourseTaskProxy:
     """Lazy proxy to avoid circular imports between workers and task helpers."""
 
-    def delay(self, *args, **kwargs):
+    def apply_async(self, *args, **kwargs):
         from app.worker.tasks.course_generation import generate_course_task as task
 
-        return task.delay(*args, **kwargs)
+        return task.apply_async(*args, **kwargs)
 
 
 generate_course_task = _GenerateCourseTaskProxy()
+
+
+@dataclass(frozen=True)
+class PreparedCourseGeneration:
+    """Post-commit dispatch details for a preallocated course task."""
+
+    payload: dict[str, Any]
+    task_id: str
+    goal: str | None
+    user_id: str | None
+
+
+@dataclass(frozen=True)
+class SourceProcessingCompletion:
+    """Persisted completion data for a source-processing run."""
+
+    result: dict[str, Any]
+    course_dispatch: PreparedCourseGeneration
 
 
 async def create_source_task(
@@ -115,33 +135,60 @@ async def finish_source_processing_and_enqueue_course(
     source: Source,
     processing_task: SourceTask | None,
     payload: dict[str, Any],
-) -> dict[str, Any]:
+) -> SourceProcessingCompletion:
     """Mark source processing ready and enqueue a persisted course task."""
+    queued_task_id = str(uuid4())
     source.status = "ready"
+    source.celery_task_id = queued_task_id
 
-    if processing_task is not None:
-        processing_task.status = "success"
-        processing_task.stage = "ready"
-        processing_task.error_summary = None
+    await mark_source_task(
+        db,
+        source_id=source.id,
+        task_type="source_processing",
+        status="success",
+        stage="ready",
+        error_summary=None,
+        celery_task_id=(
+            processing_task.celery_task_id if processing_task is not None else None
+        ),
+    )
 
     metadata = source.metadata_ or {}
-    queued_task = generate_course_task.delay(
-        payload,
-        goal=metadata.get("pending_goal"),
-        user_id=metadata.get("pending_user_id") or str(source.created_by),
-    )
     await create_source_task(
         db,
         source_id=source.id,
         task_type="course_generation",
-        celery_task_id=queued_task.id,
+        celery_task_id=queued_task_id,
         status="pending",
         stage="pending",
     )
     await db.flush()
 
-    return {
-        **payload,
-        "status": "ready",
-        "queued_course_task_id": queued_task.id,
-    }
+    return SourceProcessingCompletion(
+        result={
+            **payload,
+            "status": "ready",
+            "queued_course_task_id": queued_task_id,
+        },
+        course_dispatch=PreparedCourseGeneration(
+            payload=payload,
+            task_id=queued_task_id,
+            goal=metadata.get("pending_goal"),
+            user_id=metadata.get("pending_user_id") or str(source.created_by),
+        ),
+    )
+
+
+def dispatch_course_generation(
+    *,
+    payload: dict[str, Any],
+    task_id: str,
+    goal: str | None,
+    user_id: str | None,
+):
+    """Dispatch the already-persisted course-generation task."""
+    return generate_course_task.apply_async(
+        args=[payload],
+        kwargs={"goal": goal, "user_id": user_id},
+        task_id=task_id,
+    )

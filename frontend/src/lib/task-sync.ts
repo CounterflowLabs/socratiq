@@ -7,9 +7,11 @@ interface TaskStatusLike {
 interface SourceLike {
   status?: string;
   metadata_?: Record<string, unknown>;
+  task_id?: string;
 }
 
 interface DeriveTaskSyncStateInput {
+  currentTaskId: string;
   currentState: string;
   taskStatus: TaskStatusLike | null;
   source: SourceLike | null;
@@ -17,8 +19,8 @@ interface DeriveTaskSyncStateInput {
 
 interface DeriveTaskSyncStateResult {
   state: string;
-  shouldGenerateCourse: boolean;
   courseId?: string;
+  nextTaskId?: string;
 }
 
 function getTaskStage(status: TaskStatusLike | null): string | null {
@@ -54,6 +56,13 @@ function extractCourseId(value: unknown): string | undefined {
 export function deriveTaskSyncState(
   input: DeriveTaskSyncStateInput
 ): DeriveTaskSyncStateResult {
+  const nextTaskId =
+    typeof input.source?.task_id === "string" &&
+    input.source.task_id &&
+    input.source.task_id !== input.currentTaskId
+      ? input.source.task_id
+      : undefined;
+
   const courseId =
     extractCourseId(input.taskStatus?.result) ||
     (input.source?.status === "ready"
@@ -63,7 +72,6 @@ export function deriveTaskSyncState(
   if (courseId) {
     return {
       state: "SUCCESS",
-      shouldGenerateCourse: false,
       courseId,
     };
   }
@@ -71,7 +79,13 @@ export function deriveTaskSyncState(
   if (input.source?.status === "error" || input.taskStatus?.state === "FAILURE") {
     return {
       state: "FAILURE",
-      shouldGenerateCourse: false,
+    };
+  }
+
+  if (nextTaskId) {
+    return {
+      state: "generating_course",
+      nextTaskId,
     };
   }
 
@@ -80,7 +94,6 @@ export function deriveTaskSyncState(
   if (nextState === "assembling_course") {
     return {
       state: "assembling_course",
-      shouldGenerateCourse: false,
     };
   }
 
@@ -90,12 +103,10 @@ export function deriveTaskSyncState(
   ) {
     return {
       state: "generating_course",
-      shouldGenerateCourse: true,
     };
   }
 
   return {
     state: nextState,
-    shouldGenerateCourse: false,
   };
 }

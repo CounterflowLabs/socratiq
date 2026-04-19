@@ -37,12 +37,15 @@ function SuspenseWrapper({ children }: { children: React.ReactNode }) {
 }
 
 // Reset Zustand stores between tests
-import { useCoursesStore, useChatStore } from "@/lib/stores";
+import { useChatStore, useCoursesStore, useSourcesStore, useTasksStore } from "@/lib/stores";
 
 function resetStores() {
   useCoursesStore.getState().setCourses([]);
   useCoursesStore.getState().setLoading(false);
   useChatStore.getState().clearChat();
+  useSourcesStore.getState().setSources([]);
+  useSourcesStore.getState().setLoading(false);
+  useTasksStore.setState({ tasks: [] });
 }
 
 beforeEach(() => {
@@ -143,13 +146,22 @@ describe("Import Page", () => {
     });
   });
 
-  it("allows import submission without choosing a learning goal", async () => {
+  it("allows import submission without choosing a learning goal and redirects to the materials hub", async () => {
+    const push = vi.fn();
+
+    vi.doMock("next/navigation", () => ({
+      useRouter: () => ({ push, back: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
+      useSearchParams: () => new URLSearchParams(),
+      usePathname: () => "/import",
+    }));
+
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({ id: "src1", type: "bilibili", status: "pending", task_id: "t1" }),
     });
     globalThis.fetch = fetchMock as typeof fetch;
 
+    vi.resetModules();
     const ImportPage = (await import("@/app/import/page")).default;
     render(<ImportPage />);
 
@@ -159,6 +171,7 @@ describe("Import Page", () => {
     fireEvent.click(screen.getByRole("button", { name: "开始导入" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/sources"));
   });
 });
 

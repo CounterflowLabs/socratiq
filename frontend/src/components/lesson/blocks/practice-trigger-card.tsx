@@ -13,6 +13,8 @@ interface PracticeTriggerCardProps {
   enabled: boolean;
 }
 
+type PracticeLoadState = "idle" | "loading" | "ready" | "missing" | "error";
+
 export function PracticeTriggerCard({
   title,
   body,
@@ -20,33 +22,48 @@ export function PracticeTriggerCard({
   enabled,
 }: PracticeTriggerCardProps) {
   const [open, setOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState<PracticeLoadState>("idle");
   const [lab, setLab] = useState<LabResponse | null>(null);
-  const [attempted, setAttempted] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   if (!enabled) return null;
+
+  async function loadLab() {
+    setStatus("loading");
+    setError(null);
+
+    try {
+      const data = await getSectionLab(sectionId);
+      if (data) {
+        setLab(data);
+        setStatus("ready");
+        return;
+      }
+
+      setLab(null);
+      setStatus("missing");
+    } catch (fetchError) {
+      setLab(null);
+      setStatus("error");
+      setError(fetchError instanceof Error ? fetchError.message : "练习加载失败，请稍后重试。");
+    }
+  }
 
   async function handleToggle() {
     const nextOpen = !open;
     setOpen(nextOpen);
 
-    if (!nextOpen || lab || attempted) {
+    if (!nextOpen) {
       return;
     }
 
-    setAttempted(true);
-    setLoading(true);
-    setError(null);
-
-    try {
-      const data = await getSectionLab(sectionId);
-      setLab(data);
-    } catch (fetchError) {
-      setError(fetchError instanceof Error ? fetchError.message : "练习加载失败，请稍后重试。");
-    } finally {
-      setLoading(false);
+    if (status === "idle" || status === "error") {
+      await loadLab();
     }
+  }
+
+  async function handleRetry() {
+    await loadLab();
   }
 
   return (
@@ -65,22 +82,29 @@ export function PracticeTriggerCard({
           onClick={handleToggle}
           className="inline-flex items-center justify-center rounded-full bg-amber-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-amber-600"
         >
-          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+          {status === "loading" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
           {open ? "收起练习" : "开始练习"}
         </button>
       </div>
 
       {open ? (
         <div className="mt-5">
-          {loading ? (
+          {status === "loading" ? (
             <div className="rounded-2xl border border-dashed border-amber-200 bg-white/80 px-4 py-6 text-sm text-slate-500">
               正在加载本节练习...
             </div>
-          ) : error ? (
+          ) : status === "error" ? (
             <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-4 text-sm text-red-700">
-              {error}
+              <p>{error ?? "练习加载失败，请稍后重试。"}</p>
+              <button
+                type="button"
+                onClick={handleRetry}
+                className="mt-3 inline-flex items-center rounded-full border border-red-200 bg-white px-3 py-1.5 text-sm font-medium text-red-700 transition hover:bg-red-100"
+              >
+                重试
+              </button>
             </div>
-          ) : lab ? (
+          ) : status === "ready" && lab ? (
             <LabEditor lab={lab} embedded />
           ) : (
             <div className="rounded-2xl border border-dashed border-slate-200 bg-white/80 px-4 py-6 text-sm text-slate-500">

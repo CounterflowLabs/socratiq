@@ -695,7 +695,8 @@ export interface LabResponse {
 
 export async function getSectionLab(sectionId: string): Promise<LabResponse | null> {
   const res = await apiFetch(`${API_BASE}/labs/section/${sectionId}`);
-  if (!res.ok) return null;
+  if (res.status === 404) return null;
+  if (!res.ok) throw await responseError(res);
   const data = await res.json();
   return data || null;
 }

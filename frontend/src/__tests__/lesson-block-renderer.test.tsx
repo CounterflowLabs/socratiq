@@ -1,5 +1,23 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const getSectionLabMock = vi.fn();
+
+vi.mock("@/components/lab/lab-editor", () => ({
+  default: ({ lab }: { lab: { title: string } }) => <div data-testid="lab-editor">{lab.title}</div>,
+}));
+
+vi.mock("@/lib/api", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
+  return {
+    ...actual,
+    getSectionLab: getSectionLabMock,
+  };
+});
+
+beforeEach(() => {
+  getSectionLabMock.mockReset();
+});
 
 describe("LessonBlockRenderer", () => {
   it("renders intro, prose, concept relation, practice trigger, and recap blocks", async () => {
@@ -87,6 +105,51 @@ describe("LessonBlockRenderer", () => {
     );
 
     expect(screen.getByRole("button", { name: "开始练习" })).toBeInTheDocument();
+  });
+
+  it("retries inline practice loading after an error and eventually renders the lab editor", async () => {
+    const { default: LessonBlockRenderer } = await import("@/components/lesson/lesson-block-renderer");
+
+    getSectionLabMock
+      .mockRejectedValueOnce(new Error("服务器暂时不可用"))
+      .mockResolvedValueOnce({
+        id: "lab-1",
+        section_id: "section-inline-1",
+        title: "Attention Lab",
+        description: "练习 attention",
+        language: "python",
+        starter_code: { "main.py": "print('hi')" },
+        test_code: {},
+        run_instructions: "python main.py",
+        confidence: 0.9,
+      });
+
+    render(
+      <LessonBlockRenderer
+        lesson={{
+          title: "Runtime Fallback",
+          summary: "只给后端真实 lesson blocks",
+          blocks: [{ type: "prose", title: "正文", body: "先学习，再动手。" }],
+          sections: [],
+        }}
+        sectionId="section-inline-1"
+        labMode="inline"
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "开始练习" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("服务器暂时不可用")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "重试" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("lab-editor")).toHaveTextContent("Attention Lab");
+    });
+    expect(getSectionLabMock).toHaveBeenCalledTimes(2);
   });
 
   it("adds a concept relation fallback from graph card runtime data", async () => {

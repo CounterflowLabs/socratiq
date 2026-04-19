@@ -4,6 +4,7 @@ import json
 import logging
 
 from app.models.lesson import LessonContent, LessonSection
+from app.models.lesson_blocks import ConceptLink, LessonBlock
 from app.services.llm.base import LLMProvider, UnifiedMessage
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,68 @@ class LessonGenerator:
     def __init__(self, provider: LLMProvider):
         self._provider = provider
 
+    def _blocks_from_legacy_sections(self, content: LessonContent) -> list[LessonBlock]:
+        blocks: list[LessonBlock] = [
+            LessonBlock(
+                type="intro_card",
+                title=content.title,
+                body=content.summary,
+            )
+        ]
+
+        for section in content.sections:
+            blocks.append(
+                LessonBlock(
+                    type="prose",
+                    title=section.heading,
+                    body=section.content,
+                    metadata={"timestamp": section.timestamp},
+                )
+            )
+
+            if section.key_concepts:
+                blocks.append(
+                    LessonBlock(
+                        type="concept_relation",
+                        title=section.heading,
+                        concepts=[ConceptLink(label=concept) for concept in section.key_concepts],
+                        metadata={"section_heading": section.heading},
+                    )
+                )
+
+            for snippet in section.code_snippets:
+                blocks.append(
+                    LessonBlock(
+                        type="code_example",
+                        title=section.heading,
+                        body=snippet.context or section.content,
+                        code=snippet.code,
+                        language=snippet.language,
+                        metadata={"section_heading": section.heading},
+                    )
+                )
+
+            for diagram in section.diagrams:
+                blocks.append(
+                    LessonBlock(
+                        type="diagram",
+                        title=diagram.title,
+                        body=section.content,
+                        diagram_type=diagram.type,
+                        diagram_content=diagram.content,
+                        metadata={"section_heading": section.heading},
+                    )
+                )
+
+        blocks.append(
+            LessonBlock(
+                type="recap",
+                title="Recap",
+                body=content.summary,
+            )
+        )
+        return blocks
+
     async def generate(
         self,
         subtitle_chunks: list[str],
@@ -79,12 +142,15 @@ class LessonGenerator:
                 text = text.strip()
 
             data = json.loads(text)
-            return LessonContent(**data)
+            content = LessonContent(**data)
+            if not content.blocks:
+                content.blocks = self._blocks_from_legacy_sections(content)
+            return content
 
         except Exception as e:
             logger.error(f"Lesson generation failed: {e}")
             # Fallback: wrap raw subtitle text as a single section
-            return LessonContent(
+            content = LessonContent(
                 title=video_title,
                 summary="",
                 sections=[LessonSection(
@@ -93,3 +159,5 @@ class LessonGenerator:
                     timestamp=0.0,
                 )],
             )
+            content.blocks = self._blocks_from_legacy_sections(content)
+            return content

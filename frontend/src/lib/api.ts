@@ -74,6 +74,8 @@ export interface SourceResponse {
   task_id?: string;
   latest_processing_task?: SourceTaskSummary | null;
   latest_course_task?: SourceTaskSummary | null;
+  course_count: number;
+  latest_course_id: string | null;
   created_at: string;
   updated_at: string;
 }

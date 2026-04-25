@@ -417,76 +417,12 @@ function LearnPageInner() {
               </span>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={handleTranslationToggle}
-            disabled={translationLoading || !section}
-            className={clsx(
-              "inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition",
-              showTranslation
-                ? "bg-blue-50 text-blue-700"
-                : "border border-slate-200 text-slate-600 hover:bg-slate-50"
-            )}
-          >
-            {translationLoading ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Languages className="h-4 w-4" />
-            )}
-            翻译
-          </button>
+          {/* TODO: 翻译功能暂时隐藏，后续修复后恢复 */}
         </div>
       </div>
 
       <div className="bg-slate-50">
-        {translationEstimate && !showTranslation ? (
-          <div className="border-b border-blue-100 bg-blue-50 px-4 py-3">
-              <p className="text-sm text-blue-700">
-                需要翻译 {translationEstimate.chunks_to_translate} 个片段，预计{" "}
-                {translationEstimate.estimated_tokens.toLocaleString()} tokens（$
-                {translationEstimate.estimated_cost_usd.toFixed(4)}）
-              </p>
-              <div className="mt-3 flex gap-2">
-                <button
-                  type="button"
-                  onClick={confirmTranslation}
-                  disabled={translationLoading}
-                  className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-blue-700 disabled:opacity-60"
-                >
-                  确认翻译
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setTranslationEstimate(null)}
-                  className="rounded-md border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:bg-white"
-                >
-                  取消
-                </button>
-              </div>
-          </div>
-        ) : null}
-
-        {showTranslation && translations.length > 0 ? (
-          <div className="border-b border-amber-100 bg-amber-50/80 px-4 py-3">
-              <h3 className="text-sm font-semibold text-amber-700">中文翻译</h3>
-              <div className="mt-2 space-y-2">
-                {translations.map((translation) => (
-                  <p
-                    key={translation.chunk_id}
-                    className="text-sm leading-6 text-slate-700"
-                  >
-                    {translation.translated_text ?? "（翻译不可用）"}
-                  </p>
-                ))}
-              </div>
-          </div>
-        ) : null}
-
-        {translationError ? (
-          <div className="border-b border-red-100 bg-red-50 px-4 py-2 text-sm text-red-600">
-            {translationError}
-          </div>
-        ) : null}
+        {/* TODO: 翻译相关 UI 暂时隐藏 */}
 
         <div
           ref={lessonScrollRef}

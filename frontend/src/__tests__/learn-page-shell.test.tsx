@@ -143,6 +143,7 @@ describe("Learn page shell", () => {
       expect(screen.getByText("课程目录")).toBeInTheDocument();
     });
 
+    expect(screen.getByRole("link", { name: "返回首页" })).toHaveAttribute("href", "/");
     expect(screen.queryByText("资料")).not.toBeInTheDocument();
     expect(screen.queryByText("Lab")).not.toBeInTheDocument();
   });

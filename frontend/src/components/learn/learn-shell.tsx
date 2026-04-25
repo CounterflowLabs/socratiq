@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useSyncExternalStore } from "react";
+import Link from "next/link";
+import { Home } from "lucide-react";
 import { clsx } from "clsx";
 
 import { SIDEBAR_DESKTOP_QUERY } from "@/app/layout";
@@ -54,13 +56,22 @@ export default function LearnShell({
     <div className="min-h-screen bg-slate-50">
       <header className="border-b border-slate-200 bg-white/95 backdrop-blur">
         <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-3 px-4 py-4 sm:px-6">
-          <div className="min-w-0">
-            <p className="text-xs font-medium uppercase tracking-[0.24em] text-slate-500">
-              Learn
-            </p>
-            <h1 className="truncate text-xl font-semibold text-slate-900">
-              {courseTitle}
-            </h1>
+          <div className="flex min-w-0 items-center gap-3">
+            <Link
+              href="/"
+              className="inline-flex shrink-0 items-center gap-2 rounded-full border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+            >
+              <Home className="h-4 w-4" />
+              返回首页
+            </Link>
+            <div className="min-w-0">
+              <p className="text-xs font-medium uppercase tracking-[0.24em] text-slate-500">
+                Learn
+              </p>
+              <h1 className="truncate text-xl font-semibold text-slate-900">
+                {courseTitle}
+              </h1>
+            </div>
           </div>
           <div className="flex items-center gap-3">
             <span className="hidden rounded-full bg-slate-100 px-3 py-1 text-sm font-medium text-slate-600 sm:inline-flex">

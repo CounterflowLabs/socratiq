@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import nextConfig from "../../next.config";
@@ -30,6 +31,15 @@ describe("frontend dev config", () => {
     expect(nextConfig.allowedDevOrigins).toEqual(
       expect.arrayContaining(["127.0.0.1", "localhost"])
     );
+  });
+
+  it("bridges common light Tailwind utilities to theme variables in dark mode", () => {
+    const css = readFileSync("src/app/globals.css", "utf8");
+
+    expect(css).toContain(':root[data-theme="dark"] :where(.bg-white');
+    expect(css).toContain(':root:not([data-theme="light"]) :where(.bg-white');
+    expect(css).toContain(".text-gray-900");
+    expect(css).toContain(".border-gray-200");
   });
 });
 

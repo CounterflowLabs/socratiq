@@ -85,7 +85,7 @@ export default function MermaidDiagram({
         nodeSpacing: 48,
         rankSpacing: 48,
         padding: 16,
-        useMaxWidth: true,
+        useMaxWidth: false,
       },
       themeVariables: themeVars,
     });

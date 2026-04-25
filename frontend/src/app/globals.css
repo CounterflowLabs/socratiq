@@ -390,20 +390,14 @@ body {
 .mermaid-canvas svg {
   display: block;
   height: auto;
-  min-width: 560px;
+  width: 100%;
+  max-width: 100%;
   margin: 0 auto;
 }
 
 .mermaid-canvas .label,
 .mermaid-canvas text {
   letter-spacing: 0;
-}
-
-@media (min-width: 640px) {
-  .mermaid-canvas svg {
-    min-width: 0;
-    width: 100%;
-  }
 }
 
 /* Scrollbar */

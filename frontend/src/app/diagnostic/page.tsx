@@ -70,8 +70,8 @@ function DiagnosticInner() {
       const newAnswers = [...answers, newAnswer];
       setAnswers(newAnswers);
 
-      // Brief pause before advancing
-      await new Promise((r) => setTimeout(r, 400));
+      // Brief pause before advancing — long enough to see feedback
+      await new Promise((r) => setTimeout(r, 800));
 
       if (currentIndex < questions.length - 1) {
         setCurrentIndex((i) => i + 1);

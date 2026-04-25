@@ -53,7 +53,7 @@ export default function CourseOutline({
         </p>
       </div>
 
-      <div className="max-h-[42vh] overflow-y-auto p-3 xl:max-h-[70vh]">
+      <div className="max-h-[60vh] overflow-y-auto p-3 lg:max-h-[70vh]">
         <div className="space-y-2">
           {sections.map((section, index) => {
             const isActive = section.id === currentSectionId;

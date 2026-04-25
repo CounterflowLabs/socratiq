@@ -52,9 +52,8 @@ function DifficultyDots({ difficulty }: { difficulty: number }) {
       {Array.from({ length: 5 }, (_, i) => (
         <span
           key={i}
-          className={`inline-block w-2 h-2 rounded-full ${
-            i < filled ? "bg-gray-600" : "bg-gray-200"
-          }`}
+          className="inline-block w-2 h-2 rounded-full"
+          style={{ background: i < filled ? "var(--text-secondary)" : "var(--border-medium)" }}
         />
       ))}
     </span>
@@ -64,20 +63,20 @@ function DifficultyDots({ difficulty }: { difficulty: number }) {
 function StatusBadge({ status }: { status: string }) {
   if (status === "completed") {
     return (
-      <span className="badge" style={{ background: "#d1fae5", color: "#065f46", fontSize: 12 }}>
+      <span className="badge" style={{ background: "var(--success-light)", color: "var(--success)", fontSize: 12 }}>
         ✅ 已完成
       </span>
     );
   }
   if (status === "in_progress") {
     return (
-      <span className="badge" style={{ background: "#dbeafe", color: "#1e40af", fontSize: 12 }}>
+      <span className="badge" style={{ background: "var(--primary-light)", color: "var(--primary)", fontSize: 12 }}>
         🔵 进行中
       </span>
     );
   }
   return (
-    <span className="badge" style={{ background: "#f3f4f6", color: "#9ca3af", fontSize: 12 }}>
+    <span className="badge" style={{ background: "var(--surface-alt)", color: "var(--text-tertiary)", fontSize: 12 }}>
       ○ 未开始
     </span>
   );
@@ -151,7 +150,7 @@ function SectionCard({
             <BookOpen className="w-3.5 h-3.5" />
             <span>课文</span>
             {lessonRead ? (
-              <span className="font-medium" style={{ color: "#10b981" }}>
+              <span className="font-medium" style={{ color: "var(--success)" }}>
                 已读
               </span>
             ) : (
@@ -165,7 +164,7 @@ function SectionCard({
               <FlaskConical className="w-3.5 h-3.5" />
               <span>Lab</span>
               {labCompleted ? (
-                <span className="font-medium" style={{ color: "#10b981" }}>
+                <span className="font-medium" style={{ color: "var(--success)" }}>
                   完成
                 </span>
               ) : (
@@ -179,7 +178,7 @@ function SectionCard({
             <BarChart3 className="w-3.5 h-3.5" />
             <span>练习</span>
             {score !== null ? (
-              <span className="font-medium" style={{ color: "#10b981" }}>
+              <span className="font-medium" style={{ color: "var(--success)" }}>
                 {Math.round(score)}%
               </span>
             ) : (

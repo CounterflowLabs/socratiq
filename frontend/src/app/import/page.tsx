@@ -69,20 +69,20 @@ export default function ImportPage() {
   };
 
   return (
-    <div className="min-h-screen bg-white flex flex-col">
-      <header className="flex items-center justify-between px-4 sm:px-6 h-14 border-b border-gray-100">
+    <div className="min-h-screen flex flex-col" style={{ background: "var(--bg)" }}>
+      <header className="flex items-center justify-between px-4 sm:px-6 h-14 border-b" style={{ borderColor: "var(--border)", background: "var(--surface)" }}>
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center">
+          <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: "var(--primary)" }}>
             <Brain className="w-4 h-4 text-white" />
           </div>
-          <span className="font-semibold text-gray-900">Socratiq</span>
+          <span className="font-semibold" style={{ color: "var(--text)" }}>Socratiq</span>
         </div>
       </header>
 
       <div className="flex-1 flex items-center justify-center px-4 sm:px-6">
         <div className="w-full max-w-xl">
-          <h1 className="text-2xl font-bold text-gray-900 mb-2">导入学习资料</h1>
-          <p className="text-sm text-gray-500 mb-8">粘贴 B站或 YouTube 链接，或上传 PDF，导入后我们会为你准备课程素材。</p>
+          <h1 className="text-2xl font-bold mb-2" style={{ color: "var(--text)" }}>导入学习资料</h1>
+          <p className="text-sm mb-8" style={{ color: "var(--text-secondary)" }}>粘贴 B站或 YouTube 链接，或上传 PDF，导入后我们会为你准备课程素材。</p>
 
           {/* Error message */}
           {errorMsg && (

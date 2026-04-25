@@ -1,8 +1,9 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Home, BookOpen, ChevronLeft, ChevronRight, Brain, Settings, Menu, X } from "lucide-react";
+import { Home, BookOpen, ChevronLeft, ChevronRight, Brain, Settings, Menu, X, Sun, Moon } from "lucide-react";
 import { clsx } from "clsx";
 
 const items = [
@@ -25,6 +26,25 @@ export function Sidebar({
   onMobileToggle: () => void;
 }) {
   const pathname = usePathname();
+  const [isDark, setIsDark] = useState(false);
+
+  useEffect(() => {
+    // Restore saved theme on mount
+    const saved = localStorage.getItem("theme");
+    if (saved === "dark" || saved === "light") {
+      document.documentElement.dataset.theme = saved;
+      setIsDark(saved === "dark");
+    } else {
+      setIsDark(window.matchMedia("(prefers-color-scheme: dark)").matches);
+    }
+  }, []);
+
+  function toggleTheme() {
+    const next = isDark ? "light" : "dark";
+    document.documentElement.dataset.theme = next;
+    localStorage.setItem("theme", next);
+    setIsDark(!isDark);
+  }
 
   return (
     <>
@@ -145,6 +165,25 @@ export function Sidebar({
             );
           })}
         </nav>
+
+        {/* Theme toggle */}
+        <div className="px-2 pb-1">
+          <button
+            onClick={toggleTheme}
+            className="w-full flex items-center gap-3 px-3 py-2.5 min-h-[44px] text-sm"
+            style={{
+              borderRadius: "var(--radius)",
+              color: "var(--text-secondary)",
+              transition: `background var(--duration-fast) ease`,
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--surface-alt)"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+            aria-label="切换深色/浅色模式"
+          >
+            {isDark ? <Sun className="w-4 h-4 flex-shrink-0" /> : <Moon className="w-4 h-4 flex-shrink-0" />}
+            {(!collapsed || mobileOpen) && <span>{isDark ? "浅色模式" : "深色模式"}</span>}
+          </button>
+        </div>
 
         {/* Toggle — desktop only */}
         {desktopMode && (

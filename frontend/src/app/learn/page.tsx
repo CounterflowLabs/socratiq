@@ -183,6 +183,8 @@ function LearnPageInner() {
   const [tutorOpen, setTutorOpen] = useState(false);
   const [asideOpen, setAsideOpen] = useState(false);
   const [activeAsidePanel, setActiveAsidePanel] = useState<AsidePanelId>("tutor");
+  const [courseError, setCourseError] = useState<string | null>(null);
+  const asidePanelPreference = useRef<AsidePanelId | null>(null);
 
   const [showTranslation, setShowTranslation] = useState(false);
   const [translationLoading, setTranslationLoading] = useState(false);
@@ -207,6 +209,7 @@ function LearnPageInner() {
     getCourse(courseId)
       .then((data) => {
         setCourse(data);
+        setCourseError(null);
 
         if (sectionId) {
           const matchedSection = data.sections.find((item) => item.id === sectionId);
@@ -218,7 +221,7 @@ function LearnPageInner() {
 
         setSection(data.sections[0] ?? null);
       })
-      .catch(console.error);
+      .catch((err) => setCourseError(err instanceof Error ? err.message : "课程加载失败"));
   }, [courseId, sectionId]);
 
   useEffect(() => {
@@ -370,8 +373,14 @@ function LearnPageInner() {
   }, []);
 
   useEffect(() => {
-    setActiveAsidePanel(defaultAsidePanel);
-  }, [defaultAsidePanel, section?.id]);
+    // Preserve user's panel preference across section changes
+    const preferred = asidePanelPreference.current;
+    if (preferred && availableAsidePanels.includes(preferred)) {
+      setActiveAsidePanel(preferred);
+    } else {
+      setActiveAsidePanel(defaultAsidePanel);
+    }
+  }, [defaultAsidePanel, section?.id, availableAsidePanels]);
 
   useEffect(() => {
     if (availableAsidePanels.includes(activeAsidePanel)) return;
@@ -533,6 +542,24 @@ function LearnPageInner() {
     </section>
   );
 
+  if (courseError) {
+    return (
+      <div className="flex min-h-screen items-center justify-center" style={{ background: "var(--bg)" }}>
+        <div className="card max-w-md w-full text-center p-8">
+          <BookOpen className="mx-auto h-10 w-10 mb-3" style={{ color: "var(--error)" }} />
+          <h2 className="text-lg font-bold mb-2" style={{ color: "var(--text)" }}>课程加载失败</h2>
+          <p className="text-sm mb-4" style={{ color: "var(--text-secondary)" }}>{courseError}</p>
+          <button
+            className="btn-primary"
+            onClick={() => { setCourseError(null); if (courseId) getCourse(courseId).then((data) => { setCourse(data); setCourseError(null); setSection(data.sections[0] ?? null); }).catch((err) => setCourseError(err instanceof Error ? err.message : "课程加载失败")); }}
+          >
+            重试
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
       <LearnShell
@@ -562,7 +589,7 @@ function LearnPageInner() {
             pdfSource={pdfSource}
             referenceSources={referenceSources}
             activePanel={activeAsidePanel}
-            onPanelChange={setActiveAsidePanel}
+            onPanelChange={(panel) => { asidePanelPreference.current = panel; setActiveAsidePanel(panel); }}
           />
         }
       />

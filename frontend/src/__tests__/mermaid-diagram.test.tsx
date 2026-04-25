@@ -1,4 +1,4 @@
-import { render, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const initializeMock = vi.fn();
@@ -84,5 +84,17 @@ describe("MermaidDiagram", () => {
     await waitFor(() => {
       expect(document.querySelector("pre")?.textContent).toBe("flowchart TD\nA-->B");
     });
+  });
+
+  it("keeps Mermaid diagrams as static summaries without autoplay controls", async () => {
+    const { default: MermaidDiagram } = await import("@/components/lesson/mermaid-diagram");
+
+    render(<MermaidDiagram title="流程图" content={"flowchart TD\nA[起点]-->B[终点]"} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("流程摘要")).toBeTruthy();
+    });
+    expect(screen.queryByText("Show Me Demo")).toBeNull();
+    expect(screen.queryByRole("button", { name: "播放动态讲解" })).toBeNull();
   });
 });

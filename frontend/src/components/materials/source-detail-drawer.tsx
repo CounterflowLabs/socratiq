@@ -142,9 +142,14 @@ export default function SourceDetailDrawer({
 
       <aside
         aria-hidden={!open}
-        className={`fixed right-0 top-0 z-50 h-full w-full max-w-md border-l border-gray-200 bg-gray-50 shadow-2xl transition-transform duration-200 ${
+        className={`fixed right-0 top-0 z-50 h-full w-full max-w-md border-l shadow-2xl transition-transform duration-200 ${
           open ? "translate-x-0" : "translate-x-full"
         }`}
+        style={{
+          maxWidth: "min(28rem, calc(100vw - 1rem))",
+          background: "var(--surface-alt)",
+          borderColor: "var(--border)",
+        }}
       >
         <div className="flex h-full flex-col">
           <div className="flex items-start justify-between border-b border-gray-200 bg-white px-5 py-4">

@@ -89,7 +89,7 @@ export default function SourcesPage() {
     : null;
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen" style={{ background: "var(--bg)" }}>
       <div className="mx-auto max-w-5xl px-4 pb-6 pt-14 sm:px-6 md:pt-6">
         <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>

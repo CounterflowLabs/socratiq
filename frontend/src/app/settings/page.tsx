@@ -161,6 +161,9 @@ export default function SettingsPage() {
   }
 
   async function handleDelete(name: string) {
+    if (!window.confirm(`确定要删除模型「${name}」吗？此操作不可撤销。`)) {
+      return;
+    }
     try {
       await deleteModel(name);
       setModels((prev) => prev.filter((m) => m.name !== name));
@@ -308,15 +311,15 @@ export default function SettingsPage() {
   if (loading) {
     return (
       <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6">
-        <h1 className="text-xl font-bold text-gray-900 mb-6">设置</h1>
-        <div className="text-sm text-gray-500">加载中...</div>
+        <h1 className="text-xl font-bold mb-6" style={{ color: "var(--text)" }}>设置</h1>
+        <div className="text-sm" style={{ color: "var(--text-secondary)" }}>加载中...</div>
       </div>
     );
   }
 
   return (
     <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6">
-      <h1 className="text-xl font-bold text-gray-900 mb-6">设置</h1>
+      <h1 className="text-xl font-bold mb-6" style={{ color: "var(--text)" }}>设置</h1>
 
       {/* Model Routes */}
       {routes.length > 0 && (

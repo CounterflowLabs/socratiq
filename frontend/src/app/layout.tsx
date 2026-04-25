@@ -7,7 +7,7 @@ import { Sidebar } from "@/components/sidebar";
 
 // Pages that show the sidebar
 const SIDEBAR_PAGES = ["/", "/import", "/settings", "/sources"];
-export const SIDEBAR_DESKTOP_QUERY = "(min-width: 1280px)";
+export const SIDEBAR_DESKTOP_QUERY = "(min-width: 1024px)";
 
 function isDedicatedLearnRoute(pathname: string): boolean {
   return pathname === "/learn" || pathname.startsWith("/learn/");
@@ -36,6 +36,7 @@ export default function RootLayout({
   return (
     <html lang="zh">
       <body className="bg-[var(--bg)]">
+        <a href="#main-content" className="skip-to-content">跳到主要内容</a>
         <LayoutInner>{children}</LayoutInner>
       </body>
     </html>
@@ -70,6 +71,7 @@ export function LayoutInner({ children }: { children: React.ReactNode }) {
         }
       />
       <main
+        id="main-content"
         className="main-content transition-[margin] duration-200 min-h-screen"
         style={{ marginLeft }}
       >

@@ -88,7 +88,16 @@ export function PracticeTriggerCard({
       </div>
 
       {open ? (
-        <div className="mt-5">
+        <div
+          className="mt-5 overflow-hidden transition-all duration-300 ease-out"
+          style={{ animation: "expandIn 0.3s ease-out" }}
+        >
+          <style>{`
+            @keyframes expandIn {
+              from { opacity: 0; max-height: 0; margin-top: 0; }
+              to { opacity: 1; max-height: 1000px; margin-top: 1.25rem; }
+            }
+          `}</style>
           {status === "loading" ? (
             <div className="rounded-lg border border-dashed border-amber-200 bg-white/80 px-4 py-6 text-sm text-slate-500">
               正在加载本节练习...

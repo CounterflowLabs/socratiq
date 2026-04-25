@@ -32,6 +32,15 @@ function ExerciseInner() {
   const [allResults, setAllResults] = useState<Array<{ exerciseId: string; score: number | null }>>([]);
   const [showSummary, setShowSummary] = useState(false);
 
+  // Warn before leaving with unsaved progress
+  useEffect(() => {
+    const hasProgress = allResults.length > 0 || selectedOption !== null || textAnswer.trim().length > 0;
+    if (!hasProgress || showSummary) return;
+    const handler = (e: BeforeUnloadEvent) => { e.preventDefault(); };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [allResults.length, selectedOption, textAnswer, showSummary]);
+
   useEffect(() => {
     if (!sectionId) {
       setLoading(false);

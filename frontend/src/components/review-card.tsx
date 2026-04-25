@@ -33,10 +33,12 @@ export default function ReviewCard({ conceptName, question, answer, onRate, disa
         </div>
         {/* Back */}
         <div
-          className="absolute inset-0 card flex flex-col items-center justify-between p-6"
+          className="absolute inset-0 card flex flex-col items-center justify-between p-6 overflow-hidden"
           style={{ backfaceVisibility: "hidden", transform: "rotateY(180deg)" }}
         >
-          <p className="text-sm text-[var(--text)] text-center flex-1 flex items-center">{answer ?? "暂无解析"}</p>
+          <div className="flex-1 overflow-y-auto flex items-center w-full">
+            <p className="text-sm text-[var(--text)] text-center w-full">{answer ?? "暂无解析"}</p>
+          </div>
           <div className="flex gap-2 mt-3">
             {[
               { label: "忘了", quality: 1, color: "var(--error)" },

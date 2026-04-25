@@ -67,6 +67,7 @@ export default function DashboardPage() {
   const [ratingIds, setRatingIds] = useState<Set<string>>(new Set());
   const [allReviewsDone, setAllReviewsDone] = useState(false);
   const [courseProgressMap, setCourseProgressMap] = useState<Record<string, CourseProgress>>({});
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     getSetupStatus()
@@ -77,8 +78,8 @@ export default function DashboardPage() {
         }
         setLoading(true);
         listCourses()
-          .then((res) => setCourses(res.items))
-          .catch(console.error)
+          .then((res) => { setCourses(res.items); setLoadError(null); })
+          .catch((err) => setLoadError(err instanceof Error ? err.message : "课程加载失败"))
           .finally(() => setLoading(false));
         getDueReviews()
           .then((res) => setDueReviews(res.items))
@@ -87,8 +88,8 @@ export default function DashboardPage() {
       .catch(() => {
         setLoading(true);
         listCourses()
-          .then((res) => setCourses(res.items))
-          .catch(console.error)
+          .then((res) => { setCourses(res.items); setLoadError(null); })
+          .catch((err) => setLoadError(err instanceof Error ? err.message : "课程加载失败"))
           .finally(() => setLoading(false));
         getDueReviews()
           .then((res) => setDueReviews(res.items))
@@ -182,6 +183,8 @@ export default function DashboardPage() {
 
           if (syncState.courseId) {
             listCourses().then((res) => setCourses(res.items)).catch(() => {});
+            // Auto-dismiss successful tasks after 8 seconds
+            setTimeout(() => removeTask(task.taskId), 8000);
             continue;
           }
         } catch {
@@ -312,7 +315,16 @@ export default function DashboardPage() {
         <section>
           <h2 className="text-base font-semibold mb-4" style={{ color: "var(--text)" }}>我的课程</h2>
 
-          {loading ? (
+          {loadError ? (
+            <div className="card text-center py-10">
+              <AlertCircle className="w-10 h-10 mx-auto mb-3" style={{ color: "var(--error)" }} />
+              <h3 className="text-base font-semibold mb-2" style={{ color: "var(--text)" }}>加载失败</h3>
+              <p className="text-sm mb-4" style={{ color: "var(--text-secondary)" }}>{loadError}</p>
+              <button className="btn-primary" onClick={() => { setLoadError(null); setLoading(true); listCourses().then((res) => { setCourses(res.items); setLoadError(null); }).catch((err) => setLoadError(err instanceof Error ? err.message : "课程加载失败")).finally(() => setLoading(false)); }}>
+                重试
+              </button>
+            </div>
+          ) : loading ? (
             <div className="flex items-center justify-center py-16" style={{ color: "var(--text-tertiary)" }}>
               <Loader className="w-5 h-5 animate-spin mr-2" />
               <span className="text-sm">加载中...</span>

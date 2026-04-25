@@ -6,7 +6,7 @@ import Link from "next/link";
 import { ArrowLeft, BookOpen, ChevronLeft, ChevronRight, Languages, Loader2 } from "lucide-react";
 import { clsx } from "clsx";
 
-import CourseOutline from "@/components/learn/course-outline";
+import CourseOutline, { type LessonWaypoint } from "@/components/learn/course-outline";
 import LearnShell from "@/components/learn/learn-shell";
 import StudyAside, { type AsidePanelId } from "@/components/learn/study-aside";
 import LessonRenderer from "@/components/lesson/lesson-renderer";
@@ -317,6 +317,16 @@ function LearnPageInner() {
   const lessonLabMode = readLabMode(section?.content);
   const lessonGraphCard = readGraphCard(section?.content);
   const hasLesson = !!(lessonData && lessonData.title && lessonData.sections);
+  const lessonWaypoints = useMemo<LessonWaypoint[]>(
+    () =>
+      lessonData?.sections.map((item, index) => ({
+        id: `lesson-waypoint-${index}`,
+        title: item.heading,
+        timestamp: item.timestamp > 0 ? item.timestamp : null,
+        concepts: item.key_concepts,
+      })) ?? [],
+    [lessonData]
+  );
   const completedCount = currentIdx >= 0 ? currentIdx + 1 : 0;
   const totalCount = sections.length;
   const progressLabel = totalCount > 0 ? `进度 ${completedCount}/${totalCount}` : "准备中";
@@ -347,11 +357,17 @@ function LearnPageInner() {
     return panels;
   }, [pdfSource, referenceSources, videoEmbed]);
   const defaultAsidePanel = availableAsidePanels[0] ?? "tutor";
-  const handleTimestampClick = useCallback((_seconds: number) => {
+  const handleTimestampClick = useCallback(() => {
     if (!videoEmbed) return;
     setAsideOpen(true);
     setActiveAsidePanel("video");
   }, [videoEmbed]);
+  const handleSelectWaypoint = useCallback((waypointId: string) => {
+    const target = lessonScrollRef.current?.querySelector(
+      `[data-lesson-waypoint="${waypointId}"]`
+    );
+    target?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
 
   useEffect(() => {
     setActiveAsidePanel(defaultAsidePanel);
@@ -363,30 +379,41 @@ function LearnPageInner() {
   }, [activeAsidePanel, availableAsidePanels, defaultAsidePanel]);
 
   const lessonStage = (
-    <section className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm">
-      <div className="border-b border-slate-200 px-5 py-4">
+    <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-[0_16px_48px_rgba(15,23,42,0.08)]">
+      <div className="border-b border-slate-200 bg-white px-5 py-4">
         <div className="flex flex-wrap items-center gap-3">
           <Link
             href={courseId ? `/path?courseId=${courseId}` : "/path"}
-            className="inline-flex items-center gap-1 rounded-full border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+            className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
           >
             <ArrowLeft className="h-4 w-4" />
             返回路径
           </Link>
           <div className="min-w-0 flex-1">
-            <p className="text-xs font-medium uppercase tracking-[0.2em] text-slate-400">
+            <p className="text-xs font-medium uppercase text-slate-400">
               当前章节
             </p>
             <h2 className="truncate text-xl font-semibold text-slate-900">
               {section?.title ?? "加载章节中..."}
             </h2>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <span className="rounded-md border border-teal-200 bg-teal-50 px-2.5 py-1 text-xs font-medium text-teal-800">
+                {lessonWaypoints.length} 个知识片段
+              </span>
+              <span className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-800">
+                {videoEmbed ? "视频素材" : "无视频"}
+              </span>
+              <span className="rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600">
+                {availableAsidePanels.length} 个辅助面板
+              </span>
+            </div>
           </div>
           <button
             type="button"
             onClick={handleTranslationToggle}
             disabled={translationLoading || !section}
             className={clsx(
-              "inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition",
+              "inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition",
               showTranslation
                 ? "bg-blue-50 text-blue-700"
                 : "border border-slate-200 text-slate-600 hover:bg-slate-50"
@@ -402,10 +429,9 @@ function LearnPageInner() {
         </div>
       </div>
 
-      <div className="p-4">
-        <div className="min-w-0 overflow-hidden rounded-3xl border border-slate-200 bg-slate-50">
-          {translationEstimate && !showTranslation ? (
-            <div className="border-b border-blue-100 bg-blue-50 px-4 py-3">
+      <div className="bg-slate-50">
+        {translationEstimate && !showTranslation ? (
+          <div className="border-b border-blue-100 bg-blue-50 px-4 py-3">
               <p className="text-sm text-blue-700">
                 需要翻译 {translationEstimate.chunks_to_translate} 个片段，预计{" "}
                 {translationEstimate.estimated_tokens.toLocaleString()} tokens（$
@@ -416,23 +442,23 @@ function LearnPageInner() {
                   type="button"
                   onClick={confirmTranslation}
                   disabled={translationLoading}
-                  className="rounded-full bg-blue-600 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-blue-700 disabled:opacity-60"
+                  className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-blue-700 disabled:opacity-60"
                 >
                   确认翻译
                 </button>
                 <button
                   type="button"
                   onClick={() => setTranslationEstimate(null)}
-                  className="rounded-full border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:bg-white"
+                  className="rounded-md border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:bg-white"
                 >
                   取消
                 </button>
               </div>
-            </div>
-          ) : null}
+          </div>
+        ) : null}
 
-          {showTranslation && translations.length > 0 ? (
-            <div className="border-b border-amber-100 bg-amber-50/80 px-4 py-3">
+        {showTranslation && translations.length > 0 ? (
+          <div className="border-b border-amber-100 bg-amber-50/80 px-4 py-3">
               <h3 className="text-sm font-semibold text-amber-700">中文翻译</h3>
               <div className="mt-2 space-y-2">
                 {translations.map((translation) => (
@@ -444,43 +470,42 @@ function LearnPageInner() {
                   </p>
                 ))}
               </div>
-            </div>
-          ) : null}
-
-          {translationError ? (
-            <div className="border-b border-red-100 bg-red-50 px-4 py-2 text-sm text-red-600">
-              {translationError}
-            </div>
-          ) : null}
-
-          <div
-            ref={lessonScrollRef}
-            onScroll={handleLessonScroll}
-            className="max-h-[75vh] overflow-y-auto px-4 py-4"
-          >
-            {hasLesson ? (
-              <LessonRenderer
-                lesson={lessonData}
-                onTimestampClick={videoEmbed ? handleTimestampClick : undefined}
-                sectionId={section?.id ?? null}
-                labMode={lessonLabMode}
-                graphCard={lessonGraphCard}
-              />
-            ) : rawSectionContent ? (
-              <div className="whitespace-pre-wrap text-sm leading-7 text-slate-700">
-                {typeof rawSectionContent === "string"
-                  ? rawSectionContent
-                  : JSON.stringify(rawSectionContent, null, 2)}
-              </div>
-            ) : (
-              <div className="flex min-h-72 items-center justify-center">
-                <div className="text-center">
-                  <BookOpen className="mx-auto h-8 w-8 text-slate-300" />
-                  <p className="mt-2 text-sm text-slate-400">此章节暂无课文内容</p>
-                </div>
-              </div>
-            )}
           </div>
+        ) : null}
+
+        {translationError ? (
+          <div className="border-b border-red-100 bg-red-50 px-4 py-2 text-sm text-red-600">
+            {translationError}
+          </div>
+        ) : null}
+
+        <div
+          ref={lessonScrollRef}
+          onScroll={handleLessonScroll}
+          className="max-h-[75vh] overflow-y-auto"
+        >
+          {hasLesson ? (
+            <LessonRenderer
+              lesson={lessonData}
+              onTimestampClick={videoEmbed ? handleTimestampClick : undefined}
+              sectionId={section?.id ?? null}
+              labMode={lessonLabMode}
+              graphCard={lessonGraphCard}
+            />
+          ) : rawSectionContent ? (
+            <div className="px-5 py-5 whitespace-pre-wrap text-sm leading-7 text-slate-700">
+              {typeof rawSectionContent === "string"
+                ? rawSectionContent
+                : JSON.stringify(rawSectionContent, null, 2)}
+            </div>
+          ) : (
+            <div className="flex min-h-72 items-center justify-center">
+              <div className="text-center">
+                <BookOpen className="mx-auto h-8 w-8 text-slate-300" />
+                <p className="mt-2 text-sm text-slate-400">此章节暂无课文内容</p>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -489,7 +514,7 @@ function LearnPageInner() {
           type="button"
           onClick={() => prevSection && navigateToSection(prevSection)}
           disabled={!prevSection}
-          className="inline-flex items-center gap-1 rounded-full border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+          className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
         >
           <ChevronLeft className="h-4 w-4" />
           上一节
@@ -499,7 +524,7 @@ function LearnPageInner() {
           type="button"
           onClick={() => nextSection && navigateToSection(nextSection)}
           disabled={!nextSection}
-          className="inline-flex items-center gap-1 rounded-full border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+          className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
         >
           下一节
           <ChevronRight className="h-4 w-4" />
@@ -521,6 +546,8 @@ function LearnPageInner() {
             sections={sections}
             currentSectionId={section?.id ?? null}
             onSelectSection={navigateToSection}
+            lessonWaypoints={lessonWaypoints}
+            onSelectWaypoint={handleSelectWaypoint}
           />
         }
         lessonStage={lessonStage}

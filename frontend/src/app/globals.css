@@ -396,7 +396,7 @@ body {
 
 .mermaid-canvas .label,
 .mermaid-canvas text {
-  letter-spacing: 0.01em;
+  letter-spacing: 0;
 }
 
 @media (min-width: 640px) {

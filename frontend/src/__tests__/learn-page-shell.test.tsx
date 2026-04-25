@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import React, { Suspense } from "react";
 
 import { LayoutInner, SIDEBAR_DESKTOP_QUERY } from "@/app/layout";
@@ -180,6 +180,66 @@ describe("Learn page shell", () => {
       expect(screen.getByRole("button", { name: "原 PDF" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "参考资料" })).toBeInTheDocument();
     });
+  });
+
+  it("surfaces lesson waypoints in the course outline", async () => {
+    const courseWithWaypoints = {
+      ...courseResponse,
+      sections: [
+        {
+          ...courseResponse.sections[0],
+          content: {
+            lesson: {
+              ...courseResponse.sections[0].content.lesson,
+              sections: [
+                {
+                  heading: "从正文开始",
+                  content: "这是本节的正文内容。",
+                  timestamp: 12,
+                  code_snippets: [],
+                  key_concepts: ["变量", "类型"],
+                  diagrams: [],
+                  interactive_steps: null,
+                },
+                {
+                  heading: "把概念跑起来",
+                  content: "用一个例子确认理解。",
+                  timestamp: 75,
+                  code_snippets: [],
+                  key_concepts: ["练习"],
+                  diagrams: [],
+                  interactive_steps: null,
+                },
+              ],
+            },
+          },
+        },
+      ],
+    };
+
+    globalThis.fetch = mockFetch({
+      "/api/v1/courses/c1": courseWithWaypoints,
+    }) as typeof fetch;
+
+    vi.resetModules();
+    const LearnPage = (await import("@/app/learn/page")).default;
+
+    render(
+      <LayoutInner>
+        <SuspenseWrapper>
+          <LearnPage />
+        </SuspenseWrapper>
+      </LayoutInner>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("本节脉络")).toBeInTheDocument();
+    });
+
+    const waypoints = within(screen.getByLabelText("本节脉络"));
+    expect(waypoints.getByRole("button", { name: /从正文开始/ })).toBeInTheDocument();
+    expect(waypoints.getByRole("button", { name: /把概念跑起来/ })).toBeInTheDocument();
+    expect(waypoints.getByText("2 个知识片段")).toBeInTheDocument();
   });
 
   it("lets desktop users close and reopen the study aside", async () => {

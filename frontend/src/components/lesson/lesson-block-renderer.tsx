@@ -212,12 +212,14 @@ function TextBlock({
   tone = "default",
   timestamp,
   onTimestampClick,
+  waypointId,
 }: {
   title?: string | null;
   body?: string | null;
   tone?: "default" | "intro" | "recap";
   timestamp?: number | null;
   onTimestampClick?: (seconds: number) => void;
+  waypointId?: string;
 }) {
   const cardClassName =
     tone === "intro"
@@ -227,7 +229,10 @@ function TextBlock({
         : "border-slate-200 bg-white";
 
   return (
-    <section className={`rounded-2xl border px-5 py-4 shadow-sm ${cardClassName}`}>
+    <section
+      data-lesson-waypoint={waypointId}
+      className={`rounded-lg border px-5 py-4 shadow-sm ${cardClassName}`}
+    >
       {title || timestamp ? (
         <div className="flex flex-wrap items-center gap-2">
           {title ? <h3 className="text-base font-semibold text-slate-900">{title}</h3> : null}
@@ -261,9 +266,22 @@ export default function LessonBlockRenderer({
     labMode,
     graphCard,
   });
+  const waypointIdsByHeading = new Map(
+    lesson.sections.map((item, index) => [item.heading, `lesson-waypoint-${index}`])
+  );
+  const anchoredWaypoints = new Set<string>();
+
+  function takeWaypointId(block: LessonBlock): string | undefined {
+    if (block.type !== "prose" || !block.title) return undefined;
+
+    const waypointId = waypointIdsByHeading.get(block.title);
+    if (!waypointId || anchoredWaypoints.has(waypointId)) return undefined;
+    anchoredWaypoints.add(waypointId);
+    return waypointId;
+  }
 
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-4 px-4 py-6">
+    <div className="mx-auto flex max-w-4xl flex-col gap-4 px-4 py-6">
       {blocks.map((block, index) => {
         const blockKey = `${block.type}-${block.title ?? "untitled"}-${index}`;
 
@@ -278,6 +296,7 @@ export default function LessonBlockRenderer({
                 body={block.body}
                 timestamp={readNumberMetadata(block, "timestamp")}
                 onTimestampClick={onTimestampClick}
+                waypointId={takeWaypointId(block)}
               />
             );
           case "diagram": {
@@ -287,9 +306,9 @@ export default function LessonBlockRenderer({
             return diagramType === "mermaid" ? (
               <MermaidDiagram key={blockKey} content={diagramContent} title={block.title ?? ""} />
             ) : (
-              <section key={blockKey} className="rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4">
+              <section key={blockKey} className="rounded-lg border border-slate-200 bg-slate-50 px-5 py-4">
                 {block.title ? <h3 className="text-base font-semibold text-slate-900">{block.title}</h3> : null}
-                <pre className="mt-3 overflow-x-auto rounded-xl bg-slate-900 p-4 text-xs text-slate-100">
+                <pre className="mt-3 overflow-x-auto rounded-lg bg-slate-900 p-4 text-xs text-slate-100">
                   {diagramContent}
                 </pre>
               </section>
@@ -299,7 +318,7 @@ export default function LessonBlockRenderer({
             const code = block.code ?? block.body;
             if (!code) return null;
             return (
-              <section key={blockKey} className="rounded-2xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
+              <section key={blockKey} className="rounded-lg border border-slate-200 bg-white px-5 py-4 shadow-sm">
                 <CodeBlock
                   language={block.language ?? readStringMetadata(block, "language") ?? "plaintext"}
                   code={code}

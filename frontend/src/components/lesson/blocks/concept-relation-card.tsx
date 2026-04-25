@@ -9,16 +9,16 @@ export function ConceptRelationCard({ title, concepts = [] }: ConceptRelationCar
   if (concepts.length === 0) return null;
 
   return (
-    <section className="rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4">
+    <section className="rounded-lg border border-slate-200 bg-slate-50 px-5 py-4">
       {title ? <h3 className="text-base font-semibold text-slate-900">{title}</h3> : null}
       <div className="mt-4 flex flex-wrap items-center gap-3">
         {concepts.map((concept, index) => (
           <div key={`${concept.label}-${index}`} className="flex items-center gap-3">
-            <div className="rounded-full border border-sky-200 bg-white px-3 py-1.5 text-sm font-medium text-sky-700 shadow-sm">
+            <div className="rounded-md border border-sky-200 bg-white px-3 py-1.5 text-sm font-medium text-sky-700 shadow-sm">
               {concept.label}
             </div>
             {index < concepts.length - 1 ? (
-              <span className="text-xs font-medium uppercase tracking-[0.2em] text-slate-300">
+              <span className="text-xs font-medium uppercase text-slate-300">
                 connects
               </span>
             ) : null}

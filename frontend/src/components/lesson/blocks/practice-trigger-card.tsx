@@ -67,10 +67,10 @@ export function PracticeTriggerCard({
   }
 
   return (
-    <section className="rounded-2xl border border-amber-200 bg-amber-50/60 p-5">
+    <section className="rounded-lg border border-amber-200 bg-amber-50/60 p-5">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
-          <div className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-amber-700">
+          <div className="inline-flex items-center gap-2 rounded-md bg-white px-3 py-1 text-xs font-semibold uppercase text-amber-700">
             <FlaskConical className="h-3.5 w-3.5" />
             Practice
           </div>
@@ -80,7 +80,7 @@ export function PracticeTriggerCard({
         <button
           type="button"
           onClick={handleToggle}
-          className="inline-flex items-center justify-center rounded-full bg-amber-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-amber-600"
+          className="inline-flex items-center justify-center rounded-md bg-amber-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-amber-600"
         >
           {status === "loading" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
           {open ? "收起练习" : "开始练习"}
@@ -90,16 +90,16 @@ export function PracticeTriggerCard({
       {open ? (
         <div className="mt-5">
           {status === "loading" ? (
-            <div className="rounded-2xl border border-dashed border-amber-200 bg-white/80 px-4 py-6 text-sm text-slate-500">
+            <div className="rounded-lg border border-dashed border-amber-200 bg-white/80 px-4 py-6 text-sm text-slate-500">
               正在加载本节练习...
             </div>
           ) : status === "error" ? (
-            <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-4 text-sm text-red-700">
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-4 text-sm text-red-700">
               <p>{error ?? "练习加载失败，请稍后重试。"}</p>
               <button
                 type="button"
                 onClick={handleRetry}
-                className="mt-3 inline-flex items-center rounded-full border border-red-200 bg-white px-3 py-1.5 text-sm font-medium text-red-700 transition hover:bg-red-100"
+                className="mt-3 inline-flex items-center rounded-md border border-red-200 bg-white px-3 py-1.5 text-sm font-medium text-red-700 transition hover:bg-red-100"
               >
                 重试
               </button>
@@ -107,7 +107,7 @@ export function PracticeTriggerCard({
           ) : status === "ready" && lab ? (
             <LabEditor lab={lab} embedded />
           ) : (
-            <div className="rounded-2xl border border-dashed border-slate-200 bg-white/80 px-4 py-6 text-sm text-slate-500">
+            <div className="rounded-lg border border-dashed border-slate-200 bg-white/80 px-4 py-6 text-sm text-slate-500">
               本节暂未提供可运行的 Lab，先继续阅读，我们稍后再接回来。
             </div>
           )}

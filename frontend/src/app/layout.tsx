@@ -34,7 +34,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="zh">
+    <html lang="zh" suppressHydrationWarning>
       <body className="bg-[var(--bg)]">
         <a href="#main-content" className="skip-to-content">跳到主要内容</a>
         <LayoutInner>{children}</LayoutInner>

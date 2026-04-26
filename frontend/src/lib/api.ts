@@ -172,6 +172,8 @@ export interface RegenerateCourseResponse {
 export interface RegenerationStatus {
   status: "pending" | "running" | "success" | "failure";
   stage?: string | null;
+  current?: number | null;
+  total?: number | null;
   course_id?: string;
   parent_course_id?: string;
   error?: string;

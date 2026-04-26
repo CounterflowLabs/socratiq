@@ -557,6 +557,8 @@ function LearnPageInner() {
                     ? "failed"
                     : "running",
                 stage: regenStatus.stage ?? null,
+                current: regenStatus.current ?? null,
+                total: regenStatus.total ?? null,
                 newCourseId: regenStatus.course_id,
                 message: regenStatus.error,
                 onOpenNewCourse: regenStatus.course_id

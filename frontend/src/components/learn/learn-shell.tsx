@@ -10,10 +10,32 @@ import { SIDEBAR_DESKTOP_QUERY } from "@/app/layout";
 interface RegenerationBanner {
   state: "running" | "ready" | "failed";
   stage?: string | null;
+  current?: number | null;
+  total?: number | null;
   newCourseId?: string;
   message?: string;
   onOpenNewCourse?: () => void;
   onDismiss?: () => void;
+}
+
+const STAGE_PERCENT_RANGES: Record<string, [number, number]> = {
+  pending: [0, 5],
+  analyzing: [5, 25],
+  generating_lessons: [25, 70],
+  generating_labs: [70, 90],
+  assembling: [90, 100],
+};
+
+function computeRegenPercent(banner: RegenerationBanner): number {
+  if (banner.state === "ready") return 100;
+  if (banner.state === "failed") return 0;
+  const stage = banner.stage ?? "pending";
+  const [base, ceiling] = STAGE_PERCENT_RANGES[stage] ?? [0, 100];
+  const { current, total } = banner;
+  if (typeof current === "number" && typeof total === "number" && total > 0) {
+    return Math.round(base + (current / total) * (ceiling - base));
+  }
+  return base;
 }
 
 interface LearnShellProps {
@@ -165,7 +187,8 @@ export default function LearnShell({
             regenerationBanner.state === "failed" && "bg-red-50 text-red-800 border-red-200"
           )}
         >
-          <div className="mx-auto flex max-w-[1760px] items-center justify-between gap-3">
+          <div className="mx-auto flex max-w-[1760px] flex-col gap-2">
+            <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               {regenerationBanner.state === "running" ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -173,15 +196,25 @@ export default function LearnShell({
                 <CheckCircle2 className="h-4 w-4" />
               ) : null}
               <span>
-                {regenerationBanner.state === "running"
-                  ? `重新生成中 · ${
-                      STAGE_LABELS_ZH[regenerationBanner.stage ?? ""] ??
+                {regenerationBanner.state === "running" ? (
+                  <>
+                    重新生成中 ·{" "}
+                    {STAGE_LABELS_ZH[regenerationBanner.stage ?? ""] ??
                       regenerationBanner.stage ??
-                      "进行中"
-                    }`
-                  : regenerationBanner.state === "ready"
-                  ? "新版本已生成完毕。"
-                  : regenerationBanner.message ?? "重新生成失败。"}
+                      "进行中"}
+                    {typeof regenerationBanner.current === "number" &&
+                    typeof regenerationBanner.total === "number" &&
+                    regenerationBanner.total > 1
+                      ? ` (${regenerationBanner.current}/${regenerationBanner.total})`
+                      : ""}
+                    {" · "}
+                    {computeRegenPercent(regenerationBanner)}%
+                  </>
+                ) : regenerationBanner.state === "ready" ? (
+                  "新版本已生成完毕。"
+                ) : (
+                  regenerationBanner.message ?? "重新生成失败。"
+                )}
               </span>
             </div>
             <div className="flex items-center gap-2">
@@ -204,6 +237,15 @@ export default function LearnShell({
                 </button>
               ) : null}
             </div>
+            </div>
+            {regenerationBanner.state === "running" ? (
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-violet-100">
+                <div
+                  className="h-full rounded-full bg-violet-500 transition-all duration-500 ease-out"
+                  style={{ width: `${computeRegenPercent(regenerationBanner)}%` }}
+                />
+              </div>
+            ) : null}
           </div>
         </div>
       ) : null}

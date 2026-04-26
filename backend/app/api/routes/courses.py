@@ -319,6 +319,10 @@ async def get_regeneration_status(
     info = result.info if result.info is not None else {}
     if isinstance(info, dict):
         payload["stage"] = info.get("stage")
+        if "current" in info:
+            payload["current"] = info["current"]
+        if "total" in info:
+            payload["total"] = info["total"]
 
     if state == "SUCCESS":
         payload["status"] = "success"

@@ -255,8 +255,19 @@ async def _refresh_source_metadata(
         page_idx = chunk.metadata.get("page_index", 0)
         page_groups.setdefault(page_idx, []).append(chunk)
 
+    sorted_pages = sorted(page_groups.keys())
+    total_lessons = len(sorted_pages)
     lesson_by_page: dict[int, object] = {}
-    for page_idx in sorted(page_groups.keys()):
+    for i, page_idx in enumerate(sorted_pages):
+        task.update_state(
+            state="PROGRESS",
+            meta={
+                "stage": "generating_lessons",
+                "current": i + 1,
+                "total": total_lessons,
+                "source_id": str(source_id),
+            },
+        )
         page_chunks = page_groups[page_idx]
         chunk_texts = [c.raw_text for c in page_chunks]
         page_title = (
@@ -288,12 +299,19 @@ async def _refresh_source_metadata(
 
     labs_by_page: dict[int, dict | None] = {}
     if asset_plan.lab_mode == "inline":
-        task.update_state(
-            state="PROGRESS",
-            meta={"stage": "generating_labs", "source_id": str(source_id)},
-        )
         lab_gen = LabGenerator(lesson_provider)
-        for page_idx, lesson_content in lesson_by_page.items():
+        lab_pages = list(lesson_by_page.items())
+        total_labs = len(lab_pages)
+        for i, (page_idx, lesson_content) in enumerate(lab_pages):
+            task.update_state(
+                state="PROGRESS",
+                meta={
+                    "stage": "generating_labs",
+                    "current": i + 1,
+                    "total": total_labs,
+                    "source_id": str(source_id),
+                },
+            )
             all_snippets = [
                 CodeSnippet(
                     language=block.language or "python",

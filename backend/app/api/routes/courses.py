@@ -5,6 +5,7 @@ from collections import defaultdict
 from math import inf
 from typing import Annotated, Any
 
+from celery.result import AsyncResult
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db, get_local_user, get_model_router
 from app.db.models.course import Course, CourseSource, Section
 from app.db.models.source import Source
+from app.worker.celery_app import celery_app
 from app.models.course import (
     CourseGenerateRequest,
     CourseResponse,
@@ -214,6 +216,7 @@ async def get_course(
         parent_id=course.parent_id,
         regeneration_directive=course.regeneration_directive,
         version_index=version_index,
+        active_regeneration_task_id=course.active_regeneration_task_id,
         sources=sources,
         sections=[
             SectionResponse(
@@ -279,6 +282,16 @@ async def regenerate_course_endpoint(
                 f"Source {s.id} is not ready (status={s.status}); cannot regenerate",
             )
 
+    if course.active_regeneration_task_id:
+        existing = AsyncResult(
+            course.active_regeneration_task_id, app=celery_app
+        )
+        if existing.state in {"PENDING", "PROGRESS", "STARTED", "RETRY"}:
+            return RegenerateCourseResponse(
+                task_id=course.active_regeneration_task_id,
+                parent_course_id=course.id,
+            )
+
     cost_guard = CostGuard(db)
     if not await cost_guard.check_budget(user.id, "course_regeneration"):
         raise HTTPException(
@@ -291,11 +304,37 @@ async def regenerate_course_endpoint(
     celery_task = regenerate_course.delay(
         str(course.id), directive, str(user.id)
     )
+    course.active_regeneration_task_id = celery_task.id
+    await db.commit()
 
     return RegenerateCourseResponse(
         task_id=celery_task.id,
         parent_course_id=course.id,
     )
+
+
+@router.delete(
+    "/{course_id}/regeneration",
+    status_code=204,
+)
+async def clear_regeneration(
+    course_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_local_user)],
+) -> None:
+    """Drop the cached regeneration task pointer on a course.
+
+    Frontend calls this after the user dismisses a finalized banner or
+    navigates to the new version. POST /regenerate will start a fresh
+    task on the next click.
+    """
+    course = (await db.execute(
+        select(Course).where(Course.id == course_id, Course.created_by == user.id)
+    )).scalar_one_or_none()
+    if course is None:
+        raise HTTPException(404, f"Course {course_id} not found")
+    course.active_regeneration_task_id = None
+    await db.commit()
 
 
 @router.get("/regenerations/{task_id}")
@@ -308,10 +347,6 @@ async def get_regeneration_status(
     Returns ``{status, stage, course_id?, error?}``. Frontend polls this every
     few seconds until ``status`` is ``success`` or ``failure``.
     """
-    from celery.result import AsyncResult
-
-    from app.worker.celery_app import celery_app
-
     result = AsyncResult(task_id, app=celery_app)
     state = result.state
 

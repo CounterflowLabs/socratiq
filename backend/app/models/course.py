@@ -55,6 +55,7 @@ class CourseDetailResponse(BaseModel):
     parent_id: uuid.UUID | None = None
     regeneration_directive: str | None = None
     version_index: int = 1
+    active_regeneration_task_id: str | None = None
     sources: list[SourceSummary] = Field(default_factory=list)
     sections: list[SectionResponse] = Field(default_factory=list)
     created_at: datetime

@@ -126,6 +126,86 @@ async def test_get_course_response_includes_version_index(
     body = res.json()
     assert body["version_index"] == 1
     assert body["parent_id"] is None
+    assert body["active_regeneration_task_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_regenerate_endpoint_returns_existing_active_task(
+    client: AsyncClient, db_session, demo_user
+):
+    """Re-clicking Regenerate while a task is running returns the same task id."""
+    course, _ = await _seed_course_with_source(db_session, demo_user)
+
+    class _FakeAsyncResult:
+        id = "celery-task-running"
+
+    with patch(
+        "app.worker.tasks.course_regeneration.regenerate_course.delay",
+        return_value=_FakeAsyncResult(),
+    ) as delay:
+        res = await client.post(
+            f"/api/v1/courses/{course.id}/regenerate",
+            json={"directive": "first"},
+        )
+    assert res.status_code == 202
+    delay.assert_called_once()
+
+    with patch(
+        "app.worker.tasks.course_regeneration.regenerate_course.delay",
+    ) as delay2, patch(
+        "app.api.routes.courses.AsyncResult"
+    ) as MockAsyncResult:
+        MockAsyncResult.return_value.state = "PROGRESS"
+        res2 = await client.post(
+            f"/api/v1/courses/{course.id}/regenerate",
+            json={"directive": "second"},
+        )
+    assert res2.status_code == 202
+    assert res2.json()["task_id"] == "celery-task-running"
+    delay2.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_regenerate_endpoint_starts_new_task_when_previous_finalized(
+    client: AsyncClient, db_session, demo_user
+):
+    """After the previous regen finalized, a new POST creates a fresh task."""
+    course, _ = await _seed_course_with_source(db_session, demo_user)
+    course.active_regeneration_task_id = "celery-task-old"
+    await db_session.flush()
+
+    class _FakeAsyncResult:
+        id = "celery-task-new"
+
+    with patch(
+        "app.worker.tasks.course_regeneration.regenerate_course.delay",
+        return_value=_FakeAsyncResult(),
+    ) as delay, patch(
+        "app.api.routes.courses.AsyncResult"
+    ) as MockAsyncResult:
+        MockAsyncResult.return_value.state = "SUCCESS"
+        res = await client.post(
+            f"/api/v1/courses/{course.id}/regenerate",
+            json={"directive": "retry"},
+        )
+    assert res.status_code == 202
+    assert res.json()["task_id"] == "celery-task-new"
+    delay.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_clear_regeneration_endpoint(
+    client: AsyncClient, db_session, demo_user
+):
+    course, _ = await _seed_course_with_source(db_session, demo_user)
+    course.active_regeneration_task_id = "celery-task-x"
+    await db_session.flush()
+
+    res = await client.delete(f"/api/v1/courses/{course.id}/regeneration")
+    assert res.status_code == 204
+
+    detail = await client.get(f"/api/v1/courses/{course.id}")
+    assert detail.json()["active_regeneration_task_id"] is None
 
 
 @pytest.mark.asyncio

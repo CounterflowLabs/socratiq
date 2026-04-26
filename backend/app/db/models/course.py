@@ -20,6 +20,9 @@ class Course(BaseMixin, Base):
     )
     regeneration_directive: Mapped[str | None] = mapped_column(Text, nullable=True)
     regeneration_metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    active_regeneration_task_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
 
 
 class CourseSource(Base):

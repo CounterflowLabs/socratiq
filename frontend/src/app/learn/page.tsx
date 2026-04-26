@@ -13,6 +13,7 @@ import StudyAside, { type AsidePanelId } from "@/components/learn/study-aside";
 import LessonRenderer from "@/components/lesson/lesson-renderer";
 import TutorDrawer from "@/components/tutor-drawer";
 import {
+  clearCourseRegeneration,
   estimateTranslation,
   getCourse,
   getRegenerationStatus,
@@ -211,6 +212,14 @@ function LearnPageInner() {
 
   const progressRecorded = useRef(false);
   const lessonScrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const persisted = course?.active_regeneration_task_id;
+    if (persisted && persisted !== regenTaskId) {
+      setRegenTaskId(persisted);
+      setRegenStatus({ status: "pending" });
+    }
+  }, [course?.active_regeneration_task_id, regenTaskId]);
 
   useEffect(() => {
     if (!regenTaskId) return;
@@ -562,9 +571,20 @@ function LearnPageInner() {
                 newCourseId: regenStatus.course_id,
                 message: regenStatus.error,
                 onOpenNewCourse: regenStatus.course_id
-                  ? () => router.push(`/learn?courseId=${regenStatus.course_id}`)
+                  ? () => {
+                      const newCourseId = regenStatus.course_id;
+                      if (courseId) {
+                        void clearCourseRegeneration(courseId).catch(() => {});
+                      }
+                      setRegenStatus(null);
+                      setRegenTaskId(null);
+                      router.push(`/learn?courseId=${newCourseId}`);
+                    }
                   : undefined,
                 onDismiss: () => {
+                  if (courseId) {
+                    void clearCourseRegeneration(courseId).catch(() => {});
+                  }
                   setRegenStatus(null);
                   setRegenTaskId(null);
                 },

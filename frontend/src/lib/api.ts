@@ -162,6 +162,7 @@ export interface CourseResponse {
 export interface CourseDetailResponse extends CourseResponse {
   sources: SourceSummary[];
   sections: SectionResponse[];
+  active_regeneration_task_id?: string | null;
 }
 
 export interface RegenerateCourseResponse {
@@ -280,6 +281,13 @@ export async function getRegenerationStatus(
   const res = await apiFetch(`${API_BASE}/courses/regenerations/${taskId}`);
   if (!res.ok) throw await responseError(res);
   return res.json();
+}
+
+export async function clearCourseRegeneration(courseId: string): Promise<void> {
+  const res = await apiFetch(`${API_BASE}/courses/${courseId}/regeneration`, {
+    method: "DELETE",
+  });
+  if (!res.ok && res.status !== 404) throw await responseError(res);
 }
 
 // ─── Chat APIs (SSE) ──────────────────────────────────

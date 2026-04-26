@@ -29,6 +29,8 @@ class LabGenerator:
         code_snippets: list[CodeSnippet],
         lesson_context: str,
         language: str,
+        target_language: str,
+        user_directive: str = "",
         goal: str | None = None,
     ) -> dict | None:
         """Generate a lab from code snippets. Returns None if no code or low confidence."""
@@ -45,7 +47,11 @@ class LabGenerator:
                 messages=[UnifiedMessage(
                     role="user",
                     content=_PROMPT.render(
-                        snippets=snippets_text, context=lesson_context[:3000], language=language,
+                        snippets=snippets_text,
+                        context=lesson_context[:3000],
+                        language=language,
+                        target_language=target_language,
+                        user_directive=user_directive,
                     )
                     + goal_prompt,
                 )],

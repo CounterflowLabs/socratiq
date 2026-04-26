@@ -17,11 +17,20 @@ class DiagnosticService:
     def __init__(self, provider: LLMProvider):
         self._provider = provider
 
-    async def generate(self, concepts: list[dict], count: int = 5) -> list[DiagnosticQuestion]:
+    async def generate(
+        self,
+        concepts: list[dict],
+        count: int = 5,
+        target_language: str = "zh-CN",
+    ) -> list[DiagnosticQuestion]:
         concept_text = "\n".join(
             f"- {c['name']}: {c.get('description', '')}" for c in concepts
         )
-        prompt = _PROMPT.render(count=count, concept_text=concept_text)
+        prompt = _PROMPT.render(
+            count=count,
+            concept_text=concept_text,
+            target_language=target_language,
+        )
 
         try:
             response = await self._provider.chat(

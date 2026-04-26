@@ -152,6 +152,9 @@ export interface CourseResponse {
   id: string;
   title: string;
   description?: string;
+  parent_id?: string | null;
+  regeneration_directive?: string | null;
+  version_index: number;
   created_at: string;
   updated_at: string;
 }
@@ -159,6 +162,19 @@ export interface CourseResponse {
 export interface CourseDetailResponse extends CourseResponse {
   sources: SourceSummary[];
   sections: SectionResponse[];
+}
+
+export interface RegenerateCourseResponse {
+  task_id: string;
+  parent_course_id: string;
+}
+
+export interface RegenerationStatus {
+  status: "pending" | "running" | "success" | "failure";
+  stage?: string | null;
+  course_id?: string;
+  parent_course_id?: string;
+  error?: string;
 }
 
 export interface LessonConcept {
@@ -239,6 +255,27 @@ export async function listCourses(): Promise<{
 
 export async function getCourse(id: string): Promise<CourseDetailResponse> {
   const res = await apiFetch(`${API_BASE}/courses/${id}`);
+  if (!res.ok) throw await responseError(res);
+  return res.json();
+}
+
+export async function regenerateCourse(
+  courseId: string,
+  directive?: string
+): Promise<RegenerateCourseResponse> {
+  const res = await apiFetch(`${API_BASE}/courses/${courseId}/regenerate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ directive: directive ?? null }),
+  });
+  if (!res.ok) throw await responseError(res);
+  return res.json();
+}
+
+export async function getRegenerationStatus(
+  taskId: string
+): Promise<RegenerationStatus> {
+  const res = await apiFetch(`${API_BASE}/courses/regenerations/${taskId}`);
   if (!res.ok) throw await responseError(res);
   return res.json();
 }

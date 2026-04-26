@@ -15,6 +15,7 @@ DEFAULT_LIMITS = {
     "translation": 100_000,
     "memory": 20_000,
     "mentor_chat": 200_000,
+    "course_regeneration": 500_000,
 }
 
 

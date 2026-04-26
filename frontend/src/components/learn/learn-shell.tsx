@@ -2,10 +2,19 @@
 
 import { useCallback, useSyncExternalStore } from "react";
 import Link from "next/link";
-import { Home } from "lucide-react";
+import { CheckCircle2, Home, Loader2, Sparkles } from "lucide-react";
 import { clsx } from "clsx";
 
 import { SIDEBAR_DESKTOP_QUERY } from "@/app/layout";
+
+interface RegenerationBanner {
+  state: "running" | "ready" | "failed";
+  stage?: string | null;
+  newCourseId?: string;
+  message?: string;
+  onOpenNewCourse?: () => void;
+  onDismiss?: () => void;
+}
 
 interface LearnShellProps {
   courseTitle: string;
@@ -16,7 +25,20 @@ interface LearnShellProps {
   outline: React.ReactNode;
   lessonStage: React.ReactNode;
   aside: React.ReactNode;
+  versionIndex?: number;
+  parentCourseHref?: string | null;
+  onRegenerate?: () => void;
+  regenerationBanner?: RegenerationBanner | null;
 }
+
+const STAGE_LABELS_EN: Record<string, string> = {
+  analyzing: "Analyzing content",
+  planning: "Planning teaching assets",
+  generating_lessons: "Generating lessons",
+  generating_labs: "Generating labs",
+  assembling: "Assembling course",
+  source_done: "Source complete",
+};
 
 function useMediaQuery(query: string): boolean {
   const subscribe = useCallback(
@@ -49,6 +71,10 @@ export default function LearnShell({
   outline,
   lessonStage,
   aside,
+  versionIndex,
+  parentCourseHref,
+  onRegenerate,
+  regenerationBanner,
 }: LearnShellProps) {
   const isDesktop = useMediaQuery(SIDEBAR_DESKTOP_QUERY);
 
@@ -69,9 +95,30 @@ export default function LearnShell({
               返回首页
             </Link>
             <div className="min-w-0">
-              <p className="text-xs font-medium uppercase" style={{ color: "var(--text-tertiary)" }}>
-                Learn
-              </p>
+              <div className="flex items-center gap-2">
+                <p className="text-xs font-medium uppercase" style={{ color: "var(--text-tertiary)" }}>
+                  Learn
+                </p>
+                {versionIndex && versionIndex > 1 ? (
+                  <span
+                    className="rounded-full bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-700"
+                    title="This course was regenerated from an earlier version"
+                  >
+                    v{versionIndex}
+                    {parentCourseHref ? (
+                      <>
+                        {" · "}
+                        <Link
+                          href={parentCourseHref}
+                          className="underline-offset-2 hover:underline"
+                        >
+                          previous
+                        </Link>
+                      </>
+                    ) : null}
+                  </span>
+                ) : null}
+              </div>
               <h1 className="truncate text-xl font-semibold" style={{ color: "var(--text)" }}>
                 {courseTitle}
               </h1>
@@ -84,6 +131,18 @@ export default function LearnShell({
             >
               {progressLabel}
             </span>
+            {onRegenerate ? (
+              <button
+                type="button"
+                onClick={onRegenerate}
+                disabled={regenerationBanner?.state === "running"}
+                className="inline-flex items-center gap-1.5 rounded-md border px-3 py-2 text-sm font-medium transition hover:bg-violet-50 disabled:opacity-60"
+                style={{ borderColor: "var(--border-medium)", color: "var(--text-secondary)" }}
+              >
+                <Sparkles className="h-4 w-4 text-violet-500" />
+                Regenerate
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={onOpenAside}
@@ -96,6 +155,58 @@ export default function LearnShell({
           </div>
         </div>
       </header>
+
+      {regenerationBanner ? (
+        <div
+          className={clsx(
+            "border-b px-4 py-3 text-sm sm:px-6",
+            regenerationBanner.state === "running" && "bg-violet-50 text-violet-800 border-violet-200",
+            regenerationBanner.state === "ready" && "bg-emerald-50 text-emerald-800 border-emerald-200",
+            regenerationBanner.state === "failed" && "bg-red-50 text-red-800 border-red-200"
+          )}
+        >
+          <div className="mx-auto flex max-w-[1760px] items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              {regenerationBanner.state === "running" ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : regenerationBanner.state === "ready" ? (
+                <CheckCircle2 className="h-4 w-4" />
+              ) : null}
+              <span>
+                {regenerationBanner.state === "running"
+                  ? `Regenerating · ${
+                      STAGE_LABELS_EN[regenerationBanner.stage ?? ""] ??
+                      regenerationBanner.stage ??
+                      "in progress"
+                    }`
+                  : regenerationBanner.state === "ready"
+                  ? "New version is ready."
+                  : regenerationBanner.message ?? "Regeneration failed."}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              {regenerationBanner.state === "ready" && regenerationBanner.onOpenNewCourse ? (
+                <button
+                  type="button"
+                  onClick={regenerationBanner.onOpenNewCourse}
+                  className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-emerald-700"
+                >
+                  Open new version
+                </button>
+              ) : null}
+              {regenerationBanner.state !== "running" && regenerationBanner.onDismiss ? (
+                <button
+                  type="button"
+                  onClick={regenerationBanner.onDismiss}
+                  className="rounded-md px-2 py-1 text-xs font-medium opacity-70 transition hover:opacity-100"
+                >
+                  Dismiss
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <div
         className={clsx(

@@ -62,24 +62,26 @@ class ContentAnalyzer:
         title: str,
         chunks: list[RawContentChunk],
         source_type: str,
+        user_directive: str = "",
     ) -> AnalysisResult:
         """Analyze extracted content chunks."""
         provider = await self._router.get_provider(TaskType.CONTENT_ANALYSIS)
+        system_prompt = _PROMPT.render(user_directive=user_directive)
 
         total_text = "\n\n---\n\n".join(c.raw_text for c in chunks)
 
         if len(total_text) < 8000:
-            return await self._analyze_single(provider, title, chunks, source_type)
+            return await self._analyze_single(provider, system_prompt, title, chunks, source_type)
         else:
-            return await self._analyze_batched(provider, title, chunks, source_type)
+            return await self._analyze_batched(provider, system_prompt, title, chunks, source_type)
 
     async def _analyze_single(
-        self, provider: LLMProvider, title: str,
+        self, provider: LLMProvider, system_prompt: str, title: str,
         chunks: list[RawContentChunk], source_type: str,
     ) -> AnalysisResult:
         content_text = self._format_chunks_for_llm(chunks, source_type)
         messages = [
-            UnifiedMessage(role="system", content=_PROMPT.render()),
+            UnifiedMessage(role="system", content=system_prompt),
             UnifiedMessage(
                 role="user",
                 content=f'Analyze the following content from a {source_type} source titled "{title}":\n\n{content_text}',
@@ -90,7 +92,7 @@ class ContentAnalyzer:
         return self._parse_analysis_response(response_text, title, chunks)
 
     async def _analyze_batched(
-        self, provider: LLMProvider, title: str,
+        self, provider: LLMProvider, system_prompt: str, title: str,
         chunks: list[RawContentChunk], source_type: str,
     ) -> AnalysisResult:
         BATCH_CHAR_LIMIT = 6000
@@ -114,7 +116,7 @@ class ContentAnalyzer:
         for i, batch in enumerate(batches):
             content_text = self._format_chunks_for_llm(batch, source_type)
             messages = [
-                UnifiedMessage(role="system", content=_PROMPT.render()),
+                UnifiedMessage(role="system", content=system_prompt),
                 UnifiedMessage(
                     role="user",
                     content=f'Analyze part {i + 1}/{len(batches)} of a {source_type} source titled "{title}":\n\n{content_text}',

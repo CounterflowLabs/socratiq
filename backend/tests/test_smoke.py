@@ -214,7 +214,7 @@ class TestCourses:
         db_session.add(section)
         await db_session.flush()
 
-        async def mock_generate(db, source_ids, title=None, user_id=None):
+        async def mock_generate(db, source_ids, target_language, title=None, user_id=None, skip_ready_check=False):
             return course
 
         mock_router = AsyncMock()

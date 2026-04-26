@@ -110,6 +110,14 @@ async def _generate_course_async(task, source_id: str, user_id: str | None) -> d
             )
             task.update_state(state="PROGRESS", meta={"stage": "assembling_course"})
 
+            from app.services.profile import load_profile
+
+            if source.created_by is not None:
+                uploader_profile = await load_profile(db, source.created_by)
+                target_language = uploader_profile.preferred_language
+            else:
+                target_language = "zh-CN"
+
             generator = CourseGenerator(resources.model_router)
             course = await generator.generate(
                 db=db,
@@ -117,6 +125,7 @@ async def _generate_course_async(task, source_id: str, user_id: str | None) -> d
                 title=source.title,
                 user_id=uid,
                 skip_ready_check=True,
+                target_language=target_language,
             )
 
             sections = (

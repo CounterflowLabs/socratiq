@@ -396,6 +396,7 @@ async def _ingest_source_async(task, source_id: str) -> dict:
                             code_snippets=all_snippets,
                             lesson_context=lesson_content.summary,
                             language=language,
+                            target_language=target_language,
                         )
                         labs_by_page[page_idx] = lab_result
                         if lab_result:

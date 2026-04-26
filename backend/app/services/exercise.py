@@ -19,13 +19,18 @@ class ExerciseService:
         self._provider = provider
 
     async def generate_from_content(
-        self, content: str, count: int = 3, types: list[str] | None = None,
+        self,
+        content: str,
+        count: int = 3,
+        types: list[str] | None = None,
+        target_language: str = "zh-CN",
     ) -> list[dict]:
         type_str = ", ".join(types or ["mcq", "open"])
         prompt = _GENERATION_PROMPT.render(
             count=count,
             content=content[:3000],
             types=type_str,
+            target_language=target_language,
         )
 
         try:
@@ -45,7 +50,12 @@ class ExerciseService:
             return []
 
     async def evaluate_submission(
-        self, question: str, answer: str, correct_answer: str, exercise_type: str,
+        self,
+        question: str,
+        answer: str,
+        correct_answer: str,
+        exercise_type: str,
+        target_language: str = "zh-CN",
     ) -> dict:
         if exercise_type == "mcq":
             is_correct = answer.strip().lower() == correct_answer.strip().lower()
@@ -58,6 +68,7 @@ class ExerciseService:
             question=question,
             correct_answer=correct_answer,
             answer=answer,
+            target_language=target_language,
         )
 
         try:

@@ -8,18 +8,22 @@ import { clsx } from "clsx";
 
 import CourseOutline, { type LessonWaypoint } from "@/components/learn/course-outline";
 import LearnShell from "@/components/learn/learn-shell";
+import RegenerateDrawer from "@/components/learn/regenerate-drawer";
 import StudyAside, { type AsidePanelId } from "@/components/learn/study-aside";
 import LessonRenderer from "@/components/lesson/lesson-renderer";
 import TutorDrawer from "@/components/tutor-drawer";
 import {
   estimateTranslation,
   getCourse,
+  getRegenerationStatus,
   recordProgress,
+  regenerateCourse,
   translateSection,
   type CourseDetailResponse,
   type GraphCard,
   type LabMode,
   type LessonContent,
+  type RegenerationStatus,
   type SectionResponse,
   type SourceSummary,
 } from "@/lib/api";
@@ -182,6 +186,11 @@ function LearnPageInner() {
   const [section, setSection] = useState<SectionResponse | null>(null);
   const [tutorOpen, setTutorOpen] = useState(false);
   const [asideOpen, setAsideOpen] = useState(false);
+  const [regenerateOpen, setRegenerateOpen] = useState(false);
+  const [regenerateBusy, setRegenerateBusy] = useState(false);
+  const [regenerateError, setRegenerateError] = useState<string | null>(null);
+  const [regenTaskId, setRegenTaskId] = useState<string | null>(null);
+  const [regenStatus, setRegenStatus] = useState<RegenerationStatus | null>(null);
   const [activeAsidePanel, setActiveAsidePanel] = useState<AsidePanelId>("tutor");
   const [courseError, setCourseError] = useState<string | null>(null);
   const asidePanelPreference = useRef<AsidePanelId | null>(null);
@@ -202,6 +211,35 @@ function LearnPageInner() {
 
   const progressRecorded = useRef(false);
   const lessonScrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!regenTaskId) return;
+    if (regenStatus?.status === "success" || regenStatus?.status === "failure") return;
+
+    let cancelled = false;
+    const tick = async () => {
+      if (cancelled) return;
+      try {
+        const update = await getRegenerationStatus(regenTaskId);
+        if (cancelled) return;
+        setRegenStatus(update);
+        if (update.status !== "success" && update.status !== "failure") {
+          setTimeout(tick, 3000);
+        }
+      } catch (err) {
+        if (cancelled) return;
+        setRegenStatus({
+          status: "failure",
+          error: err instanceof Error ? err.message : "Polling failed",
+        });
+      }
+    };
+    void tick();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [regenTaskId, regenStatus?.status]);
 
   useEffect(() => {
     if (!courseId) return;
@@ -504,6 +542,33 @@ function LearnPageInner() {
         asideOpen={asideOpen}
         onOpenAside={() => setAsideOpen(true)}
         onCloseAside={() => setAsideOpen(false)}
+        versionIndex={course?.version_index ?? 1}
+        parentCourseHref={
+          course?.parent_id ? `/learn?courseId=${course.parent_id}` : null
+        }
+        onRegenerate={courseId ? () => setRegenerateOpen(true) : undefined}
+        regenerationBanner={
+          regenStatus
+            ? {
+                state:
+                  regenStatus.status === "success"
+                    ? "ready"
+                    : regenStatus.status === "failure"
+                    ? "failed"
+                    : "running",
+                stage: regenStatus.stage ?? null,
+                newCourseId: regenStatus.course_id,
+                message: regenStatus.error,
+                onOpenNewCourse: regenStatus.course_id
+                  ? () => router.push(`/learn?courseId=${regenStatus.course_id}`)
+                  : undefined,
+                onDismiss: () => {
+                  setRegenStatus(null);
+                  setRegenTaskId(null);
+                },
+              }
+            : null
+        }
         outline={
           <CourseOutline
             sections={sections}
@@ -535,6 +600,36 @@ function LearnPageInner() {
         onClose={() => setTutorOpen(false)}
         courseId={courseId}
         sectionId={section?.id ?? null}
+      />
+
+      <RegenerateDrawer
+        open={regenerateOpen}
+        initialDirective={course?.regeneration_directive ?? ""}
+        pending={regenerateBusy}
+        errorMessage={regenerateError}
+        onClose={() => {
+          if (!regenerateBusy) {
+            setRegenerateOpen(false);
+            setRegenerateError(null);
+          }
+        }}
+        onSubmit={async (directive) => {
+          if (!courseId) return;
+          setRegenerateBusy(true);
+          setRegenerateError(null);
+          try {
+            const res = await regenerateCourse(courseId, directive || undefined);
+            setRegenTaskId(res.task_id);
+            setRegenStatus({ status: "pending" });
+            setRegenerateOpen(false);
+          } catch (err) {
+            setRegenerateError(
+              err instanceof Error ? err.message : "Failed to start regeneration"
+            );
+          } finally {
+            setRegenerateBusy(false);
+          }
+        }}
       />
     </>
   );

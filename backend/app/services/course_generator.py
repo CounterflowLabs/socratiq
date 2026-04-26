@@ -39,6 +39,7 @@ class CourseGenerator:
         self,
         db: AsyncSession,
         source_ids: list[UUID],
+        target_language: str,
         title: str | None = None,
         user_id: UUID | None = None,
         skip_ready_check: bool = False,
@@ -48,6 +49,7 @@ class CourseGenerator:
         Args:
             db: Database session.
             source_ids: List of Source UUIDs (must all be status='ready').
+            target_language: Language code for the course description (e.g. ``zh-CN``).
             title: Optional course title.
             user_id: Optional user UUID.
             skip_ready_check: Allows internal pipelines to assemble a course
@@ -219,6 +221,7 @@ class CourseGenerator:
             course_title=title,
             section_count=len(chunks),
             sources=sources,
+            target_language=target_language,
         )
 
         await db.flush()
@@ -264,7 +267,11 @@ class CourseGenerator:
         return None
 
     async def _generate_description(
-        self, course_title: str, section_count: int, sources: list[Source],
+        self,
+        course_title: str,
+        section_count: int,
+        sources: list[Source],
+        target_language: str,
     ) -> str:
         try:
             provider = await self._router.get_provider(TaskType.CONTENT_ANALYSIS)
@@ -276,6 +283,7 @@ class CourseGenerator:
                         course_title=course_title,
                         section_count=section_count,
                         source_info=source_info,
+                        target_language=target_language,
                     ),
                 ),
             ]

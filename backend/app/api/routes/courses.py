@@ -17,15 +17,41 @@ from app.models.course import (
     CourseResponse,
     CourseDetailResponse,
     CourseListResponse,
+    RegenerateCourseRequest,
+    RegenerateCourseResponse,
     SectionResponse,
     SourceSummary,
 )
 from app.services.course_generator import CourseGenerator
+from app.services.cost_guard import CostGuard
 from app.services.llm.router import ModelRouter
 
 from app.db.models.user import User
 
 router = APIRouter(prefix="/api/v1/courses", tags=["courses"])
+
+_MAX_VERSION_DEPTH = 64
+
+
+async def _compute_version_index(db: AsyncSession, course: Course) -> int:
+    """Return 1-indexed version number by walking the ``parent_id`` chain."""
+    index = 1
+    parent_id = course.parent_id
+    visited: set[uuid.UUID] = {course.id}
+    while parent_id is not None and index < _MAX_VERSION_DEPTH:
+        if parent_id in visited:
+            break
+        visited.add(parent_id)
+        index += 1
+        row = (
+            await db.execute(
+                select(Course.parent_id).where(Course.id == parent_id)
+            )
+        ).first()
+        if row is None:
+            break
+        parent_id = row[0]
+    return index
 
 
 def _extract_page_indices(metadata: dict[str, Any]) -> list[int]:
@@ -57,6 +83,9 @@ async def generate_course(
     model_router: Annotated[ModelRouter, Depends(get_model_router)],
 ) -> CourseResponse:
     """Generate a course from one or more ingested sources."""
+    from app.services.profile import load_profile
+
+    profile = await load_profile(db, user.id)
     generator = CourseGenerator(model_router)
     try:
         course = await generator.generate(
@@ -64,14 +93,19 @@ async def generate_course(
             source_ids=request.source_ids,
             title=request.title,
             user_id=user.id,
+            target_language=profile.preferred_language,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
 
+    version_index = await _compute_version_index(db, course)
     return CourseResponse(
         id=course.id,
         title=course.title,
         description=course.description,
+        parent_id=course.parent_id,
+        regeneration_directive=course.regeneration_directive,
+        version_index=version_index,
         created_at=course.created_at,
         updated_at=course.updated_at,
     )
@@ -98,21 +132,22 @@ async def list_courses(
         select(func.count()).select_from(Course).where(Course.created_by == user.id)
     )).scalar()
 
-    return CourseListResponse(
-        items=[
+    items: list[CourseResponse] = []
+    for c in courses:
+        version_index = await _compute_version_index(db, c)
+        items.append(
             CourseResponse(
                 id=c.id,
                 title=c.title,
                 description=c.description,
+                parent_id=c.parent_id,
+                regeneration_directive=c.regeneration_directive,
+                version_index=version_index,
                 created_at=c.created_at,
                 updated_at=c.updated_at,
             )
-            for c in courses
-        ],
-        total=total,
-        skip=skip,
-        limit=limit,
-    )
+        )
+    return CourseListResponse(items=items, total=total, skip=skip, limit=limit)
 
 
 @router.get("/{course_id}", response_model=CourseDetailResponse)
@@ -171,10 +206,14 @@ async def get_course(
             for section, page_index in zip(source_sections, page_indices, strict=False)
         }
 
+    version_index = await _compute_version_index(db, course)
     return CourseDetailResponse(
         id=course.id,
         title=course.title,
         description=course.description,
+        parent_id=course.parent_id,
+        regeneration_directive=course.regeneration_directive,
+        version_index=version_index,
         sources=sources,
         sections=[
             SectionResponse(
@@ -200,3 +239,98 @@ async def get_course(
         created_at=course.created_at,
         updated_at=course.updated_at,
     )
+
+
+@router.post(
+    "/{course_id}/regenerate",
+    response_model=RegenerateCourseResponse,
+    status_code=202,
+)
+async def regenerate_course_endpoint(
+    course_id: uuid.UUID,
+    request: RegenerateCourseRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_local_user)],
+) -> RegenerateCourseResponse:
+    """Kick off a regeneration of an existing course.
+
+    Creates a new ``Course`` row whose ``parent_id`` points at the supplied
+    ``course_id``. Pipeline runs from the source's already-extracted chunks; the
+    optional ``directive`` is injected into content_analysis, lesson_generation,
+    and lab_generation prompts.
+    """
+    course = (await db.execute(
+        select(Course).where(Course.id == course_id, Course.created_by == user.id)
+    )).scalar_one_or_none()
+    if course is None:
+        raise HTTPException(404, f"Course {course_id} not found")
+
+    linked_sources = (await db.execute(
+        select(Source)
+        .join(CourseSource, CourseSource.source_id == Source.id)
+        .where(CourseSource.course_id == course.id)
+    )).scalars().all()
+    if not linked_sources:
+        raise HTTPException(400, "Course has no linked sources to regenerate")
+    for s in linked_sources:
+        if s.status != "ready":
+            raise HTTPException(
+                400,
+                f"Source {s.id} is not ready (status={s.status}); cannot regenerate",
+            )
+
+    cost_guard = CostGuard(db)
+    if not await cost_guard.check_budget(user.id, "course_regeneration"):
+        raise HTTPException(
+            429, "Daily LLM budget exceeded for course regeneration."
+        )
+
+    from app.worker.tasks.course_regeneration import regenerate_course
+
+    directive = (request.directive or "").strip()
+    celery_task = regenerate_course.delay(
+        str(course.id), directive, str(user.id)
+    )
+
+    return RegenerateCourseResponse(
+        task_id=celery_task.id,
+        parent_course_id=course.id,
+    )
+
+
+@router.get("/regenerations/{task_id}")
+async def get_regeneration_status(
+    task_id: str,
+    user: Annotated[User, Depends(get_local_user)],
+) -> dict:
+    """Poll the status of a regeneration task.
+
+    Returns ``{status, stage, course_id?, error?}``. Frontend polls this every
+    few seconds until ``status`` is ``success`` or ``failure``.
+    """
+    from celery.result import AsyncResult
+
+    from app.worker.celery_app import celery_app
+
+    result = AsyncResult(task_id, app=celery_app)
+    state = result.state
+
+    payload: dict = {"status": state.lower(), "stage": None}
+    info = result.info if result.info is not None else {}
+    if isinstance(info, dict):
+        payload["stage"] = info.get("stage")
+
+    if state == "SUCCESS":
+        payload["status"] = "success"
+        if isinstance(result.result, dict):
+            payload["course_id"] = result.result.get("course_id")
+            payload["parent_course_id"] = result.result.get("parent_course_id")
+    elif state == "FAILURE":
+        payload["status"] = "failure"
+        payload["error"] = str(result.result) if result.result else "Unknown error"
+    elif state == "PROGRESS":
+        payload["status"] = "running"
+    elif state == "PENDING":
+        payload["status"] = "pending"
+
+    return payload

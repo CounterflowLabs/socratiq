@@ -1,8 +1,10 @@
-Current student profile:
+Analyze this exchange and propose profile updates.
+
+# Current profile
 {{ profile_json }}
 
-Student's message:
+# Student's latest message
 {{ user_message }}
 
-Mentor's response:
+# Mentor's response
 {{ assistant_text }}

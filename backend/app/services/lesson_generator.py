@@ -23,6 +23,7 @@ class LessonGenerator:
         subtitle_chunks: list[str],
         video_title: str,
         target_language: str,
+        user_directive: str = "",
         goal: str | None = None,
     ) -> LessonContent:
         """Convert subtitle chunks into a block-based lesson."""
@@ -37,6 +38,7 @@ class LessonGenerator:
                         title=video_title,
                         target_language=target_language,
                         subtitles=subtitles[:8000],
+                        user_directive=user_directive,
                     )
                     + goal_prompt,
                 )],

@@ -41,5 +41,5 @@ class LessonSection(BaseModel):
 class LessonContent(BaseModel):
     title: str
     summary: str
-    sections: list[LessonSection]
     blocks: list[LessonBlock] = Field(default_factory=list)
+    sections: list[LessonSection] = Field(default_factory=list)

@@ -2,10 +2,16 @@
 
 import json
 import logging
+from pathlib import Path
 
+from app.prompt_template import load_prompt
 from app.services.llm.base import LLMProvider, UnifiedMessage
 
 logger = logging.getLogger(__name__)
+
+_PROMPTS_DIR = Path(__file__).parent / "prompts"
+_GENERATION_PROMPT = load_prompt(_PROMPTS_DIR / "exercise_generation.md")
+_EVALUATION_PROMPT = load_prompt(_PROMPTS_DIR / "exercise_evaluation.md")
 
 
 class ExerciseService:
@@ -16,22 +22,11 @@ class ExerciseService:
         self, content: str, count: int = 3, types: list[str] | None = None,
     ) -> list[dict]:
         type_str = ", ".join(types or ["mcq", "open"])
-        prompt = f"""Generate {count} exercises based on this learning content:
-
-{content[:3000]}
-
-Exercise types to include: {type_str}
-
-For each exercise return:
-- type: "mcq" | "code" | "open"
-- question: the question text
-- options: array of 4 strings (only for mcq, null otherwise)
-- answer: the correct answer
-- explanation: why this is correct
-- difficulty: 1-5
-- concepts: array of concept names tested
-
-Return ONLY a JSON array."""
+        prompt = _GENERATION_PROMPT.render(
+            count=count,
+            content=content[:3000],
+            types=type_str,
+        )
 
         try:
             response = await self._provider.chat(
@@ -59,12 +54,11 @@ Return ONLY a JSON array."""
                 "feedback": "正确！" if is_correct else f"正确答案是：{correct_answer}",
             }
 
-        prompt = f"""Evaluate this student's answer:
-Question: {question}
-Correct answer: {correct_answer}
-Student's answer: {answer}
-
-Return JSON: {{"score": <0-100>, "feedback": "<constructive feedback in Chinese>"}}"""
+        prompt = _EVALUATION_PROMPT.render(
+            question=question,
+            correct_answer=correct_answer,
+            answer=answer,
+        )
 
         try:
             response = await self._provider.chat(

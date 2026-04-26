@@ -1,6 +1,7 @@
 """Course generation service — creates Course + Sections from analyzed sources."""
 
 import logging
+from pathlib import Path
 from uuid import UUID
 
 from sqlalchemy import select
@@ -9,10 +10,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models.content_chunk import ContentChunk as ContentChunkModel
 from app.db.models.course import Course, CourseSource, Section
 from app.db.models.source import Source
+from app.prompt_template import load_prompt
 from app.services.llm.base import UnifiedMessage
 from app.services.llm.router import ModelRouter, TaskType
 
 logger = logging.getLogger(__name__)
+
+_DESCRIPTION_PROMPT = load_prompt(Path(__file__).parent / "prompts" / "course_description.md")
 
 
 class CourseGenerator:
@@ -268,11 +272,10 @@ class CourseGenerator:
             messages = [
                 UnifiedMessage(
                     role="user",
-                    content=(
-                        f'Write a 2-3 sentence course description for a course titled '
-                        f'"{course_title}" with {section_count} sections. '
-                        f'Source material: {source_info}. '
-                        f'Be concise and informative. Respond with ONLY the description text.'
+                    content=_DESCRIPTION_PROMPT.render(
+                        course_title=course_title,
+                        section_count=section_count,
+                        source_info=source_info,
                     ),
                 ),
             ]

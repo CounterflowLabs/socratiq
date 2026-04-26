@@ -266,15 +266,23 @@ async def test_ingest_source_queues_course_generation_when_pipeline_finishes(
 
     class FakeLessonContent:
         summary = "lesson summary"
-        sections = [SimpleNamespace(code_snippets=[], key_concepts=["test"])]
+        blocks = [
+            SimpleNamespace(
+                type="concept_relation",
+                concepts=[SimpleNamespace(label="test")],
+                code=None,
+                language=None,
+                body=None,
+            )
+        ]
 
         def model_dump(self):
             return {
                 "summary": self.summary,
-                "sections": [
+                "blocks": [
                     {
-                        "code_snippets": [],
-                        "key_concepts": ["test"],
+                        "type": "concept_relation",
+                        "concepts": [{"label": "test"}],
                     }
                 ],
             }
@@ -481,21 +489,28 @@ async def test_ingestion_persists_asset_plan_and_graph_by_page(
         def __init__(self, title, summary, key_concepts):
             self.title = title
             self.summary = summary
-            self.sections = [
-                SimpleNamespace(code_snippets=[], key_concepts=key_concepts)
+            self.blocks = [
+                SimpleNamespace(
+                    type="concept_relation",
+                    concepts=[SimpleNamespace(label=label) for label in key_concepts],
+                    code=None,
+                    language=None,
+                    body=None,
+                )
             ]
 
         def model_dump(self):
             return {
                 "title": self.title,
                 "summary": self.summary,
-                "sections": [
+                "blocks": [
                     {
-                        "code_snippets": [],
-                        "key_concepts": self.sections[0].key_concepts,
+                        "type": "concept_relation",
+                        "concepts": [
+                            {"label": c.label} for c in self.blocks[0].concepts
+                        ],
                     }
                 ],
-                "blocks": [],
             }
 
     class FakeLessonGenerator:

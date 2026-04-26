@@ -5,11 +5,13 @@ import logging
 import re
 import uuid
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.tools.base import AgentTool
 from app.agent.prompts.mentor import build_system_prompt
+from app.prompt_template import load_prompt
 from app.services.llm.base import (
     ContentBlock,
     LLMProvider,
@@ -21,6 +23,10 @@ from app.services.llm.router import ModelRouter, TaskType
 from app.services.profile import StudentProfile, load_profile
 
 logger = logging.getLogger(__name__)
+
+_PROFILE_PROMPTS_DIR = Path(__file__).parent / "prompts"
+_PROFILE_ANALYSIS_SYSTEM = load_prompt(_PROFILE_PROMPTS_DIR / "profile_analysis_system.md")
+_PROFILE_ANALYSIS_USER = load_prompt(_PROFILE_PROMPTS_DIR / "profile_analysis_user.md")
 
 
 class MentorAgent:
@@ -222,20 +228,14 @@ class MentorAgent:
                 messages = [
                     UnifiedMessage(
                         role="system",
-                        content=(
-                            "You are a student profile analysis engine. Based on the following "
-                            "conversation between a mentor and student, identify any updates "
-                            "to the student profile. Respond with JSON:\n"
-                            '{"observations": ["..."], "updates": {"field": "value"}}\n'
-                            "If no updates are needed, return empty updates."
-                        ),
+                        content=_PROFILE_ANALYSIS_SYSTEM.render(),
                     ),
                     UnifiedMessage(
                         role="user",
-                        content=(
-                            f"Current student profile:\n{profile.model_dump_json(indent=2)}\n\n"
-                            f"Student's message:\n{user_message[:1000]}\n\n"
-                            f"Mentor's response:\n{assistant_text[:2000]}"
+                        content=_PROFILE_ANALYSIS_USER.render(
+                            profile_json=profile.model_dump_json(indent=2),
+                            user_message=user_message[:1000],
+                            assistant_text=assistant_text[:2000],
                         ),
                     ),
                 ]

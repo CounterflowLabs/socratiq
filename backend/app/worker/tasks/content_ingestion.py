@@ -308,11 +308,18 @@ async def _ingest_source_async(task, source_id: str) -> dict:
 
                 from app.services.lesson_generator import LessonGenerator
                 from app.services.llm.router import TaskType
+                from app.services.profile import load_profile
 
                 lesson_provider = await resources.model_router.get_provider(
                     TaskType.CONTENT_ANALYSIS
                 )
                 lesson_gen = LessonGenerator(lesson_provider)
+
+                if source.created_by is not None:
+                    uploader_profile = await load_profile(db, source.created_by)
+                    target_language = uploader_profile.preferred_language
+                else:
+                    target_language = "zh-CN"
 
                 page_groups: dict[int, list] = {}
                 for chunk in analysis.chunks:
@@ -328,20 +335,23 @@ async def _ingest_source_async(task, source_id: str) -> dict:
                         or source.title
                         or "Untitled"
                     )
-                    lesson_content = await lesson_gen.generate(chunk_texts, page_title)
+                    lesson_content = await lesson_gen.generate(
+                        chunk_texts, page_title, target_language=target_language
+                    )
                     lesson_by_page[page_idx] = lesson_content
                     logger.info(
-                        "Generated lesson for page %s: %s sections",
+                        "Generated lesson for page %s: %s blocks",
                         page_idx,
-                        len(lesson_content.sections),
+                        len(lesson_content.blocks),
                     )
 
                 labs_by_page: dict[int, dict | None] = {}
                 graph_by_page: dict[int, dict[str, object]] = {}
                 for page_idx, lesson_content in lesson_by_page.items():
                     key_concepts: list[str] = []
-                    for section in lesson_content.sections:
-                        key_concepts.extend(section.key_concepts)
+                    for block in lesson_content.blocks:
+                        if block.type == "concept_relation":
+                            key_concepts.extend(c.label for c in block.concepts)
                     deduped_concepts = list(dict.fromkeys(key_concepts))
                     graph_by_page[page_idx] = {
                         "current": deduped_concepts[:2],
@@ -359,9 +369,17 @@ async def _ingest_source_async(task, source_id: str) -> dict:
 
                     lab_gen = LabGenerator(lesson_provider)
                     for page_idx, lesson_content in lesson_by_page.items():
-                        all_snippets = []
-                        for section in lesson_content.sections:
-                            all_snippets.extend(section.code_snippets)
+                        from app.models.lesson import CodeSnippet
+
+                        all_snippets = [
+                            CodeSnippet(
+                                language=block.language or "python",
+                                code=block.code,
+                                context=block.body or "",
+                            )
+                            for block in lesson_content.blocks
+                            if block.type == "code_example" and block.code
+                        ]
 
                         if not all_snippets:
                             labs_by_page[page_idx] = None

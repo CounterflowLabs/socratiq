@@ -1,0 +1,1 @@
+Write a 2-3 sentence course description for a course titled "{{ course_title }}" with {{ section_count }} sections. Source material: {{ source_info }}. Be concise and informative. Respond with ONLY the description text.

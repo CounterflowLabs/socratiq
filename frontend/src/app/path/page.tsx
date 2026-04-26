@@ -353,6 +353,9 @@ function PathContent() {
     }
     setRegenStatus(null);
     setRegenTaskId(null);
+    setCourse((prev) =>
+      prev ? { ...prev, active_regeneration_task_id: null } : prev
+    );
   };
 
   const openNewVersion = () => {
@@ -363,6 +366,9 @@ function PathContent() {
     }
     setRegenStatus(null);
     setRegenTaskId(null);
+    setCourse((prev) =>
+      prev ? { ...prev, active_regeneration_task_id: null } : prev
+    );
     router.push(`/path?courseId=${newCourseId}`);
   };
 

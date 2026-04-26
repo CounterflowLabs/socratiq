@@ -572,6 +572,9 @@ function LearnPageInner() {
                       }
                       setRegenStatus(null);
                       setRegenTaskId(null);
+                      setCourse((prev) =>
+                        prev ? { ...prev, active_regeneration_task_id: null } : prev
+                      );
                       router.push(`/learn?courseId=${newCourseId}`);
                     }
                   : undefined,
@@ -581,6 +584,9 @@ function LearnPageInner() {
                   }
                   setRegenStatus(null);
                   setRegenTaskId(null);
+                  setCourse((prev) =>
+                    prev ? { ...prev, active_regeneration_task_id: null } : prev
+                  );
                 },
               }
             : null

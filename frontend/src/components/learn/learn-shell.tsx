@@ -2,7 +2,7 @@
 
 import { useCallback, useSyncExternalStore } from "react";
 import Link from "next/link";
-import { CheckCircle2, Home, Loader2, Sparkles } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Loader2, Sparkles } from "lucide-react";
 import { clsx } from "clsx";
 
 import { SIDEBAR_DESKTOP_QUERY } from "@/app/layout";
@@ -47,6 +47,7 @@ interface LearnShellProps {
   outline: React.ReactNode;
   lessonStage: React.ReactNode;
   aside: React.ReactNode;
+  backHref?: string;
   versionIndex?: number;
   parentCourseHref?: string | null;
   onRegenerate?: () => void;
@@ -93,6 +94,7 @@ export default function LearnShell({
   outline,
   lessonStage,
   aside,
+  backHref = "/path",
   versionIndex,
   parentCourseHref,
   onRegenerate,
@@ -109,12 +111,12 @@ export default function LearnShell({
         <div className="mx-auto flex max-w-[1760px] items-center justify-between gap-3 px-4 py-3 sm:px-6">
           <div className="flex min-w-0 items-center gap-3">
             <Link
-              href="/"
-              className="inline-flex shrink-0 items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium transition hover:opacity-80"
+              href={backHref}
+              aria-label="返回课程路径"
+              className="inline-flex shrink-0 items-center justify-center rounded-md border p-2 transition hover:opacity-80"
               style={{ borderColor: "var(--border-medium)", color: "var(--text-secondary)" }}
             >
-              <Home className="h-4 w-4" />
-              返回首页
+              <ArrowLeft className="h-4 w-4" />
             </Link>
             <div className="min-w-0">
               <div className="flex items-center gap-2">

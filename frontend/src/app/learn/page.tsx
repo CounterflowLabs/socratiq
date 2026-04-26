@@ -3,7 +3,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, BookOpen, ChevronLeft, ChevronRight, Languages, Loader2 } from "lucide-react";
+import { BookOpen, ChevronLeft, ChevronRight, Languages, Loader2 } from "lucide-react";
 import { clsx } from "clsx";
 
 import CourseOutline, { type LessonWaypoint } from "@/components/learn/course-outline";
@@ -433,13 +433,6 @@ function LearnPageInner() {
     <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-[0_16px_48px_rgba(15,23,42,0.08)]">
       <div className="border-b border-slate-200 bg-white px-5 py-4">
         <div className="flex flex-wrap items-center gap-3">
-          <Link
-            href={courseId ? `/path?courseId=${courseId}` : "/path"}
-            className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            返回路径
-          </Link>
           <div className="min-w-0 flex-1">
             <p className="text-xs font-medium uppercase text-slate-400">
               当前章节
@@ -546,6 +539,7 @@ function LearnPageInner() {
         asideOpen={asideOpen}
         onOpenAside={() => setAsideOpen(true)}
         onCloseAside={() => setAsideOpen(false)}
+        backHref={courseId ? `/path?courseId=${courseId}` : "/path"}
         versionIndex={course?.version_index ?? 1}
         parentCourseHref={
           course?.parent_id ? `/path?courseId=${course.parent_id}` : null

@@ -123,16 +123,24 @@ body {
 }
 
 /* Theme bridge for pages/components that still use light Tailwind color utilities. */
-:root[data-theme="dark"] :where(.bg-white, .bg-white\/95),
+:root[data-theme="dark"] :where(
+  .bg-white,
+  .bg-white\/70,
+  .bg-white\/80,
+  .bg-white\/90,
+  .bg-white\/95
+),
 :root[data-theme="dark"] :where(.hover\:bg-white:hover) {
   background-color: var(--surface);
 }
 
 :root[data-theme="dark"] :where(
   .bg-gray-50,
+  .bg-gray-50\/50,
   .bg-gray-100,
   .bg-gray-200,
   .bg-slate-50,
+  .bg-slate-50\/50,
   .bg-slate-100,
   .bg-slate-200,
   .hover\:bg-gray-50:hover,
@@ -148,8 +156,10 @@ body {
 
 :root[data-theme="dark"] :where(
   .bg-blue-50,
+  .bg-blue-50\/50,
   .bg-blue-100,
   .bg-sky-50,
+  .bg-sky-50\/70,
   .bg-sky-100,
   .hover\:bg-blue-50:hover,
   .hover\:bg-blue-100:hover
@@ -157,11 +167,24 @@ body {
   background-color: var(--primary-light);
 }
 
-:root[data-theme="dark"] :where(.bg-green-50, .bg-green-100, .bg-emerald-50, .bg-emerald-100) {
+:root[data-theme="dark"] :where(
+  .bg-green-50,
+  .bg-green-100,
+  .bg-emerald-50,
+  .bg-emerald-50\/70,
+  .bg-emerald-100
+) {
   background-color: var(--success-light);
 }
 
-:root[data-theme="dark"] :where(.bg-amber-50, .bg-amber-100, .bg-orange-50, .bg-yellow-50) {
+:root[data-theme="dark"] :where(
+  .bg-amber-50,
+  .bg-amber-50\/60,
+  .bg-amber-50\/70,
+  .bg-amber-100,
+  .bg-orange-50,
+  .bg-yellow-50
+) {
   background-color: var(--warning-light);
 }
 
@@ -255,16 +278,24 @@ body {
 }
 
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) :where(.bg-white, .bg-white\/95),
+  :root:not([data-theme="light"]) :where(
+    .bg-white,
+    .bg-white\/70,
+    .bg-white\/80,
+    .bg-white\/90,
+    .bg-white\/95
+  ),
   :root:not([data-theme="light"]) :where(.hover\:bg-white:hover) {
     background-color: var(--surface);
   }
 
   :root:not([data-theme="light"]) :where(
     .bg-gray-50,
+    .bg-gray-50\/50,
     .bg-gray-100,
     .bg-gray-200,
     .bg-slate-50,
+    .bg-slate-50\/50,
     .bg-slate-100,
     .bg-slate-200,
     .hover\:bg-gray-50:hover,
@@ -280,8 +311,10 @@ body {
 
   :root:not([data-theme="light"]) :where(
     .bg-blue-50,
+    .bg-blue-50\/50,
     .bg-blue-100,
     .bg-sky-50,
+    .bg-sky-50\/70,
     .bg-sky-100,
     .hover\:bg-blue-50:hover,
     .hover\:bg-blue-100:hover
@@ -289,11 +322,24 @@ body {
     background-color: var(--primary-light);
   }
 
-  :root:not([data-theme="light"]) :where(.bg-green-50, .bg-green-100, .bg-emerald-50, .bg-emerald-100) {
+  :root:not([data-theme="light"]) :where(
+    .bg-green-50,
+    .bg-green-100,
+    .bg-emerald-50,
+    .bg-emerald-50\/70,
+    .bg-emerald-100
+  ) {
     background-color: var(--success-light);
   }
 
-  :root:not([data-theme="light"]) :where(.bg-amber-50, .bg-amber-100, .bg-orange-50, .bg-yellow-50) {
+  :root:not([data-theme="light"]) :where(
+    .bg-amber-50,
+    .bg-amber-50\/60,
+    .bg-amber-50\/70,
+    .bg-amber-100,
+    .bg-orange-50,
+    .bg-yellow-50
+  ) {
     background-color: var(--warning-light);
   }
 

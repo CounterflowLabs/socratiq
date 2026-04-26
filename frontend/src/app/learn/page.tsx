@@ -185,6 +185,17 @@ function LearnPageInner() {
   const [section, setSection] = useState<SectionResponse | null>(null);
   const [tutorOpen, setTutorOpen] = useState(false);
   const [asideOpen, setAsideOpen] = useState(false);
+  const [outlineOpen, setOutlineOpenState] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
+    const stored = window.localStorage.getItem("learn:outlineOpen");
+    return stored === null ? true : stored === "1";
+  });
+  const setOutlineOpen = useCallback((next: boolean) => {
+    setOutlineOpenState(next);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("learn:outlineOpen", next ? "1" : "0");
+    }
+  }, []);
   const [regenTaskId, setRegenTaskId] = useState<string | null>(null);
   const [regenStatus, setRegenStatus] = useState<RegenerationStatus | null>(null);
   const [activeAsidePanel, setActiveAsidePanel] = useState<AsidePanelId>("tutor");
@@ -585,6 +596,8 @@ function LearnPageInner() {
               }
             : null
         }
+        outlineOpen={outlineOpen}
+        onOpenOutline={() => setOutlineOpen(true)}
         outline={
           <CourseOutline
             sections={sections}
@@ -592,6 +605,7 @@ function LearnPageInner() {
             onSelectSection={navigateToSection}
             lessonWaypoints={lessonWaypoints}
             onSelectWaypoint={handleSelectWaypoint}
+            onCollapse={() => setOutlineOpen(false)}
           />
         }
         lessonStage={lessonStage}

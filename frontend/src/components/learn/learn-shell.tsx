@@ -2,7 +2,7 @@
 
 import { useCallback, useSyncExternalStore } from "react";
 import Link from "next/link";
-import { ArrowLeft, CheckCircle2, Loader2, Sparkles } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Loader2, PanelLeftOpen, Sparkles } from "lucide-react";
 import { clsx } from "clsx";
 
 import { SIDEBAR_DESKTOP_QUERY } from "@/app/layout";
@@ -44,6 +44,8 @@ interface LearnShellProps {
   asideOpen: boolean;
   onOpenAside: () => void;
   onCloseAside: () => void;
+  outlineOpen?: boolean;
+  onOpenOutline?: () => void;
   outline: React.ReactNode;
   lessonStage: React.ReactNode;
   aside: React.ReactNode;
@@ -95,6 +97,8 @@ export default function LearnShell({
   lessonStage,
   aside,
   backHref = "/path",
+  outlineOpen = true,
+  onOpenOutline,
   versionIndex,
   parentCourseHref,
   onRegenerate,
@@ -165,6 +169,18 @@ export default function LearnShell({
               >
                 <Sparkles className="h-4 w-4 text-violet-500" />
                 重新生成
+              </button>
+            ) : null}
+            {!outlineOpen && onOpenOutline ? (
+              <button
+                type="button"
+                onClick={onOpenOutline}
+                aria-label="展开课程目录"
+                className="inline-flex items-center gap-1.5 rounded-md border px-3 py-2 text-sm font-medium transition hover:bg-slate-50"
+                style={{ borderColor: "var(--border-medium)", color: "var(--text-secondary)" }}
+              >
+                <PanelLeftOpen className="h-4 w-4" />
+                课程目录
               </button>
             ) : null}
             <button
@@ -255,12 +271,18 @@ export default function LearnShell({
       <div
         className={clsx(
           "mx-auto flex max-w-[1760px] flex-col gap-4 px-4 py-4 transition-all duration-300 ease-out sm:px-6 lg:grid lg:items-start",
-          asideOpen && isDesktop
-            ? "lg:grid-cols-[320px_minmax(0,1fr)_360px]"
-            : "lg:grid-cols-[320px_minmax(0,1fr)]"
+          outlineOpen && isDesktop
+            ? asideOpen
+              ? "lg:grid-cols-[280px_minmax(0,1fr)_360px]"
+              : "lg:grid-cols-[280px_minmax(0,1fr)]"
+            : asideOpen && isDesktop
+              ? "lg:grid-cols-[minmax(0,1fr)_360px]"
+              : "lg:grid-cols-[minmax(0,1fr)]"
         )}
       >
-        <div className="lg:sticky lg:top-4">{outline}</div>
+        {outlineOpen ? (
+          <div className="lg:sticky lg:top-4">{outline}</div>
+        ) : null}
         <div className="min-w-0">{lessonStage}</div>
         {asideOpen && isDesktop ? (
           <div className="min-w-0 lg:sticky lg:top-4">

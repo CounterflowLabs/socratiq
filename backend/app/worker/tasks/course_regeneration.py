@@ -123,7 +123,7 @@ async def _regenerate_course_async(
             new_course.parent_id = parent_uuid
             new_course.regeneration_directive = directive or None
             new_course.regeneration_metadata = {
-                "model_used": resources.settings.default_model_id or "unknown",
+                "model_used": await _resolve_chat_model_name(db),
                 "generated_at": datetime.utcnow().isoformat(),
                 "source_ids": [str(s) for s in source_ids],
             }
@@ -368,3 +368,18 @@ def self_task_id(task) -> str | None:
     """Return the celery task id when available."""
     request = getattr(task, "request", None)
     return getattr(request, "id", None) if request is not None else None
+
+
+async def _resolve_chat_model_name(db) -> str:
+    """Look up the model assigned to the content_analysis route, for audit."""
+    from app.db.models.model_config import ModelRouteConfig
+    from sqlalchemy import select as _select
+
+    row = (
+        await db.execute(
+            _select(ModelRouteConfig.model_name).where(
+                ModelRouteConfig.task_type == "content_analysis"
+            )
+        )
+    ).first()
+    return row[0] if row else "unknown"

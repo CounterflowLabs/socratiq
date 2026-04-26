@@ -31,13 +31,13 @@ interface LearnShellProps {
   regenerationBanner?: RegenerationBanner | null;
 }
 
-const STAGE_LABELS_EN: Record<string, string> = {
-  analyzing: "Analyzing content",
-  planning: "Planning teaching assets",
-  generating_lessons: "Generating lessons",
-  generating_labs: "Generating labs",
-  assembling: "Assembling course",
-  source_done: "Source complete",
+const STAGE_LABELS_ZH: Record<string, string> = {
+  analyzing: "分析内容",
+  planning: "规划教学资产",
+  generating_lessons: "生成课文",
+  generating_labs: "生成 Lab",
+  assembling: "组装课程",
+  source_done: "资料处理完成",
 };
 
 function useMediaQuery(query: string): boolean {
@@ -102,9 +102,9 @@ export default function LearnShell({
                 {versionIndex && versionIndex > 1 ? (
                   <span
                     className="rounded-full bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-700"
-                    title="This course was regenerated from an earlier version"
+                    title="该课程是从先前版本重新生成的"
                   >
-                    v{versionIndex}
+                    第 {versionIndex} 版
                     {parentCourseHref ? (
                       <>
                         {" · "}
@@ -112,7 +112,7 @@ export default function LearnShell({
                           href={parentCourseHref}
                           className="underline-offset-2 hover:underline"
                         >
-                          previous
+                          查看上一版
                         </Link>
                       </>
                     ) : null}
@@ -140,7 +140,7 @@ export default function LearnShell({
                 style={{ borderColor: "var(--border-medium)", color: "var(--text-secondary)" }}
               >
                 <Sparkles className="h-4 w-4 text-violet-500" />
-                Regenerate
+                重新生成
               </button>
             ) : null}
             <button
@@ -174,14 +174,14 @@ export default function LearnShell({
               ) : null}
               <span>
                 {regenerationBanner.state === "running"
-                  ? `Regenerating · ${
-                      STAGE_LABELS_EN[regenerationBanner.stage ?? ""] ??
+                  ? `重新生成中 · ${
+                      STAGE_LABELS_ZH[regenerationBanner.stage ?? ""] ??
                       regenerationBanner.stage ??
-                      "in progress"
+                      "进行中"
                     }`
                   : regenerationBanner.state === "ready"
-                  ? "New version is ready."
-                  : regenerationBanner.message ?? "Regeneration failed."}
+                  ? "新版本已生成完毕。"
+                  : regenerationBanner.message ?? "重新生成失败。"}
               </span>
             </div>
             <div className="flex items-center gap-2">
@@ -191,7 +191,7 @@ export default function LearnShell({
                   onClick={regenerationBanner.onOpenNewCourse}
                   className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-emerald-700"
                 >
-                  Open new version
+                  打开新版本
                 </button>
               ) : null}
               {regenerationBanner.state !== "running" && regenerationBanner.onDismiss ? (
@@ -200,7 +200,7 @@ export default function LearnShell({
                   onClick={regenerationBanner.onDismiss}
                   className="rounded-md px-2 py-1 text-xs font-medium opacity-70 transition hover:opacity-100"
                 >
-                  Dismiss
+                  关闭
                 </button>
               ) : null}
             </div>

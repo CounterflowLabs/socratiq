@@ -15,10 +15,10 @@ interface RegenerateDrawerProps {
 const MAX_DIRECTIVE_LEN = 1000;
 
 const PLACEHOLDER_EXAMPLES = [
-  "Make the lessons more concise.",
-  "Focus on practical examples instead of theory.",
-  "I'm a beginner, simplify the explanations.",
-  "Add more code examples per section.",
+  "把课文写得更精炼一点。",
+  "多给实战示例，少讲理论。",
+  "我是初学者，请简化讲解。",
+  "每个小节多放一些代码示例。",
 ];
 
 export default function RegenerateDrawer({
@@ -56,11 +56,11 @@ export default function RegenerateDrawer({
       className="fixed inset-0 z-50 flex justify-end bg-black/30 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
-      aria-label="Regenerate course"
+      aria-label="重新生成课程"
     >
       <button
         type="button"
-        aria-label="Close regenerate drawer overlay"
+        aria-label="关闭重新生成抽屉的遮罩"
         className="absolute inset-0 bg-transparent"
         onClick={pending ? undefined : onClose}
       />
@@ -74,14 +74,14 @@ export default function RegenerateDrawer({
         >
           <div className="flex items-center gap-2">
             <Sparkles className="h-5 w-5 text-violet-500" />
-            <h2 className="text-lg font-semibold">Regenerate course</h2>
+            <h2 className="text-lg font-semibold">重新生成课程</h2>
           </div>
           <button
             type="button"
             onClick={onClose}
             disabled={pending}
             className="rounded-md p-1.5 transition hover:bg-gray-100 disabled:opacity-50"
-            aria-label="Close"
+            aria-label="关闭"
           >
             <X className="h-4 w-4" />
           </button>
@@ -89,12 +89,11 @@ export default function RegenerateDrawer({
 
         <div className="flex-1 space-y-5 px-5 py-5">
           <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
-            Re-runs the content pipeline with the current prompts and your selected
-            model. Creates a new version; the current version is preserved.
+            用当前的提示词和你选定的模型重跑内容管线，产出一个新版本；当前版本会被保留。
           </p>
 
           <label className="block">
-            <span className="text-sm font-medium">Custom instructions (optional)</span>
+            <span className="text-sm font-medium">自定义指令（可选）</span>
             <textarea
               value={directive}
               onChange={(e) =>
@@ -113,7 +112,7 @@ export default function RegenerateDrawer({
               className="mt-1 text-xs"
               style={{ color: "var(--text-tertiary)" }}
             >
-              {remaining} characters remaining
+              还可输入 {remaining} 字
             </p>
           </label>
 
@@ -125,8 +124,7 @@ export default function RegenerateDrawer({
               color: "var(--text-secondary)",
             }}
           >
-            Estimated 10–20k tokens · 2–5 min. Your existing reading progress on
-            this version will not be carried over to the new one.
+            预估消耗 10–20k tokens · 2–5 分钟。当前版本的阅读进度不会迁移到新版本。
           </div>
 
           {errorMessage ? (
@@ -147,7 +145,7 @@ export default function RegenerateDrawer({
             className="rounded-md px-3 py-2 text-sm font-medium transition hover:bg-gray-100 disabled:opacity-50"
             style={{ color: "var(--text-secondary)" }}
           >
-            Cancel
+            取消
           </button>
           <button
             type="button"
@@ -158,12 +156,12 @@ export default function RegenerateDrawer({
             {pending ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" />
-                Starting…
+                启动中…
               </>
             ) : (
               <>
                 <Sparkles className="h-4 w-4" />
-                Regenerate
+                开始重生成
               </>
             )}
           </button>

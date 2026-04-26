@@ -44,7 +44,7 @@ class OpenAICompatProvider(LLMProvider):
         supports_tools: bool = True,
         supports_stream: bool = True,
         max_tokens_limit: int = 4096,
-        timeout: float = 60.0,
+        timeout: float = 300.0,
     ) -> None:
         self._model = model
         self._base_url = base_url

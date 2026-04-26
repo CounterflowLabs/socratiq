@@ -122,6 +122,17 @@ export default function LearnShell({
             >
               <ArrowLeft className="h-4 w-4" />
             </Link>
+            {!outlineOpen && onOpenOutline ? (
+              <button
+                type="button"
+                onClick={onOpenOutline}
+                aria-label="展开课程目录"
+                className="inline-flex shrink-0 items-center justify-center rounded-md border p-2 transition hover:bg-slate-50"
+                style={{ borderColor: "var(--border-medium)", color: "var(--text-secondary)" }}
+              >
+                <PanelLeftOpen className="h-4 w-4" />
+              </button>
+            ) : null}
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <p className="text-xs font-medium uppercase" style={{ color: "var(--text-tertiary)" }}>
@@ -169,18 +180,6 @@ export default function LearnShell({
               >
                 <Sparkles className="h-4 w-4 text-violet-500" />
                 重新生成
-              </button>
-            ) : null}
-            {!outlineOpen && onOpenOutline ? (
-              <button
-                type="button"
-                onClick={onOpenOutline}
-                aria-label="展开课程目录"
-                className="inline-flex items-center gap-1.5 rounded-md border px-3 py-2 text-sm font-medium transition hover:bg-slate-50"
-                style={{ borderColor: "var(--border-medium)", color: "var(--text-secondary)" }}
-              >
-                <PanelLeftOpen className="h-4 w-4" />
-                课程目录
               </button>
             ) : null}
             <button

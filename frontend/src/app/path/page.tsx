@@ -113,21 +113,42 @@ function DifficultyDots({ difficulty }: { difficulty: number }) {
 function StatusBadge({ status }: { status: string }) {
   if (status === "completed") {
     return (
-      <span className="badge" style={{ background: "var(--success-light)", color: "var(--success)", fontSize: 12 }}>
-        ✅ 已完成
+      <span
+        className="inline-flex items-center gap-1.5 text-xs font-medium"
+        style={{ color: "var(--success)" }}
+      >
+        <span
+          className="inline-block h-1.5 w-1.5 rounded-full"
+          style={{ background: "var(--success)" }}
+        />
+        已完成
       </span>
     );
   }
   if (status === "in_progress") {
     return (
-      <span className="badge" style={{ background: "var(--primary-light)", color: "var(--primary)", fontSize: 12 }}>
-        🔵 进行中
+      <span
+        className="inline-flex items-center gap-1.5 text-xs"
+        style={{ color: "var(--text-secondary)" }}
+      >
+        <span
+          className="inline-block h-1.5 w-1.5 rounded-full"
+          style={{ background: "#f59e0b" }}
+        />
+        进行中
       </span>
     );
   }
   return (
-    <span className="badge" style={{ background: "var(--surface-alt)", color: "var(--text-tertiary)", fontSize: 12 }}>
-      ○ 未开始
+    <span
+      className="inline-flex items-center gap-1.5 text-xs"
+      style={{ color: "var(--text-tertiary)" }}
+    >
+      <span
+        className="inline-block h-1.5 w-1.5 rounded-full border"
+        style={{ borderColor: "var(--border-medium)" }}
+      />
+      未开始
     </span>
   );
 }

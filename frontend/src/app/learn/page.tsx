@@ -8,7 +8,6 @@ import { clsx } from "clsx";
 
 import CourseOutline, { type LessonWaypoint } from "@/components/learn/course-outline";
 import LearnShell from "@/components/learn/learn-shell";
-import RegenerateDrawer from "@/components/learn/regenerate-drawer";
 import StudyAside, { type AsidePanelId } from "@/components/learn/study-aside";
 import LessonRenderer from "@/components/lesson/lesson-renderer";
 import TutorDrawer from "@/components/tutor-drawer";
@@ -18,7 +17,6 @@ import {
   getCourse,
   getRegenerationStatus,
   recordProgress,
-  regenerateCourse,
   translateSection,
   type CourseDetailResponse,
   type GraphCard,
@@ -187,9 +185,6 @@ function LearnPageInner() {
   const [section, setSection] = useState<SectionResponse | null>(null);
   const [tutorOpen, setTutorOpen] = useState(false);
   const [asideOpen, setAsideOpen] = useState(false);
-  const [regenerateOpen, setRegenerateOpen] = useState(false);
-  const [regenerateBusy, setRegenerateBusy] = useState(false);
-  const [regenerateError, setRegenerateError] = useState<string | null>(null);
   const [regenTaskId, setRegenTaskId] = useState<string | null>(null);
   const [regenStatus, setRegenStatus] = useState<RegenerationStatus | null>(null);
   const [activeAsidePanel, setActiveAsidePanel] = useState<AsidePanelId>("tutor");
@@ -553,9 +548,8 @@ function LearnPageInner() {
         onCloseAside={() => setAsideOpen(false)}
         versionIndex={course?.version_index ?? 1}
         parentCourseHref={
-          course?.parent_id ? `/learn?courseId=${course.parent_id}` : null
+          course?.parent_id ? `/path?courseId=${course.parent_id}` : null
         }
-        onRegenerate={courseId ? () => setRegenerateOpen(true) : undefined}
         regenerationBanner={
           regenStatus
             ? {
@@ -622,36 +616,6 @@ function LearnPageInner() {
         onClose={() => setTutorOpen(false)}
         courseId={courseId}
         sectionId={section?.id ?? null}
-      />
-
-      <RegenerateDrawer
-        open={regenerateOpen}
-        initialDirective={course?.regeneration_directive ?? ""}
-        pending={regenerateBusy}
-        errorMessage={regenerateError}
-        onClose={() => {
-          if (!regenerateBusy) {
-            setRegenerateOpen(false);
-            setRegenerateError(null);
-          }
-        }}
-        onSubmit={async (directive) => {
-          if (!courseId) return;
-          setRegenerateBusy(true);
-          setRegenerateError(null);
-          try {
-            const res = await regenerateCourse(courseId, directive || undefined);
-            setRegenTaskId(res.task_id);
-            setRegenStatus({ status: "pending" });
-            setRegenerateOpen(false);
-          } catch (err) {
-            setRegenerateError(
-              err instanceof Error ? err.message : "Failed to start regeneration"
-            );
-          } finally {
-            setRegenerateBusy(false);
-          }
-        }}
       />
     </>
   );

@@ -186,8 +186,8 @@ export default function LearnShell({
               type="button"
               onClick={onOpenAside}
               aria-expanded={asideOpen}
-              className="inline-flex items-center rounded-md px-4 py-2 text-sm font-medium text-white transition hover:opacity-90"
-              style={{ background: "var(--text)" }}
+              className="inline-flex items-center rounded-md px-4 py-2 text-sm font-medium transition hover:opacity-90"
+              style={{ background: "var(--text)", color: "var(--bg)" }}
             >
               打开学习辅助区
             </button>

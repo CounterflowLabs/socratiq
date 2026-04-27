@@ -59,6 +59,7 @@ async def normalize_openai_stream(raw_stream) -> AsyncIterator[StreamChunk]:
 
     OpenAI chunk format:
     - choices[0].delta.content: text content
+    - choices[0].delta.reasoning_content: DeepSeek thinking content
     - choices[0].delta.tool_calls: tool call deltas
     - choices[0].finish_reason: "stop" or "tool_calls" when done
     - usage: token counts (if stream_options.include_usage was set)
@@ -80,6 +81,14 @@ async def normalize_openai_stream(raw_stream) -> AsyncIterator[StreamChunk]:
 
         choice = chunk.choices[0]
         delta = choice.delta
+
+        # DeepSeek thinking mode emits CoT deltas in a provider-specific field.
+        reasoning_content = getattr(delta, "reasoning_content", None)
+        if reasoning_content:
+            yield StreamChunk(
+                type="reasoning_delta",
+                reasoning_content=reasoning_content,
+            )
 
         # Text content
         if delta.content:

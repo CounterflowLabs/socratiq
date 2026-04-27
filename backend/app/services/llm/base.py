@@ -26,6 +26,7 @@ class UnifiedMessage(BaseModel):
     """Provider-agnostic message format."""
     role: Literal["system", "user", "assistant", "tool_result"]
     content: str | list[ContentBlock]
+    reasoning_content: str | None = None
 
 
 class ToolDefinition(BaseModel):
@@ -47,12 +48,21 @@ class LLMResponse(BaseModel):
     model: str
     usage: TokenUsage | None = None
     stop_reason: str | None = None
+    reasoning_content: str | None = None
 
 
 class StreamChunk(BaseModel):
     """A single chunk in a streaming LLM response."""
-    type: Literal["text_delta", "tool_use_start", "tool_use_delta", "tool_use_end", "message_end"]
+    type: Literal[
+        "text_delta",
+        "reasoning_delta",
+        "tool_use_start",
+        "tool_use_delta",
+        "tool_use_end",
+        "message_end",
+    ]
     text: str | None = None
+    reasoning_content: str | None = None
     tool_use_id: str | None = None
     tool_name: str | None = None
     tool_input_delta: str | None = None

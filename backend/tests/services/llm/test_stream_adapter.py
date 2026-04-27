@@ -133,6 +133,41 @@ class TestNormalizeOpenAIStream:
         assert "message_end" in end_types
 
     @pytest.mark.asyncio
+    async def test_reasoning_content_delta(self):
+        chunks_in = [
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(
+                            content=None,
+                            reasoning_content="Need a tool.",
+                            tool_calls=None,
+                        ),
+                        finish_reason=None,
+                    )
+                ],
+                usage=None,
+            ),
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(
+                            content=None,
+                            reasoning_content=None,
+                            tool_calls=None,
+                        ),
+                        finish_reason="stop",
+                    )
+                ],
+                usage=None,
+            ),
+        ]
+        chunks = [c async for c in normalize_openai_stream(async_iter(chunks_in))]
+        assert chunks[0].type == "reasoning_delta"
+        assert chunks[0].reasoning_content == "Need a tool."
+        assert chunks[-1].type == "message_end"
+
+    @pytest.mark.asyncio
     async def test_empty_stream(self):
         chunks = [c async for c in normalize_openai_stream(async_iter([]))]
         assert chunks == []

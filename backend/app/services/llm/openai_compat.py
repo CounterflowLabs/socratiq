@@ -84,7 +84,10 @@ class OpenAICompatProvider(LLMProvider):
                 continue
 
             if isinstance(msg.content, str):
-                api_messages.append({"role": msg.role, "content": msg.content})
+                msg_dict = {"role": msg.role, "content": msg.content}
+                if msg.role == "assistant" and msg.reasoning_content:
+                    msg_dict["reasoning_content"] = msg.reasoning_content
+                api_messages.append(msg_dict)
             else:
                 # For assistant messages with tool_use blocks, convert to OpenAI format
                 text_parts: list[str] = []
@@ -104,6 +107,8 @@ class OpenAICompatProvider(LLMProvider):
 
                 msg_dict: dict = {"role": msg.role}
                 msg_dict["content"] = "\n".join(text_parts) if text_parts else None
+                if msg.role == "assistant" and msg.reasoning_content:
+                    msg_dict["reasoning_content"] = msg.reasoning_content
                 if tool_calls:
                     msg_dict["tool_calls"] = tool_calls
                 api_messages.append(msg_dict)
@@ -156,6 +161,7 @@ class OpenAICompatProvider(LLMProvider):
             raise LLMProviderError(str(e)) from e
 
         choice = response.choices[0]
+        reasoning_content = getattr(choice.message, "reasoning_content", None)
         content_blocks: list[ContentBlock] = []
 
         # Text content
@@ -213,6 +219,7 @@ class OpenAICompatProvider(LLMProvider):
             model=response.model or self._model,
             usage=usage,
             stop_reason=choice.finish_reason,
+            reasoning_content=reasoning_content,
         )
 
     async def chat_stream(
@@ -234,6 +241,11 @@ class OpenAICompatProvider(LLMProvider):
                 temperature=temperature,
                 **kwargs,
             )
+            if response.reasoning_content:
+                yield StreamChunk(
+                    type="reasoning_delta",
+                    reasoning_content=response.reasoning_content,
+                )
             for block in response.content:
                 if block.type == "text":
                     yield StreamChunk(type="text_delta", text=block.text)

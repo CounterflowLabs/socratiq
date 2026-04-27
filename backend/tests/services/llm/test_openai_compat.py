@@ -7,6 +7,7 @@ import pytest
 
 from app.services.llm.openai_compat import OpenAICompatProvider
 from app.services.llm.base import (
+    ContentBlock,
     LLMRateLimitError,
     LLMAuthError,
     ToolDefinition,
@@ -95,6 +96,56 @@ class TestChat:
         result = await provider.chat(sample_messages, tools=tools)
         assert result.content[0].type == "tool_use"
         assert result.content[0].tool_name == "search"
+
+    @pytest.mark.asyncio
+    async def test_assistant_tool_message_preserves_reasoning_content(self, provider):
+        messages = [
+            UnifiedMessage(role="user", content="How is the weather?"),
+            UnifiedMessage(
+                role="assistant",
+                content=[
+                    ContentBlock(
+                        type="tool_use",
+                        tool_use_id="call_1",
+                        tool_name="search",
+                        tool_input={"query": "weather"},
+                    )
+                ],
+                reasoning_content="I need to search before answering.",
+            ),
+            UnifiedMessage(
+                role="tool_result",
+                content=[
+                    ContentBlock(
+                        type="tool_result",
+                        tool_use_id="call_1",
+                        tool_result_content="Sunny",
+                    )
+                ],
+            ),
+        ]
+        mock_response = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="Sunny.", tool_calls=None),
+                    finish_reason="stop",
+                )
+            ],
+            model="gpt-4o-mini",
+            usage=None,
+        )
+        provider._client.chat.completions.create = AsyncMock(
+            return_value=mock_response
+        )
+
+        await provider.chat(messages)
+
+        request_messages = provider._client.chat.completions.create.call_args.kwargs[
+            "messages"
+        ]
+        assert request_messages[1]["reasoning_content"] == (
+            "I need to search before answering."
+        )
 
     @pytest.mark.asyncio
     async def test_prompt_injection_fallback(self, no_tools_provider, sample_messages):

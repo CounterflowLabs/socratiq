@@ -102,6 +102,7 @@ class MentorAgent:
 
             # Accumulate streaming response
             current_text = ""
+            current_reasoning_content = ""
             tool_calls: list[dict] = []
             current_tool_input_json = ""
             current_tool_name = ""
@@ -117,6 +118,9 @@ class MentorAgent:
                     current_text += chunk.text or ""
                     full_assistant_text += chunk.text or ""
                     yield chunk  # Stream text to client immediately
+
+                elif chunk.type == "reasoning_delta":
+                    current_reasoning_content += chunk.reasoning_content or ""
 
                 elif chunk.type == "tool_use_start":
                     current_tool_name = chunk.tool_name or ""
@@ -162,6 +166,7 @@ class MentorAgent:
             messages.append(UnifiedMessage(
                 role="assistant",
                 content=content_blocks,
+                reasoning_content=current_reasoning_content or None,
             ))
 
             # Execute each tool and add results

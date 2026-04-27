@@ -114,7 +114,7 @@ export function PracticeTriggerCard({
               </button>
             </div>
           ) : status === "ready" && lab ? (
-            <LabEditor lab={lab} embedded />
+            <LabEditor lab={lab} embedded sectionId={sectionId} />
           ) : (
             <div className="rounded-lg border border-dashed border-slate-200 bg-white/80 px-4 py-6 text-sm text-slate-500">
               本节暂未提供可运行的 Lab，先继续阅读，我们稍后再接回来。

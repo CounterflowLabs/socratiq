@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import dynamic from "next/dynamic";
-import { FileCode, FileText, FlaskConical, RotateCcw, Download, ChevronDown } from "lucide-react";
+import { Check, ChevronDown, Download, FileCode, FileText, FlaskConical, Loader2, RotateCcw } from "lucide-react";
 import { clsx } from "clsx";
-import type { LabResponse } from "@/lib/api";
+import { recordProgress, type LabResponse } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 
 const MonacoEditor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
@@ -35,15 +35,46 @@ function langFromExt(filename: string): string {
 interface LabEditorProps {
   lab: LabResponse;
   embedded?: boolean;
+  sectionId?: string;
+  initiallyCompleted?: boolean;
+  onCompleted?: () => void;
 }
 
-export default function LabEditor({ lab, embedded = false }: LabEditorProps) {
+export default function LabEditor({
+  lab,
+  embedded = false,
+  sectionId,
+  initiallyCompleted = false,
+  onCompleted,
+}: LabEditorProps) {
   const starterFiles = useMemo(() => Object.keys(lab.starter_code), [lab.starter_code]);
   const testFiles = useMemo(() => Object.keys(lab.test_code), [lab.test_code]);
 
   const [selectedFile, setSelectedFile] = useState<string>(starterFiles[0] ?? testFiles[0] ?? "");
   const [editedCode, setEditedCode] = useState<Record<string, string>>({ ...lab.starter_code });
   const [instructionsOpen, setInstructionsOpen] = useState(false);
+  const [completed, setCompleted] = useState<boolean>(initiallyCompleted);
+  const [marking, setMarking] = useState(false);
+  const [markError, setMarkError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setCompleted(initiallyCompleted);
+  }, [initiallyCompleted, lab.id]);
+
+  async function handleMarkCompleted() {
+    if (!sectionId || completed || marking) return;
+    setMarking(true);
+    setMarkError(null);
+    try {
+      await recordProgress(sectionId, "lab_completed");
+      setCompleted(true);
+      onCompleted?.();
+    } catch (err) {
+      setMarkError(err instanceof Error ? err.message : "标记失败，请稍后重试");
+    } finally {
+      setMarking(false);
+    }
+  }
 
   const isTestFile = testFiles.includes(selectedFile);
   const currentCode = isTestFile
@@ -165,23 +196,58 @@ export default function LabEditor({ lab, embedded = false }: LabEditorProps) {
         )}
 
         {/* Actions */}
-        <div className="px-2 py-3 border-t border-gray-200 flex gap-2 mt-auto">
-          <button
-            onClick={handleReset}
-            className="flex items-center gap-1 px-2 py-1.5 rounded text-xs text-gray-500 hover:bg-gray-100 transition-colors bg-transparent"
-            title="重置代码"
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-            重置
-          </button>
-          <button
-            onClick={handleDownload}
-            className="flex items-center gap-1 px-2 py-1.5 rounded text-xs text-gray-500 hover:bg-gray-100 transition-colors bg-transparent"
-            title="下载 ZIP"
-          >
-            <Download className="w-3.5 h-3.5" />
-            下载
-          </button>
+        <div className="px-2 py-3 border-t border-gray-200 mt-auto space-y-2">
+          {sectionId ? (
+            <button
+              type="button"
+              onClick={handleMarkCompleted}
+              disabled={completed || marking}
+              className={clsx(
+                "flex w-full items-center justify-center gap-1.5 rounded px-2 py-1.5 text-xs font-medium transition-colors",
+                completed
+                  ? "bg-emerald-50 text-emerald-700 cursor-default"
+                  : "bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
+              )}
+            >
+              {completed ? (
+                <>
+                  <Check className="w-3.5 h-3.5" />
+                  已标记完成
+                </>
+              ) : marking ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  标记中…
+                </>
+              ) : (
+                <>
+                  <Check className="w-3.5 h-3.5" />
+                  标记为已完成
+                </>
+              )}
+            </button>
+          ) : null}
+          {markError ? (
+            <p className="text-[11px] text-red-600 px-1">{markError}</p>
+          ) : null}
+          <div className="flex gap-2">
+            <button
+              onClick={handleReset}
+              className="flex items-center gap-1 px-2 py-1.5 rounded text-xs text-gray-500 hover:bg-gray-100 transition-colors bg-transparent"
+              title="重置代码"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              重置
+            </button>
+            <button
+              onClick={handleDownload}
+              className="flex items-center gap-1 px-2 py-1.5 rounded text-xs text-gray-500 hover:bg-gray-100 transition-colors bg-transparent"
+              title="下载 ZIP"
+            >
+              <Download className="w-3.5 h-3.5" />
+              下载
+            </button>
+          </div>
         </div>
       </div>
 

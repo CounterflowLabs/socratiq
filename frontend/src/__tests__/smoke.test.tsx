@@ -31,6 +31,76 @@ function mockFetch(responses: Record<string, unknown>) {
   });
 }
 
+function mockSettingsFetch(options: {
+  models?: unknown[];
+  routes?: unknown[];
+  createModel?: unknown;
+} = {}) {
+  const models = options.models ?? [];
+  const routes = options.routes ?? [];
+  const createModel = options.createModel ?? {
+    name: "created-model",
+    provider_type: "openai_compatible",
+    model_type: "chat",
+    model_id: "created-model",
+    supports_tool_use: true,
+    supports_streaming: true,
+    max_tokens_limit: 4096,
+    is_active: true,
+  };
+
+  return vi.fn((url: string, init?: RequestInit) => {
+    if (url.endsWith("/api/v1/models") && init?.method === "POST") {
+      return Promise.resolve({
+        ok: true,
+        status: 201,
+        json: () => Promise.resolve(createModel),
+        text: () => Promise.resolve(JSON.stringify(createModel)),
+      });
+    }
+    if (url.endsWith("/api/v1/model-routes")) {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(routes),
+        text: () => Promise.resolve(JSON.stringify(routes)),
+      });
+    }
+    if (url.endsWith("/api/v1/models")) {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(models),
+        text: () => Promise.resolve(JSON.stringify(models)),
+      });
+    }
+    if (url.endsWith("/api/v1/setup/bilibili/status")) {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ logged_in: false }),
+        text: () => Promise.resolve(JSON.stringify({ logged_in: false })),
+      });
+    }
+    if (url.endsWith("/api/v1/setup/whisper")) {
+      const whisper = {
+        mode: "api",
+        api_base_url: "",
+        api_model: "",
+        api_key_masked: null,
+        local_model: "base",
+      };
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(whisper),
+        text: () => Promise.resolve(JSON.stringify(whisper)),
+      });
+    }
+    return Promise.resolve({
+      ok: false,
+      status: 404,
+      text: () => Promise.resolve("Not found"),
+    });
+  });
+}
+
 // Wrapper for components using useSearchParams (needs Suspense)
 function SuspenseWrapper({ children }: { children: React.ReactNode }) {
   return <Suspense fallback={<div>Loading...</div>}>{children}</Suspense>;
@@ -204,26 +274,9 @@ describe("Settings Page", () => {
       { task_type: "mentor_chat", model_name: "claude-sonnet" },
     ];
 
-    globalThis.fetch = vi.fn((url: string) => {
-      if (url.endsWith("/api/v1/model-routes")) {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve(routesData),
-          text: () => Promise.resolve(JSON.stringify(routesData)),
-        });
-      }
-      if (url.endsWith("/api/v1/models")) {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve(modelsData),
-          text: () => Promise.resolve(JSON.stringify(modelsData)),
-        });
-      }
-      return Promise.resolve({
-        ok: false,
-        status: 404,
-        text: () => Promise.resolve("Not found"),
-      });
+    globalThis.fetch = mockSettingsFetch({
+      models: modelsData,
+      routes: routesData,
     });
 
     const SettingsPage = (await import("@/app/settings/page")).default;
@@ -237,33 +290,71 @@ describe("Settings Page", () => {
   });
 
   it("shows empty state when no models", async () => {
-    globalThis.fetch = vi.fn((url: string) => {
-      if (url.endsWith("/api/v1/model-routes")) {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve([]),
-          text: () => Promise.resolve("[]"),
-        });
-      }
-      if (url.endsWith("/api/v1/models")) {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve([]),
-          text: () => Promise.resolve("[]"),
-        });
-      }
-      return Promise.resolve({
-        ok: false,
-        status: 404,
-        text: () => Promise.resolve("Not found"),
-      });
-    });
+    globalThis.fetch = mockSettingsFetch();
 
     const SettingsPage = (await import("@/app/settings/page")).default;
     render(<SettingsPage />);
 
     await waitFor(() => {
       expect(screen.getByText(/暂无模型配置/)).toBeInTheDocument();
+    });
+  });
+
+  it("prefills DeepSeek provider preset and submits it as OpenAI-compatible", async () => {
+    const fetchMock = mockSettingsFetch({
+      createModel: {
+        name: "deepseek-default",
+        provider_type: "openai_compatible",
+        model_type: "chat",
+        model_id: "deepseek-v4-flash",
+        base_url: "https://api.deepseek.com",
+        supports_tool_use: true,
+        supports_streaming: true,
+        max_tokens_limit: 4096,
+        is_active: true,
+      },
+    });
+    globalThis.fetch = fetchMock;
+
+    const SettingsPage = (await import("@/app/settings/page")).default;
+    render(<SettingsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/暂无模型配置/)).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "添加模型" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "Provider 预设" }), {
+      target: { value: "deepseek" },
+    });
+
+    expect(screen.getByDisplayValue("deepseek-default")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("deepseek-v4-flash")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("https://api.deepseek.com")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText("sk-..."), {
+      target: { value: "sk-deepseek" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/v1/models",
+        expect.objectContaining({ method: "POST" })
+      );
+    });
+
+    const createCall = fetchMock.mock.calls.find(
+      ([url, init]) => url === "/api/v1/models" && init?.method === "POST"
+    );
+    expect(createCall).toBeTruthy();
+    expect(JSON.parse(createCall?.[1]?.body as string)).toMatchObject({
+      name: "deepseek-default",
+      provider_type: "openai_compatible",
+      model_type: "chat",
+      model_id: "deepseek-v4-flash",
+      api_key: "sk-deepseek",
+      base_url: "https://api.deepseek.com",
     });
   });
 });

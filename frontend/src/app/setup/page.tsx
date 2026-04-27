@@ -10,8 +10,14 @@ import {
   startCodexLogin,
   getCodexLoginSession,
 } from "@/lib/api";
+import {
+  DEEPSEEK_BASE_URL,
+  DEEPSEEK_DEFAULT_CHAT_MODEL,
+} from "@/lib/model-provider-presets";
 
 type Step = "loading" | "ollama" | "manual" | "done";
+type ManualProviderPreset = "anthropic" | "openai" | "deepseek" | "openai_compatible";
+type ManualProviderType = "anthropic" | "openai" | "openai_compatible";
 
 function formatSetupError(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message) {
@@ -36,6 +42,17 @@ function openInNewWindow(url: string) {
   if (opened) {
     opened.opener = null;
   }
+}
+
+function getManualProviderType(provider: ManualProviderPreset): ManualProviderType {
+  return provider === "deepseek" ? "openai_compatible" : provider;
+}
+
+function getManualDefaultModelId(provider: ManualProviderPreset): string {
+  if (provider === "anthropic") return "claude-haiku-4-20250414";
+  if (provider === "openai") return "gpt-4o-mini";
+  if (provider === "deepseek") return DEEPSEEK_DEFAULT_CHAT_MODEL;
+  return DEEPSEEK_DEFAULT_CHAT_MODEL;
 }
 
 export default function SetupPage() {
@@ -69,7 +86,7 @@ export default function SetupPage() {
   const [startingCodexLogin, setStartingCodexLogin] = useState(false);
 
   // Manual form state
-  const [provider, setProvider] = useState<"anthropic" | "openai" | "openai_compatible">("anthropic");
+  const [provider, setProvider] = useState<ManualProviderPreset>("anthropic");
   const [apiKey, setApiKey] = useState("");
   const [modelId, setModelId] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
@@ -238,17 +255,21 @@ export default function SetupPage() {
     setSuccess("");
     setTestResult(null);
     try {
-      const defaultModelId = modelId ||
-        (provider === "anthropic" ? "claude-haiku-4-20250414"
-          : provider === "openai" ? "gpt-4o-mini"
-          : "deepseek-chat");
+      const providerType = getManualProviderType(provider);
+      const defaultModelId = modelId || getManualDefaultModelId(provider);
+      const providerBaseUrl =
+        providerType === "openai_compatible"
+          ? provider === "deepseek"
+            ? baseUrl || DEEPSEEK_BASE_URL
+            : baseUrl || undefined
+          : undefined;
       const created = await createOrReuseModel({
         name: `${provider}-default`,
-        provider_type: provider,
+        provider_type: providerType,
         model_id: defaultModelId,
         model_type: "chat",
         api_key: apiKey || undefined,
-        base_url: baseUrl || undefined,
+        base_url: providerBaseUrl,
       });
       // Auto-test after creation
       setTesting(true);
@@ -257,7 +278,7 @@ export default function SetupPage() {
         setTestResult(result);
         if (result.success) {
           if (useManualEmbedding && manualEmbeddingModelId.trim()) {
-            if (provider === "anthropic") {
+            if (providerType === "anthropic") {
               finishWithEmbeddingWarning(
                 "Anthropic 不提供 embedding API。请改用 OpenAI / OpenAI 兼容向量模型，或稍后在 Settings 中单独添加。"
               );
@@ -266,10 +287,10 @@ export default function SetupPage() {
             try {
               const embeddingResult = await configureEmbeddingModel({
                 name: `${provider}-embedding-${slugifyModelName(manualEmbeddingModelId)}`,
-                provider_type: provider,
+                provider_type: providerType,
                 model_id: manualEmbeddingModelId.trim(),
                 api_key: apiKey || undefined,
-                base_url: baseUrl || undefined,
+                base_url: providerBaseUrl,
               });
               if (!embeddingResult.success) {
                 finishWithEmbeddingWarning(embeddingResult.message);
@@ -629,15 +650,19 @@ export default function SetupPage() {
                 <select
                   value={provider}
                   onChange={(e) => {
-                    setProvider(e.target.value as "anthropic" | "openai" | "openai_compatible");
-                    setModelId("");
-                    setBaseUrl("");
+                    const nextProvider = e.target.value as ManualProviderPreset;
+                    setProvider(nextProvider);
+                    setModelId(
+                      nextProvider === "deepseek" ? DEEPSEEK_DEFAULT_CHAT_MODEL : ""
+                    );
+                    setBaseUrl(nextProvider === "deepseek" ? DEEPSEEK_BASE_URL : "");
                     setTestResult(null);
                   }}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
                   <option value="anthropic">Anthropic (Claude)</option>
                   <option value="openai">OpenAI (GPT)</option>
+                  <option value="deepseek">DeepSeek</option>
                   <option value="openai_compatible">OpenAI 兼容（DeepSeek / 通义千问 / Moonshot 等）</option>
                 </select>
               </div>
@@ -654,7 +679,7 @@ export default function SetupPage() {
                 />
               </div>
 
-              {provider === "openai_compatible" && (
+              {getManualProviderType(provider) === "openai_compatible" && (
                 <div>
                   <label className="block text-xs text-gray-600 mb-1.5">
                     Base URL <span className="text-red-400">*</span>
@@ -663,12 +688,12 @@ export default function SetupPage() {
                     type="url"
                     value={baseUrl}
                     onChange={(e) => setBaseUrl(e.target.value)}
-                    placeholder="https://api.deepseek.com/v1"
+                    placeholder={DEEPSEEK_BASE_URL}
                     required
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                   <p className="text-xs text-gray-400 mt-1">
-                    DeepSeek: https://api.deepseek.com/v1 · 通义千问: https://dashscope.aliyuncs.com/compatible-mode/v1 · Moonshot: https://api.moonshot.cn/v1
+                    DeepSeek: {DEEPSEEK_BASE_URL} · 通义千问: https://dashscope.aliyuncs.com/compatible-mode/v1 · Moonshot: https://api.moonshot.cn/v1
                   </p>
                 </div>
               )}
@@ -681,13 +706,7 @@ export default function SetupPage() {
                   type="text"
                   value={modelId}
                   onChange={(e) => setModelId(e.target.value)}
-                  placeholder={
-                    provider === "anthropic"
-                      ? "claude-haiku-4-20250414"
-                      : provider === "openai"
-                      ? "gpt-4o-mini"
-                      : "deepseek-chat"
-                  }
+                  placeholder={getManualDefaultModelId(provider)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
@@ -715,7 +734,7 @@ export default function SetupPage() {
                       placeholder={
                         provider === "openai"
                           ? "text-embedding-3-small"
-                          : provider === "openai_compatible"
+                          : getManualProviderType(provider) === "openai_compatible"
                           ? "nomic-embed-text / bge-m3 / text-embedding-3-small"
                           : "Anthropic 需要单独的 embedding provider"
                       }

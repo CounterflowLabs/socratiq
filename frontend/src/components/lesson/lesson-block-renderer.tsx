@@ -7,6 +7,7 @@ import { type GraphCard, type LabMode, type LessonBlock, type LessonConcept, typ
 import CodeBlock from "./code-block";
 import TimestampLink from "./timestamp-link";
 import { ConceptRelationCard } from "./blocks/concept-relation-card";
+import { ExerciseTriggerCard } from "./blocks/exercise-trigger-card";
 import { PracticeTriggerCard } from "./blocks/practice-trigger-card";
 
 const MermaidDiagram = dynamic(() => import("./mermaid-diagram"), { ssr: false });
@@ -172,6 +173,7 @@ function withRuntimeFallbacks(
   baseBlocks: LessonBlock[],
   runtime: {
     sectionId?: string | null;
+    courseId?: string | null;
     labMode?: LabMode | null;
     graphCard?: GraphCard | null;
   }
@@ -187,6 +189,19 @@ function withRuntimeFallbacks(
       title: "动手试一试",
       body: "打开本节 Lab，把刚学到的内容马上跑起来。",
       metadata: { sectionId: runtime.sectionId },
+    });
+  }
+
+  const hasExerciseTrigger = blocks.some((block) => block.type === "exercise_trigger");
+  if (!hasExerciseTrigger && runtime.sectionId) {
+    blocks.splice(insertIndex, 0, {
+      type: "exercise_trigger",
+      title: "检验掌握程度",
+      body: "做几道练习，巩固本节要点。",
+      metadata: {
+        sectionId: runtime.sectionId,
+        ...(runtime.courseId ? { courseId: runtime.courseId } : {}),
+      },
     });
   }
 
@@ -252,17 +267,20 @@ export default function LessonBlockRenderer({
   lesson,
   onTimestampClick,
   sectionId,
+  courseId,
   labMode,
   graphCard,
 }: {
   lesson: LessonContent;
   onTimestampClick?: (seconds: number) => void;
   sectionId?: string | null;
+  courseId?: string | null;
   labMode?: LabMode | null;
   graphCard?: GraphCard | null;
 }) {
   const blocks = withRuntimeFallbacks(blocksFromLegacy(lesson), {
     sectionId,
+    courseId,
     labMode,
     graphCard,
   });
@@ -337,6 +355,20 @@ export default function LessonBlockRenderer({
                 title={block.title ?? "动手练习"}
                 body={block.body ?? "打开练习，边学边做。"}
                 sectionId={blockSectionId}
+                enabled
+              />
+            ) : null;
+          }
+          case "exercise_trigger": {
+            const blockSectionId = readBlockSectionId(block) ?? sectionId ?? null;
+            const blockCourseId = readStringMetadata(block, "courseId") ?? courseId ?? null;
+            return blockSectionId ? (
+              <ExerciseTriggerCard
+                key={blockKey}
+                title={block.title ?? "检验掌握程度"}
+                body={block.body ?? "做几道练习巩固本节要点。"}
+                sectionId={blockSectionId}
+                courseId={blockCourseId}
                 enabled
               />
             ) : null;

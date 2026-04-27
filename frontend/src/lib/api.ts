@@ -202,6 +202,7 @@ export interface LessonBlock {
     | "code_example"
     | "concept_relation"
     | "practice_trigger"
+    | "exercise_trigger"
     | "recap"
     | "next_step";
   title?: string | null;
@@ -575,6 +576,21 @@ export async function submitExercise(exerciseId: string, answer: string): Promis
   });
   if (!res.ok) throw await responseError(res);
   return res.json();
+}
+
+export async function generateSectionExercises(
+  sectionId: string,
+  count = 3,
+  types: Array<"mcq" | "open" | "code"> = ["mcq", "open"],
+): Promise<{ exercises: ExerciseResponse[] }> {
+  const res = await apiFetch(`${API_BASE}/exercises/section/${sectionId}/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ count, types }),
+  });
+  if (!res.ok) throw await responseError(res);
+  const data = await res.json();
+  return { exercises: data.items ?? [] };
 }
 
 // ─── Review APIs ────────────────────────────────────

@@ -480,6 +480,7 @@ function LearnPageInner() {
               lesson={lessonData}
               onTimestampClick={videoEmbed ? handleTimestampClick : undefined}
               sectionId={section?.id ?? null}
+              courseId={courseId ?? null}
               labMode={lessonLabMode}
               graphCard={lessonGraphCard}
             />

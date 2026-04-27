@@ -1,36 +1,58 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Home, BookOpen, Search, BarChart3, ChevronLeft, ChevronRight, Brain, Settings, Menu, X } from "lucide-react";
+import { Home, BookOpen, ChevronLeft, ChevronRight, Brain, Settings, Menu, X, Sun, Moon } from "lucide-react";
 import { clsx } from "clsx";
 
 const items = [
   { id: "/", label: "首页", icon: Home },
-  { id: "/import", label: "导入资料", icon: Search },
+  { id: "/sources", label: "资料", icon: BookOpen },
   { id: "/settings", label: "设置", icon: Settings },
 ];
 
 export function Sidebar({
   collapsed,
+  desktopMode,
   onToggle,
   mobileOpen,
   onMobileToggle,
 }: {
   collapsed: boolean;
+  desktopMode: boolean;
   onToggle: () => void;
   mobileOpen: boolean;
   onMobileToggle: () => void;
 }) {
   const pathname = usePathname();
+  const [isDark, setIsDark] = useState(false);
+
+  useEffect(() => {
+    // Restore saved theme on mount
+    const saved = localStorage.getItem("theme");
+    if (saved === "dark" || saved === "light") {
+      document.documentElement.dataset.theme = saved;
+      setIsDark(saved === "dark");
+    } else {
+      setIsDark(window.matchMedia("(prefers-color-scheme: dark)").matches);
+    }
+  }, []);
+
+  function toggleTheme() {
+    const next = isDark ? "light" : "dark";
+    document.documentElement.dataset.theme = next;
+    localStorage.setItem("theme", next);
+    setIsDark(!isDark);
+  }
 
   return (
     <>
       {/* Mobile hamburger button — hidden when sidebar is open */}
-      {!mobileOpen && (
+      {!desktopMode && !mobileOpen && (
         <button
           onClick={onMobileToggle}
-          className="fixed top-3 left-3 z-40 flex md:hidden items-center justify-center w-11 h-11"
+          className="fixed left-3 top-3 z-40 flex h-11 w-11 items-center justify-center"
           style={{
             borderRadius: "var(--radius)",
             background: "var(--surface)",
@@ -44,9 +66,9 @@ export function Sidebar({
       )}
 
       {/* Mobile overlay backdrop */}
-      {mobileOpen && (
+      {!desktopMode && mobileOpen && (
         <div
-          className="fixed inset-0 z-50 bg-black/20 md:hidden"
+          className="fixed inset-0 z-50 bg-black/20"
           onClick={onMobileToggle}
         />
       )}
@@ -54,10 +76,10 @@ export function Sidebar({
       {/* Sidebar — desktop: always visible; mobile: slide-in overlay */}
       <aside
         className={clsx(
-          "fixed left-0 top-0 h-full z-[60] flex flex-col",
-          "hidden md:flex",
-          collapsed ? "md:w-16" : "md:w-56",
-          mobileOpen && "!flex w-64"
+          "fixed left-0 top-0 z-[60] flex h-full flex-col transition-[width,transform] duration-200",
+          desktopMode
+            ? [collapsed ? "w-16" : "w-56", "translate-x-0"]
+            : ["w-64", mobileOpen ? "translate-x-0" : "-translate-x-full"]
         )}
         style={{
           background: "var(--surface)",
@@ -85,10 +107,10 @@ export function Sidebar({
             </span>
           )}
           {/* Mobile close button */}
-          {mobileOpen && (
+          {!desktopMode && mobileOpen && (
             <button
               onClick={onMobileToggle}
-              className="flex md:hidden items-center justify-center w-8 h-8"
+              className="flex h-8 w-8 items-center justify-center"
               style={{
                 borderRadius: "var(--radius-sm)",
                 color: "var(--text-tertiary)",
@@ -144,35 +166,53 @@ export function Sidebar({
           })}
         </nav>
 
-        {/* Toggle — desktop only */}
-        <div
-          className="hidden md:block p-2"
-          style={{ borderTop: "1px solid var(--border)" }}
-        >
+        {/* Theme toggle */}
+        <div className="px-2 pb-1">
           <button
-            onClick={onToggle}
-            className="w-full flex items-center justify-center p-2"
+            onClick={toggleTheme}
+            className="w-full flex items-center gap-3 px-3 py-2.5 min-h-[44px] text-sm"
             style={{
               borderRadius: "var(--radius)",
-              color: "var(--text-tertiary)",
-              transition: `background var(--duration-fast) ease, color var(--duration-fast) ease`,
+              color: "var(--text-secondary)",
+              transition: `background var(--duration-fast) ease`,
             }}
-            onMouseEnter={(e) => {
-              (e.currentTarget as HTMLElement).style.background = "var(--surface-alt)";
-              (e.currentTarget as HTMLElement).style.color = "var(--text-secondary)";
-            }}
-            onMouseLeave={(e) => {
-              (e.currentTarget as HTMLElement).style.background = "transparent";
-              (e.currentTarget as HTMLElement).style.color = "var(--text-tertiary)";
-            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--surface-alt)"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+            aria-label="切换深色/浅色模式"
           >
-            {collapsed ? (
-              <ChevronRight className="w-4 h-4" />
-            ) : (
-              <ChevronLeft className="w-4 h-4" />
-            )}
+            {isDark ? <Sun className="w-4 h-4 flex-shrink-0" /> : <Moon className="w-4 h-4 flex-shrink-0" />}
+            {(!collapsed || mobileOpen) && <span>{isDark ? "浅色模式" : "深色模式"}</span>}
           </button>
         </div>
+
+        {/* Toggle — desktop only */}
+        {desktopMode && (
+          <div className="p-2" style={{ borderTop: "1px solid var(--border)" }}>
+            <button
+              onClick={onToggle}
+              className="w-full flex items-center justify-center p-2"
+              style={{
+                borderRadius: "var(--radius)",
+                color: "var(--text-tertiary)",
+                transition: `background var(--duration-fast) ease, color var(--duration-fast) ease`,
+              }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLElement).style.background = "var(--surface-alt)";
+                (e.currentTarget as HTMLElement).style.color = "var(--text-secondary)";
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLElement).style.background = "transparent";
+                (e.currentTarget as HTMLElement).style.color = "var(--text-tertiary)";
+              }}
+            >
+              {collapsed ? (
+                <ChevronRight className="w-4 h-4" />
+              ) : (
+                <ChevronLeft className="w-4 h-4" />
+              )}
+            </button>
+          </div>
+        )}
       </aside>
     </>
   );

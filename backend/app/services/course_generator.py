@@ -1,6 +1,7 @@
 """Course generation service — creates Course + Sections from analyzed sources."""
 
 import logging
+from pathlib import Path
 from uuid import UUID
 
 from sqlalchemy import select
@@ -9,10 +10,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models.content_chunk import ContentChunk as ContentChunkModel
 from app.db.models.course import Course, CourseSource, Section
 from app.db.models.source import Source
+from app.prompt_template import load_prompt
 from app.services.llm.base import UnifiedMessage
 from app.services.llm.router import ModelRouter, TaskType
 
 logger = logging.getLogger(__name__)
+
+_DESCRIPTION_PROMPT = load_prompt(Path(__file__).parent / "prompts" / "course_description.md")
 
 
 class CourseGenerator:
@@ -21,10 +25,21 @@ class CourseGenerator:
     def __init__(self, model_router: ModelRouter):
         self._router = model_router
 
+    @staticmethod
+    def _resolve_asset_plan(metadata: dict) -> dict:
+        """Return an asset plan, preserving legacy inline labs when needed."""
+        asset_plan = metadata.get("asset_plan")
+        if asset_plan:
+            return asset_plan
+        if metadata.get("labs_by_page"):
+            return {"lab_mode": "inline"}
+        return {"lab_mode": "none"}
+
     async def generate(
         self,
         db: AsyncSession,
         source_ids: list[UUID],
+        target_language: str,
         title: str | None = None,
         user_id: UUID | None = None,
         skip_ready_check: bool = False,
@@ -34,6 +49,7 @@ class CourseGenerator:
         Args:
             db: Database session.
             source_ids: List of Source UUIDs (must all be status='ready').
+            target_language: Language code for the course description (e.g. ``zh-CN``).
             title: Optional course title.
             user_id: Optional user UUID.
             skip_ready_check: Allows internal pipelines to assemble a course
@@ -85,8 +101,12 @@ class CourseGenerator:
         # Collect per-source lesson/lab data
         source_lesson_map: dict[UUID, dict] = {}
         source_lab_map: dict[UUID, dict] = {}
+        source_asset_plan_map: dict[UUID, dict] = {}
+        source_graph_map: dict[UUID, dict] = {}
         for source in sources:
             smeta = source.metadata_ or {}
+            source_asset_plan_map[source.id] = self._resolve_asset_plan(smeta)
+            source_graph_map[source.id] = smeta.get("graph_by_page", {})
             source_lesson_map[source.id] = smeta.get("lesson_by_page", {})
             source_lab_map[source.id] = smeta.get("labs_by_page", {})
 
@@ -117,12 +137,16 @@ class CourseGenerator:
 
                 # Use lesson content from source metadata if available
                 lesson_data = source_lesson_map.get(source_id, {}).get(str(page_idx), {})
+                asset_plan = source_asset_plan_map.get(source_id, {"lab_mode": "none"})
+                graph_card = source_graph_map.get(source_id, {}).get(str(page_idx))
                 section_content = {
                     "summary": lesson_data.get("summary") or first_meta.get("summary", ""),
                     "key_terms": lesson_data.get("sections", [{}])[0].get(
                         "key_concepts", first_meta.get("key_terms", [])
                     ) if lesson_data.get("sections") else first_meta.get("key_terms", []),
                     "has_code": any((c.metadata_ or {}).get("has_code") for c in group_chunks),
+                    "lab_mode": asset_plan.get("lab_mode", "none"),
+                    "graph_card": graph_card,
                     **({"lesson": lesson_data} if lesson_data else {}),
                 }
 
@@ -145,7 +169,7 @@ class CourseGenerator:
 
                 # Create Lab row if lab data is available for this page
                 lab_data = source_lab_map.get(source_id, {}).get(str(page_idx))
-                if lab_data:
+                if asset_plan.get("lab_mode") == "inline" and lab_data:
                     await self._create_lab(db, section.id, lab_data)
 
                 section_order += 1
@@ -156,6 +180,7 @@ class CourseGenerator:
                 section_title = metadata.get("topic", f"Section {i + 1}")
 
                 lesson_data = source_lesson_map.get(chunk.source_id, {}).get("0", {})
+                asset_plan = source_asset_plan_map.get(chunk.source_id, {"lab_mode": "none"})
                 section = Section(
                     course_id=course.id,
                     title=section_title,
@@ -167,6 +192,8 @@ class CourseGenerator:
                         "summary": metadata.get("summary", ""),
                         "key_terms": metadata.get("key_terms", []),
                         "has_code": metadata.get("has_code", False),
+                        "lab_mode": asset_plan.get("lab_mode", "none"),
+                        "graph_card": source_graph_map.get(chunk.source_id, {}).get("0"),
                         **({"lesson": lesson_data} if lesson_data else {}),
                     },
                     difficulty=metadata.get("difficulty", 1),
@@ -182,7 +209,8 @@ class CourseGenerator:
                 if src_id in created_lab_sources:
                     continue
                 lab_data = source_lab_map.get(src_id, {}).get("0")
-                if lab_data and chunk.section_id:
+                asset_plan = source_asset_plan_map.get(src_id, {"lab_mode": "none"})
+                if asset_plan.get("lab_mode") == "inline" and lab_data and chunk.section_id:
                     await self._create_lab(db, chunk.section_id, lab_data)
                     created_lab_sources.add(src_id)
 
@@ -193,6 +221,7 @@ class CourseGenerator:
             course_title=title,
             section_count=len(chunks),
             sources=sources,
+            target_language=target_language,
         )
 
         await db.flush()
@@ -238,7 +267,11 @@ class CourseGenerator:
         return None
 
     async def _generate_description(
-        self, course_title: str, section_count: int, sources: list[Source],
+        self,
+        course_title: str,
+        section_count: int,
+        sources: list[Source],
+        target_language: str,
     ) -> str:
         try:
             provider = await self._router.get_provider(TaskType.CONTENT_ANALYSIS)
@@ -246,11 +279,11 @@ class CourseGenerator:
             messages = [
                 UnifiedMessage(
                     role="user",
-                    content=(
-                        f'Write a 2-3 sentence course description for a course titled '
-                        f'"{course_title}" with {section_count} sections. '
-                        f'Source material: {source_info}. '
-                        f'Be concise and informative. Respond with ONLY the description text.'
+                    content=_DESCRIPTION_PROMPT.render(
+                        course_title=course_title,
+                        section_count=section_count,
+                        source_info=source_info,
+                        target_language=target_language,
                     ),
                 ),
             ]

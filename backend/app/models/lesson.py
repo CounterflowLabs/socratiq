@@ -2,6 +2,8 @@
 
 from pydantic import BaseModel, Field
 
+from app.models.lesson_blocks import LessonBlock
+
 
 class CodeSnippet(BaseModel):
     language: str = "python"
@@ -39,4 +41,5 @@ class LessonSection(BaseModel):
 class LessonContent(BaseModel):
     title: str
     summary: str
-    sections: list[LessonSection]
+    blocks: list[LessonBlock] = Field(default_factory=list)
+    sections: list[LessonSection] = Field(default_factory=list)

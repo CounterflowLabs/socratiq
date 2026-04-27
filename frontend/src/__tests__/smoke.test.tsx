@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, fireEvent } from "@testing-library/react";
 import React, { Suspense } from "react";
 
 // Mock react-markdown (ESM-only package that doesn't work in jsdom)
@@ -31,18 +31,91 @@ function mockFetch(responses: Record<string, unknown>) {
   });
 }
 
+function mockSettingsFetch(options: {
+  models?: unknown[];
+  routes?: unknown[];
+  createModel?: unknown;
+} = {}) {
+  const models = options.models ?? [];
+  const routes = options.routes ?? [];
+  const createModel = options.createModel ?? {
+    name: "created-model",
+    provider_type: "openai_compatible",
+    model_type: "chat",
+    model_id: "created-model",
+    supports_tool_use: true,
+    supports_streaming: true,
+    max_tokens_limit: 4096,
+    is_active: true,
+  };
+
+  return vi.fn((url: string, init?: RequestInit) => {
+    if (url.endsWith("/api/v1/models") && init?.method === "POST") {
+      return Promise.resolve({
+        ok: true,
+        status: 201,
+        json: () => Promise.resolve(createModel),
+        text: () => Promise.resolve(JSON.stringify(createModel)),
+      });
+    }
+    if (url.endsWith("/api/v1/model-routes")) {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(routes),
+        text: () => Promise.resolve(JSON.stringify(routes)),
+      });
+    }
+    if (url.endsWith("/api/v1/models")) {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(models),
+        text: () => Promise.resolve(JSON.stringify(models)),
+      });
+    }
+    if (url.endsWith("/api/v1/setup/bilibili/status")) {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ logged_in: false }),
+        text: () => Promise.resolve(JSON.stringify({ logged_in: false })),
+      });
+    }
+    if (url.endsWith("/api/v1/setup/whisper")) {
+      const whisper = {
+        mode: "api",
+        api_base_url: "",
+        api_model: "",
+        api_key_masked: null,
+        local_model: "base",
+      };
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(whisper),
+        text: () => Promise.resolve(JSON.stringify(whisper)),
+      });
+    }
+    return Promise.resolve({
+      ok: false,
+      status: 404,
+      text: () => Promise.resolve("Not found"),
+    });
+  });
+}
+
 // Wrapper for components using useSearchParams (needs Suspense)
 function SuspenseWrapper({ children }: { children: React.ReactNode }) {
   return <Suspense fallback={<div>Loading...</div>}>{children}</Suspense>;
 }
 
 // Reset Zustand stores between tests
-import { useCoursesStore, useChatStore } from "@/lib/stores";
+import { useChatStore, useCoursesStore, useSourcesStore, useTasksStore } from "@/lib/stores";
 
 function resetStores() {
   useCoursesStore.getState().setCourses([]);
   useCoursesStore.getState().setLoading(false);
   useChatStore.getState().clearChat();
+  useSourcesStore.getState().setSources([]);
+  useSourcesStore.getState().setLoading(false);
+  useTasksStore.setState({ tasks: [] });
 }
 
 beforeEach(() => {
@@ -50,7 +123,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  cleanup();
   vi.restoreAllMocks();
+  vi.resetModules();
 });
 
 // ─── Dashboard Tests ────────────────────────────────
@@ -140,6 +215,34 @@ describe("Import Page", () => {
       ).toBeInTheDocument();
     });
   });
+
+  it("allows import submission without choosing a learning goal and redirects to the materials hub", async () => {
+    const push = vi.fn();
+
+    vi.doMock("next/navigation", () => ({
+      useRouter: () => ({ push, back: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
+      useSearchParams: () => new URLSearchParams(),
+      usePathname: () => "/import",
+    }));
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ id: "src1", type: "bilibili", status: "pending", task_id: "t1" }),
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    vi.resetModules();
+    const ImportPage = (await import("@/app/import/page")).default;
+    render(<ImportPage />);
+
+    fireEvent.change(screen.getByPlaceholderText("https://www.bilibili.com/video/BV..."), {
+      target: { value: "https://www.bilibili.com/video/BV1xoJwzDESD" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "开始导入" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/sources"));
+  });
 });
 
 // ─── Settings Tests ──────────────────────────────────
@@ -171,26 +274,9 @@ describe("Settings Page", () => {
       { task_type: "mentor_chat", model_name: "claude-sonnet" },
     ];
 
-    globalThis.fetch = vi.fn((url: string) => {
-      if (url.endsWith("/api/v1/model-routes")) {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve(routesData),
-          text: () => Promise.resolve(JSON.stringify(routesData)),
-        });
-      }
-      if (url.endsWith("/api/v1/models")) {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve(modelsData),
-          text: () => Promise.resolve(JSON.stringify(modelsData)),
-        });
-      }
-      return Promise.resolve({
-        ok: false,
-        status: 404,
-        text: () => Promise.resolve("Not found"),
-      });
+    globalThis.fetch = mockSettingsFetch({
+      models: modelsData,
+      routes: routesData,
     });
 
     const SettingsPage = (await import("@/app/settings/page")).default;
@@ -204,27 +290,7 @@ describe("Settings Page", () => {
   });
 
   it("shows empty state when no models", async () => {
-    globalThis.fetch = vi.fn((url: string) => {
-      if (url.endsWith("/api/v1/model-routes")) {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve([]),
-          text: () => Promise.resolve("[]"),
-        });
-      }
-      if (url.endsWith("/api/v1/models")) {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve([]),
-          text: () => Promise.resolve("[]"),
-        });
-      }
-      return Promise.resolve({
-        ok: false,
-        status: 404,
-        text: () => Promise.resolve("Not found"),
-      });
-    });
+    globalThis.fetch = mockSettingsFetch();
 
     const SettingsPage = (await import("@/app/settings/page")).default;
     render(<SettingsPage />);
@@ -233,14 +299,72 @@ describe("Settings Page", () => {
       expect(screen.getByText(/暂无模型配置/)).toBeInTheDocument();
     });
   });
+
+  it("prefills DeepSeek provider preset and submits it as OpenAI-compatible", async () => {
+    const fetchMock = mockSettingsFetch({
+      createModel: {
+        name: "deepseek-default",
+        provider_type: "openai_compatible",
+        model_type: "chat",
+        model_id: "deepseek-v4-flash",
+        base_url: "https://api.deepseek.com",
+        supports_tool_use: true,
+        supports_streaming: true,
+        max_tokens_limit: 4096,
+        is_active: true,
+      },
+    });
+    globalThis.fetch = fetchMock;
+
+    const SettingsPage = (await import("@/app/settings/page")).default;
+    render(<SettingsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/暂无模型配置/)).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "添加模型" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "Provider 预设" }), {
+      target: { value: "deepseek" },
+    });
+
+    expect(screen.getByDisplayValue("deepseek-default")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("deepseek-v4-flash")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("https://api.deepseek.com")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText("sk-..."), {
+      target: { value: "sk-deepseek" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/v1/models",
+        expect.objectContaining({ method: "POST" })
+      );
+    });
+
+    const createCall = fetchMock.mock.calls.find(
+      ([url, init]) => url === "/api/v1/models" && init?.method === "POST"
+    );
+    expect(createCall).toBeTruthy();
+    expect(JSON.parse(createCall?.[1]?.body as string)).toMatchObject({
+      name: "deepseek-default",
+      provider_type: "openai_compatible",
+      model_type: "chat",
+      model_id: "deepseek-v4-flash",
+      api_key: "sk-deepseek",
+      base_url: "https://api.deepseek.com",
+    });
+  });
 });
 
 // ─── Learn Page Tests ────────────────────────────────
 
 describe("Learn Page", () => {
-  it("renders chat interface with course data", async () => {
+  it("renders the dedicated learn shell", async () => {
     vi.doMock("next/navigation", () => ({
-      useRouter: () => ({ push: vi.fn(), back: vi.fn() }),
+      useRouter: () => ({ push: vi.fn(), back: vi.fn(), replace: vi.fn() }),
       useSearchParams: () => {
         const params = new URLSearchParams();
         params.set("courseId", "c1");
@@ -257,7 +381,7 @@ describe("Learn Page", () => {
         description: "desc",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
-        source_ids: [],
+        sources: [],
         sections: [
           {
             id: "s1",
@@ -282,10 +406,11 @@ describe("Learn Page", () => {
 
     await waitFor(
       () => {
-        // The learn page should show the course title and tab bar
-        expect(screen.getByText("测试课程")).toBeInTheDocument();
-        // Tab bar should include the tutor tab
-        expect(screen.getByText("导师")).toBeInTheDocument();
+        expect(screen.getByRole("heading", { name: "测试课程" })).toBeInTheDocument();
+        expect(screen.getByText("课程目录")).toBeInTheDocument();
+        expect(
+          screen.getByRole("button", { name: /打开学习辅助区/i })
+        ).toBeInTheDocument();
       },
       { timeout: 3000 }
     );
@@ -356,7 +481,7 @@ describe("Path Page", () => {
 
 describe("API Client", () => {
   it("createSourceFromURL calls fetch correctly", async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue({
+    const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: () =>
         Promise.resolve({
@@ -366,6 +491,7 @@ describe("API Client", () => {
           task_id: "t1",
         }),
     });
+    globalThis.fetch = fetchMock as typeof fetch;
 
     const { createSourceFromURL } = await import("@/lib/api");
     const result = await createSourceFromURL(
@@ -373,7 +499,7 @@ describe("API Client", () => {
     );
 
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-    const [url, options] = (globalThis.fetch as any).mock.calls[0];
+    const [url, options] = fetchMock.mock.calls[0] ?? [];
     expect(url).toContain("/api/v1/sources");
     expect(options.method).toBe("POST");
     expect(result.type).toBe("bilibili");

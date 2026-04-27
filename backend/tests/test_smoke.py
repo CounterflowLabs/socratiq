@@ -2,18 +2,24 @@
 
 import json
 import uuid
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 
 from app.api.deps import LOCAL_USER_ID
+from app.db.models.concept import Concept, ConceptSource
+from app.db.models.course import Course, CourseSource, Section
+from app.db.models.lab import Lab
 from app.db.models.source import Source
 from app.db.models.content_chunk import ContentChunk
 from app.db.models.conversation import Conversation
 from app.db.models.message import Message
 from app.services.llm.base import ContentBlock, LLMResponse, StreamChunk
+from app.worker.tasks import course_generation
 
 
 # --- Model Config Tests ---------------------------------------------------
@@ -208,7 +214,7 @@ class TestCourses:
         db_session.add(section)
         await db_session.flush()
 
-        async def mock_generate(db, source_ids, title=None, user_id=None):
+        async def mock_generate(db, source_ids, target_language, title=None, user_id=None, skip_ready_check=False):
             return course
 
         mock_router = AsyncMock()
@@ -244,6 +250,112 @@ class TestCourses:
             assert any(s["id"] == str(source.id) for s in detail["sources"])
         finally:
             del the_app.dependency_overrides[get_model_router]
+
+    @pytest.mark.asyncio
+    async def test_course_detail_orders_sources_and_marks_only_real_bilibili_pages(
+        self,
+        client: AsyncClient,
+        db_session,
+        demo_user,
+    ):
+        user_id = LOCAL_USER_ID
+        course = Course(
+            title="Ordered course",
+            description="Course detail ordering",
+            created_by=user_id,
+        )
+        db_session.add(course)
+        await db_session.flush()
+
+        video_source = Source(
+            id=uuid.UUID("00000000-0000-0000-0000-0000000000b2"),
+            type="bilibili",
+            title="Multipart video",
+            status="ready",
+            url="https://www.bilibili.com/video/BV1multi123",
+            metadata_={"lesson_by_page": {"0": {"title": "P1"}, "1": {"title": "P2"}}},
+            created_by=user_id,
+        )
+        article_source = Source(
+            id=uuid.UUID("00000000-0000-0000-0000-0000000000c3"),
+            type="article",
+            title="Article",
+            status="ready",
+            url="https://example.com/article",
+            created_by=user_id,
+        )
+        single_part_source = Source(
+            id=uuid.UUID("00000000-0000-0000-0000-0000000000a1"),
+            type="bilibili",
+            title="Single part video",
+            status="ready",
+            url="https://www.bilibili.com/video/BV1single123",
+            metadata_={"lesson_by_page": {"0": {"title": "Only page"}}},
+            created_by=user_id,
+        )
+        db_session.add_all([video_source, article_source, single_part_source])
+        await db_session.flush()
+
+        db_session.add_all(
+            [
+                CourseSource(course_id=course.id, source_id=video_source.id),
+                CourseSource(course_id=course.id, source_id=article_source.id),
+                CourseSource(course_id=course.id, source_id=single_part_source.id),
+            ]
+        )
+
+        db_session.add_all(
+            [
+                Section(
+                    course_id=course.id,
+                    title="Single part section",
+                    order_index=0,
+                    source_id=single_part_source.id,
+                    content={"lesson": {"title": "Single"}},
+                    difficulty=1,
+                ),
+                Section(
+                    course_id=course.id,
+                    title="Article section",
+                    order_index=1,
+                    source_id=article_source.id,
+                    content={"lesson": {"title": "Article"}},
+                    difficulty=1,
+                ),
+                Section(
+                    course_id=course.id,
+                    title="Multipart P1",
+                    order_index=2,
+                    source_id=video_source.id,
+                    content={"lesson": {"title": "P1"}},
+                    difficulty=1,
+                ),
+                Section(
+                    course_id=course.id,
+                    title="Multipart P2",
+                    order_index=3,
+                    source_id=video_source.id,
+                    content={"lesson": {"title": "P2"}},
+                    difficulty=1,
+                ),
+            ]
+        )
+        await db_session.commit()
+
+        res = await client.get(f"/api/v1/courses/{course.id}")
+        assert res.status_code == 200
+        detail = res.json()
+
+        assert [source["id"] for source in detail["sources"]] == [
+            str(single_part_source.id),
+            str(article_source.id),
+            str(video_source.id),
+        ]
+
+        sections_by_title = {section["title"]: section for section in detail["sections"]}
+        assert "page_index" not in sections_by_title["Single part section"]["content"]
+        assert sections_by_title["Multipart P1"]["content"]["page_index"] == 0
+        assert sections_by_title["Multipart P2"]["content"]["page_index"] == 1
 
     @pytest.mark.asyncio
     async def test_source_not_ready_returns_400(self, client: AsyncClient, db_session):
@@ -294,6 +406,311 @@ class TestCourses:
             assert res.status_code == 422
         finally:
             del the_app.dependency_overrides[get_model_router]
+
+    @pytest.mark.asyncio
+    async def test_course_detail_preserves_richer_section_content(
+        self, client: AsyncClient, db_session, demo_user
+    ):
+        source = Source(
+            type="youtube",
+            title="Rich Content Source",
+            status="ready",
+            url="https://example.com/rich-content",
+            created_by=demo_user.id,
+        )
+        db_session.add(source)
+        await db_session.flush()
+
+        course = Course(
+            title="Rich Content Course",
+            description="A course with richer section content.",
+            created_by=demo_user.id,
+        )
+        db_session.add(course)
+        await db_session.flush()
+
+        db_session.add(CourseSource(course_id=course.id, source_id=source.id))
+        db_session.add_all(
+            [
+                Section(
+                    course_id=course.id,
+                    title="Graph Section",
+                    order_index=0,
+                    source_id=source.id,
+                    content={
+                        "graph_card": {
+                            "current": ["attention"],
+                            "prerequisites": ["embeddings"],
+                        },
+                        "lab_mode": "inline",
+                        "lesson": {
+                            "summary": "Attention builds on token embeddings.",
+                        },
+                    },
+                    difficulty=2,
+                ),
+                Section(
+                    course_id=course.id,
+                    title="Empty Content Section",
+                    order_index=1,
+                    source_id=source.id,
+                    content=None,
+                    difficulty=1,
+                ),
+            ]
+        )
+        await db_session.flush()
+
+        res = await client.get(f"/api/v1/courses/{course.id}")
+        assert res.status_code == 200
+
+        detail = res.json()
+        sections_by_title = {section["title"]: section for section in detail["sections"]}
+
+        assert sections_by_title["Graph Section"]["content"]["graph_card"]["current"] == [
+            "attention"
+        ]
+        assert sections_by_title["Graph Section"]["content"]["lab_mode"] == "inline"
+        assert sections_by_title["Empty Content Section"]["content"] == {}
+
+    @pytest.mark.asyncio
+    async def test_knowledge_graph_endpoint_returns_rich_node_payload(
+        self, client: AsyncClient, db_session, demo_user
+    ):
+        source = Source(
+            type="youtube",
+            title="Graph Source",
+            status="ready",
+            url="https://example.com/graph-api",
+            created_by=demo_user.id,
+        )
+        db_session.add(source)
+        await db_session.flush()
+
+        course = Course(
+            title="Graph API Course",
+            description="Course for knowledge graph API smoke test.",
+            created_by=demo_user.id,
+        )
+        db_session.add(course)
+        await db_session.flush()
+
+        db_session.add(CourseSource(course_id=course.id, source_id=source.id))
+
+        prerequisite = Concept(
+            name="Embeddings API",
+            description="Vector representations exposed by the API.",
+            category="foundation",
+            prerequisites=[],
+        )
+        current = Concept(
+            name="Attention API",
+            description="Token weighting concept exposed by the API.",
+            category="core",
+            prerequisites=[],
+        )
+        db_session.add_all([prerequisite, current])
+        await db_session.flush()
+
+        current.prerequisites = [prerequisite.id]
+        db_session.add_all(
+            [
+                ConceptSource(
+                    concept_id=prerequisite.id,
+                    source_id=source.id,
+                ),
+                ConceptSource(
+                    concept_id=current.id,
+                    source_id=source.id,
+                ),
+            ]
+        )
+        await db_session.flush()
+
+        res = await client.get(f"/api/v1/courses/{course.id}/knowledge-graph")
+        assert res.status_code == 200
+
+        nodes = {node["label"]: node for node in res.json()["nodes"]}
+        assert nodes["Embeddings API"]["description"] == "Vector representations exposed by the API."
+        assert nodes["Embeddings API"]["kind"] == "related"
+        assert nodes["Attention API"]["description"] == "Token weighting concept exposed by the API."
+        assert nodes["Attention API"]["kind"] == "related"
+
+    @pytest.mark.asyncio
+    async def test_knowledge_graph_openapi_exposes_rich_response_model(
+        self, client: AsyncClient
+    ):
+        res = await client.get("/openapi.json")
+        assert res.status_code == 200
+
+        schema = res.json()
+        response_schema = schema["paths"]["/api/v1/courses/{course_id}/knowledge-graph"][
+            "get"
+        ]["responses"]["200"]["content"]["application/json"]["schema"]
+
+        assert response_schema["$ref"] == "#/components/schemas/KnowledgeGraphResponse"
+        node_properties = schema["components"]["schemas"]["KnowledgeGraphNode"]["properties"]
+        assert "description" in node_properties
+        assert "kind" in node_properties
+
+
+@pytest.mark.asyncio
+async def test_course_generation_reuses_source_metadata_without_regenerating(
+    monkeypatch, db_session, demo_user
+):
+    source = Source(
+        type="youtube",
+        url="https://www.youtube.com/watch?v=reuse",
+        title="Reusable Source",
+        status="ready",
+        metadata_={
+            "asset_plan": {
+                "lab_mode": "inline",
+                "graph_mode": "inline_and_overview",
+                "study_surface": "reader",
+            },
+            "lesson_by_page": {
+                "0": {
+                    "title": "Reusable Page",
+                    "summary": "Persisted lesson summary",
+                    "sections": [
+                        {
+                            "code_snippets": [],
+                            "key_concepts": ["attention"],
+                        }
+                    ],
+                    "blocks": [],
+                }
+            },
+            "graph_by_page": {
+                "0": {
+                    "current": ["attention"],
+                    "prerequisites": ["embeddings"],
+                    "unlocks": ["decoding"],
+                    "section_anchor": 0,
+                }
+            },
+            "labs_by_page": {
+                "0": {
+                    "title": "Inline Lab",
+                    "description": "Use the persisted lab",
+                    "language": "python",
+                    "starter_code": {"files": []},
+                    "test_code": {"files": []},
+                    "solution_code": {"files": []},
+                    "run_instructions": "pytest",
+                    "confidence": 0.75,
+                }
+            },
+        },
+        created_by=demo_user.id,
+    )
+    db_session.add(source)
+    await db_session.flush()
+
+    db_session.add(
+        ContentChunk(
+            source_id=source.id,
+            text="persisted chunk",
+            metadata_={"page_index": 0, "page_title": "Reusable Page"},
+        )
+    )
+
+    from app.db.models.source_task import SourceTask
+
+    db_session.add(
+        SourceTask(
+            source_id=source.id,
+            task_type="course_generation",
+            status="pending",
+            celery_task_id="course-task-reuse",
+        )
+    )
+    await db_session.flush()
+
+    class FakeAsyncContext:
+        def __init__(self, session):
+            self._session = session
+
+        async def __aenter__(self):
+            return self._session
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeSessionFactory:
+        def __init__(self, session):
+            self._session = session
+
+        def __call__(self):
+            return FakeAsyncContext(self._session)
+
+    class FakeEngine:
+        async def dispose(self):
+            return None
+
+    fake_provider = SimpleNamespace(
+        chat=AsyncMock(
+            return_value=SimpleNamespace(
+                content=[SimpleNamespace(type="text", text="Persisted course description.")]
+            )
+        )
+    )
+    fake_resources = SimpleNamespace(
+        settings=SimpleNamespace(),
+        engine=FakeEngine(),
+        session_factory=FakeSessionFactory(db_session),
+        model_router=SimpleNamespace(
+            get_provider=AsyncMock(return_value=fake_provider)
+        ),
+    )
+
+    monkeypatch.setattr(
+        course_generation,
+        "_create_worker_resources",
+        lambda: fake_resources,
+    )
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("lesson/lab generators should not run during course assembly")
+
+    from app.services import lab_generator, lesson_generator
+
+    monkeypatch.setattr(lesson_generator, "LessonGenerator", fail_if_called)
+    monkeypatch.setattr(lab_generator, "LabGenerator", fail_if_called)
+
+    class FakeTask:
+        def update_state(self, *_args, **_kwargs):
+            return None
+
+    result = await course_generation._generate_course_async(
+        FakeTask(),
+        str(source.id),
+        user_id=str(demo_user.id),
+    )
+
+    created_course = await db_session.get(Course, uuid.UUID(result["course_id"]))
+    sections = (
+        await db_session.execute(
+            select(Section).where(Section.course_id == created_course.id)
+        )
+    ).scalars().all()
+    labs = (
+        await db_session.execute(
+            select(Lab)
+            .join(Section, Lab.section_id == Section.id)
+            .where(Section.course_id == created_course.id)
+        )
+    ).scalars().all()
+
+    assert result["status"] == "ready"
+    assert "goal" not in result
+    assert created_course is not None
+    assert len(sections) == 1
+    assert sections[0].content["lesson"]["summary"] == "Persisted lesson summary"
+    assert sections[0].content["graph_card"]["current"] == ["attention"]
+    assert sections[0].content["lab_mode"] == "inline"
+    assert len(labs) == 1
 
 
 # --- Chat & Conversation Tests --------------------------------------------

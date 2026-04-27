@@ -3,7 +3,7 @@
 import base64
 import hashlib
 
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 
 
 def _build_fernet(fernet_key: str | bytes) -> Fernet:
@@ -31,6 +31,21 @@ def decrypt_api_key(encrypted: str, fernet_key: str) -> str:
     """Decrypt a stored API key."""
     f = _build_fernet(fernet_key)
     return f.decrypt(encrypted.encode()).decode()
+
+
+def decrypt_api_key_or_none(encrypted: str | None, fernet_key: str) -> str | None:
+    """Best-effort decrypt for stored secrets.
+
+    Returns ``None`` when the stored ciphertext cannot be read with the current
+    encryption key so callers can safely fall back to environment defaults.
+    """
+    if not encrypted:
+        return None
+
+    try:
+        return decrypt_api_key(encrypted, fernet_key)
+    except (InvalidToken, ValueError, TypeError):
+        return None
 
 
 def mask_api_key(key: str) -> str:

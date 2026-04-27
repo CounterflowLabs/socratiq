@@ -4,7 +4,11 @@ from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.model_config import ModelConfig, ModelRouteConfig
-from app.services.llm.encryption import encrypt_api_key, decrypt_api_key, mask_api_key
+from app.services.llm.encryption import (
+    decrypt_api_key_or_none,
+    encrypt_api_key,
+    mask_api_key,
+)
 
 
 class ModelConfigManager:
@@ -83,6 +87,9 @@ class ModelConfigManager:
         model = await self.get_model_by_name(db, name)
         if not model:
             return False
+        await db.execute(
+            delete(ModelRouteConfig).where(ModelRouteConfig.model_name == name)
+        )
         await db.delete(model)
         await db.flush()
         return True
@@ -90,7 +97,7 @@ class ModelConfigManager:
     def get_decrypted_api_key(self, model: ModelConfig) -> str | None:
         if not model.api_key_encrypted:
             return None
-        return decrypt_api_key(model.api_key_encrypted, self._encryption_key)
+        return decrypt_api_key_or_none(model.api_key_encrypted, self._encryption_key)
 
     def get_masked_api_key(self, model: ModelConfig) -> str | None:
         key = self.get_decrypted_api_key(model)

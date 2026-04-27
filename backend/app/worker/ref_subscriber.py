@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import get_settings
+from app.services.source_tasks import mark_source_task
 
 logger = logging.getLogger(__name__)
 
@@ -69,19 +70,20 @@ async def _handle_source_done(ref_source_id: str, status: str) -> None:
             logger.info(f"Found {len(waiters)} waiting sources for ref {ref_source_id}")
 
             if status == "ready":
-                from celery import chain
                 from app.worker.tasks.content_ingestion import clone_source
-                from app.worker.tasks.course_generation import generate_course_task
                 for waiter in waiters:
-                    pending_goal = (waiter.metadata_ or {}).get("pending_goal")
-                    pending_user_id = (waiter.metadata_ or {}).get("pending_user_id")
-                    pipeline = chain(
-                        clone_source.s(str(waiter.id), ref_source_id),
-                        generate_course_task.s(goal=pending_goal, user_id=pending_user_id),
-                    )
-                    result = pipeline.delay()
+                    result = clone_source.delay(str(waiter.id), ref_source_id)
                     waiter.celery_task_id = result.id
                     waiter.status = "pending"
+                    await mark_source_task(
+                        db,
+                        source_id=waiter.id,
+                        task_type="source_processing",
+                        status="pending",
+                        stage="pending",
+                        celery_task_id=result.id,
+                        error_summary=None,
+                    )
                     logger.info(f"Dispatched clone_source for {waiter.id}")
             else:
                 for waiter in waiters:

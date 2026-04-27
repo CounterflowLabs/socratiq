@@ -1,67 +1,52 @@
-"""LessonGenerator — converts subtitle chunks into structured lesson content."""
+"""LessonGenerator — converts subtitle chunks into a block-based lesson."""
 
 import json
 import logging
+from pathlib import Path
 
-from app.models.lesson import LessonContent, LessonSection
+from app.models.lesson import LessonContent
+from app.models.lesson_blocks import LessonBlock
+from app.prompt_template import load_prompt
 from app.services.llm.base import LLMProvider, UnifiedMessage
 
 logger = logging.getLogger(__name__)
 
-LESSON_PROMPT = """You are a course content editor. Convert the following video subtitle text into a structured lesson.
-
-Video title: {title}
-
-Subtitle text:
-{subtitles}
-
-Instructions:
-1. Identify topic shifts and create section headings
-2. Rewrite spoken/informal language into clear written prose — do NOT invent facts
-3. Extract any code that was spoken about (e.g. "let's write def hello" → code block)
-4. When content describes a process, flow, or architecture, generate a Mermaid diagram
-5. When content is a step-by-step procedure, output a StepByStep structure
-6. Preserve approximate timestamps from the original text
-7. List key concepts per section
-
-Return ONLY valid JSON matching this schema:
-{{
-  "title": "...",
-  "summary": "1-2 sentence overview",
-  "sections": [
-    {{
-      "heading": "Section title",
-      "content": "Written prose...",
-      "timestamp": 30.0,
-      "code_snippets": [{{"language": "python", "code": "x = 5", "context": "explanation"}}],
-      "key_concepts": ["concept1"],
-      "diagrams": [{{"type": "mermaid", "title": "Flow", "content": "graph LR\\n  A-->B"}}],
-      "interactive_steps": null or {{"title": "...", "steps": [{{"label": "Step 1", "detail": "...", "code": null}}]}}
-    }}
-  ]
-}}"""
+_PROMPT = load_prompt(Path(__file__).parent / "prompts" / "lesson_generation.md")
 
 
 class LessonGenerator:
     def __init__(self, provider: LLMProvider):
         self._provider = provider
 
-    async def generate(self, subtitle_chunks: list[str], video_title: str) -> LessonContent:
-        """Convert subtitle chunks into structured lesson content."""
+    async def generate(
+        self,
+        subtitle_chunks: list[str],
+        video_title: str,
+        target_language: str,
+        user_directive: str = "",
+        goal: str | None = None,
+    ) -> LessonContent:
+        """Convert subtitle chunks into a block-based lesson."""
         subtitles = "\n\n".join(subtitle_chunks)
+        goal_prompt = f"\n\nLearning goal: {goal}" if goal else ""
 
         try:
             response = await self._provider.chat(
                 messages=[UnifiedMessage(
                     role="user",
-                    content=LESSON_PROMPT.format(title=video_title, subtitles=subtitles[:8000]),
+                    content=_PROMPT.render(
+                        title=video_title,
+                        target_language=target_language,
+                        subtitles=subtitles[:8000],
+                        user_directive=user_directive,
+                    )
+                    + goal_prompt,
                 )],
                 max_tokens=4000,
                 temperature=0.3,
             )
 
             text = response.content[0].text if response.content else "{}"
-            # Extract JSON from markdown code blocks
             if "```" in text:
                 text = text.split("```")[1]
                 if text.startswith("json"):
@@ -73,13 +58,14 @@ class LessonGenerator:
 
         except Exception as e:
             logger.error(f"Lesson generation failed: {e}")
-            # Fallback: wrap raw subtitle text as a single section
             return LessonContent(
                 title=video_title,
                 summary="",
-                sections=[LessonSection(
-                    heading=video_title,
-                    content=subtitles[:3000],
-                    timestamp=0.0,
-                )],
+                blocks=[
+                    LessonBlock(
+                        type="prose",
+                        title=video_title,
+                        body=subtitles[:3000],
+                    )
+                ],
             )

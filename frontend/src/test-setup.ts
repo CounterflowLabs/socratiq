@@ -18,7 +18,12 @@ vi.mock("next/navigation", () => ({
 }));
 
 // Mock next/link
+type MockLinkProps = React.AnchorHTMLAttributes<HTMLAnchorElement> & {
+  href: string;
+  children: React.ReactNode;
+};
+
 vi.mock("next/link", () => ({
-  default: ({ children, href, ...props }: any) =>
+  default: ({ children, href, ...props }: MockLinkProps) =>
     React.createElement("a", { href, ...props }, children),
 }));

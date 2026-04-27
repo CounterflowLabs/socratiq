@@ -15,6 +15,14 @@ class Course(BaseMixin, Base):
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
     )
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("courses.id"), nullable=True
+    )
+    regeneration_directive: Mapped[str | None] = mapped_column(Text, nullable=True)
+    regeneration_metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    active_regeneration_task_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
 
 
 class CourseSource(Base):

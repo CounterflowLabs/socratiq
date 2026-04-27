@@ -5,6 +5,7 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { Loader, CheckCircle, XCircle, ArrowLeft, ArrowRight } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import {
+  generateSectionExercises,
   getSectionExercises,
   submitExercise,
   type ExerciseResponse,
@@ -21,6 +22,8 @@ function ExerciseInner() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [generating, setGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState<string | null>(null);
 
   // Per-exercise state
   const [selectedOption, setSelectedOption] = useState<number | null>(null);
@@ -31,6 +34,15 @@ function ExerciseInner() {
   // Accumulated results for completion summary
   const [allResults, setAllResults] = useState<Array<{ exerciseId: string; score: number | null }>>([]);
   const [showSummary, setShowSummary] = useState(false);
+
+  // Warn before leaving with unsaved progress
+  useEffect(() => {
+    const hasProgress = allResults.length > 0 || selectedOption !== null || textAnswer.trim().length > 0;
+    if (!hasProgress || showSummary) return;
+    const handler = (e: BeforeUnloadEvent) => { e.preventDefault(); };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [allResults.length, selectedOption, textAnswer, showSummary]);
 
   useEffect(() => {
     if (!sectionId) {
@@ -125,12 +137,58 @@ function ExerciseInner() {
 
   // Empty
   if (exercises.length === 0) {
+    const handleGenerateAndStart = async () => {
+      if (!sectionId) return;
+      setGenerating(true);
+      setGenerateError(null);
+      try {
+        const data = await generateSectionExercises(sectionId, 3, ["mcq", "open"]);
+        if (data.exercises.length === 0) {
+          setGenerateError("生成结果为空，请稍后重试。");
+          return;
+        }
+        setExercises(data.exercises);
+      } catch (err) {
+        setGenerateError(err instanceof Error ? err.message : "生成失败，请稍后重试。");
+      } finally {
+        setGenerating(false);
+      }
+    };
+
     return (
       <div className="min-h-screen flex items-center justify-center px-6" style={{ background: "var(--bg)" }}>
         <div className="card max-w-md w-full text-center">
           <h2 className="text-lg font-bold mb-2" style={{ color: "var(--text)" }}>此章节暂无练习题</h2>
-          <p className="text-sm mb-6" style={{ color: "var(--text-secondary)" }}>导师会在你学习后生成针对性练习</p>
-          <button className="btn-secondary" onClick={() => router.back()}>返回学习</button>
+          <p className="text-sm mb-6" style={{ color: "var(--text-secondary)" }}>
+            点击下方按钮，根据课文内容生成 3 道针对性练习。
+          </p>
+          {generateError ? (
+            <p className="text-sm mb-3" style={{ color: "var(--error)" }}>{generateError}</p>
+          ) : null}
+          <div className="flex gap-2 justify-center">
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={generating || !sectionId}
+              onClick={handleGenerateAndStart}
+            >
+              {generating ? "生成中…" : "生成练习"}
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              disabled={generating}
+              onClick={() => {
+                if (courseId && sectionId) {
+                  router.push(`/learn?courseId=${courseId}&sectionId=${sectionId}`);
+                } else {
+                  router.back();
+                }
+              }}
+            >
+              返回学习
+            </button>
+          </div>
         </div>
       </div>
     );

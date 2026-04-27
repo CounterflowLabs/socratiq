@@ -1,24 +1,24 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { Plus, Play, FileText, Loader, AlertCircle, CheckCircle } from "lucide-react";
+import { FileText, Filter, Loader, Play, Plus, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { listSources, type SourceResponse } from "@/lib/api";
+import SourceDetailDrawer from "@/components/materials/source-detail-drawer";
+import {
+  deriveMaterialPresentation,
+  isMaterialActive,
+  matchesMaterialStatusFilter,
+  type MaterialStatusFilter,
+} from "@/lib/materials-state";
 
-const STATUS_CONFIG: Record<string, { label: string; color: string; bgColor: string }> = {
-  pending: { label: "排队中", color: "text-blue-700", bgColor: "bg-blue-50" },
-  extracting: { label: "提取中", color: "text-blue-700", bgColor: "bg-blue-50" },
-  analyzing: { label: "分析中", color: "text-blue-700", bgColor: "bg-blue-50" },
-  storing: { label: "存储中", color: "text-blue-700", bgColor: "bg-blue-50" },
-  embedding: { label: "向量化", color: "text-blue-700", bgColor: "bg-blue-50" },
-  waiting_donor: { label: "复用中", color: "text-purple-700", bgColor: "bg-purple-50" },
-  generating_lessons: { label: "生成课文", color: "text-blue-700", bgColor: "bg-blue-50" },
-  generating_labs: { label: "生成 Lab", color: "text-blue-700", bgColor: "bg-blue-50" },
-  assembling_course: { label: "组装课程", color: "text-blue-700", bgColor: "bg-blue-50" },
-  ready: { label: "已完成", color: "text-green-700", bgColor: "bg-green-50" },
-  error: { label: "失败", color: "text-red-700", bgColor: "bg-red-50" },
+const STATUS_LABELS: Record<MaterialStatusFilter, string> = {
+  all: "全部状态",
+  ready: "已完成",
+  processing: "处理中",
+  error: "失败",
 };
 
 function TypeIcon({ type }: { type: string }) {
@@ -27,40 +27,19 @@ function TypeIcon({ type }: { type: string }) {
   return <FileText className="w-5 h-5 text-gray-400" />;
 }
 
-function StatusBadge({ status }: { status: string }) {
-  const config = STATUS_CONFIG[status] || { label: status, color: "text-gray-700", bgColor: "bg-gray-50" };
-  const isProcessing = !["ready", "error"].includes(status);
-  return (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${config.color} ${config.bgColor}`}>
-      {isProcessing && <Loader className="w-3 h-3 animate-spin" />}
-      {status === "ready" && <CheckCircle className="w-3 h-3" />}
-      {status === "error" && <AlertCircle className="w-3 h-3" />}
-      {config.label}
-    </span>
-  );
-}
-
 export default function SourcesPage() {
   const [sources, setSources] = useState<SourceResponse[]>([]);
   const [loading, setLoading] = useState(true);
   const [total, setTotal] = useState(0);
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<MaterialStatusFilter>("all");
+  const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
 
-  useEffect(() => {
-    loadSources();
-  }, []);
+  const loadSources = useCallback(async (options?: { background?: boolean }) => {
+    if (!options?.background) {
+      setLoading(true);
+    }
 
-  // Auto-refresh while any source is still processing
-  useEffect(() => {
-    const hasActive = sources.some((s) => !["ready", "error"].includes(s.status));
-    if (!hasActive) return;
-    const interval = setInterval(() => {
-      listSources().then((res) => { setSources(res.items); setTotal(res.total); }).catch(() => {});
-    }, 5000);
-    return () => clearInterval(interval);
-  }, [sources]);
-
-  async function loadSources() {
-    setLoading(true);
     try {
       const res = await listSources();
       setSources(res.items);
@@ -68,26 +47,97 @@ export default function SourcesPage() {
     } catch (e) {
       console.error("Failed to load sources:", e);
     } finally {
-      setLoading(false);
+      if (!options?.background) {
+        setLoading(false);
+      }
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    void loadSources();
+  }, [loadSources]);
+
+  useEffect(() => {
+    const hasActiveSource = sources.some((source) => isMaterialActive(source));
+    if (!hasActiveSource) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      void loadSources({ background: true });
+    }, 3000);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [loadSources, sources]);
+
+  useEffect(() => {
+    if (selectedSourceId && !sources.some((source) => source.id === selectedSourceId)) {
+      setSelectedSourceId(null);
+    }
+  }, [selectedSourceId, sources]);
+
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredSources = sources.filter((source) => {
+    const title = (source.title || source.url || "").toLowerCase();
+    const matchesQuery = normalizedQuery.length === 0 || title.includes(normalizedQuery);
+    return matchesQuery && matchesMaterialStatusFilter(source, statusFilter);
+  });
+  const selectedSource = selectedSourceId
+    ? sources.find((source) => source.id === selectedSourceId) ?? null
+    : null;
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 pt-14 md:pt-6 pb-6">
-        <div className="flex items-center justify-between mb-6">
+    <div className="min-h-screen" style={{ background: "var(--bg)" }}>
+      <div className="mx-auto max-w-5xl px-4 pb-6 pt-14 sm:px-6 md:pt-6">
+        <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <h1 className="text-xl font-bold text-gray-900">导入历史</h1>
-            <p className="text-sm text-gray-500 mt-1">
-              {total > 0 ? `共 ${total} 个资源` : "暂无导入的资源"}
+            <h1 className="text-xl font-bold text-gray-900">资料</h1>
+            <p className="mt-1 text-sm text-gray-500">
+              在这里查看已导入资料的处理进度、课程生成状态和下一步入口。
             </p>
           </div>
-          <Link href="/import">
-            <Button size="sm">
-              <Plus className="w-3.5 h-3.5" /> 导入新资料
+          <Link className="w-full sm:w-auto" href="/import">
+            <Button className="w-full sm:w-auto" size="sm">
+              <Plus className="w-3.5 h-3.5" /> 导入资料
             </Button>
           </Link>
         </div>
+
+        <Card className="mb-6 p-4">
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <label className="relative flex-1">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+              <input
+                className="h-10 w-full rounded-lg border border-gray-200 bg-white pl-9 pr-3 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="搜索资料标题"
+                value={query}
+              />
+            </label>
+
+            <label className="relative sm:w-48">
+              <span className="sr-only">状态筛选</span>
+              <Filter className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+              <select
+                aria-label="状态筛选"
+                className="h-10 w-full appearance-none rounded-lg border border-gray-200 bg-white pl-9 pr-3 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                onChange={(event) => setStatusFilter(event.target.value as MaterialStatusFilter)}
+                value={statusFilter}
+              >
+                {Object.entries(STATUS_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <p className="mt-3 text-sm text-gray-500">
+            {`当前显示 ${filteredSources.length} / ${total} 份资料`}
+          </p>
+        </Card>
 
         {loading ? (
           <div className="flex items-center justify-center py-16 text-gray-400">
@@ -103,42 +153,57 @@ export default function SourcesPage() {
               <Button><Plus className="w-4 h-4" /> 导入第一份资料</Button>
             </Link>
           </Card>
+        ) : filteredSources.length === 0 ? (
+          <Card className="p-10 text-center">
+            <h3 className="text-base font-semibold text-gray-900">没有匹配的资料</h3>
+            <p className="mt-2 text-sm text-gray-500">试试更换关键词，或切换状态筛选。</p>
+          </Card>
         ) : (
-          <div className="space-y-3">
-            {sources.map((source) => {
-              const errorMessage =
-                source.status === "error" && typeof source.metadata_?.error !== "undefined"
-                  ? String(source.metadata_.error)
-                  : null;
+          <div className="grid gap-3 md:grid-cols-2">
+            {filteredSources.map((source) => {
+              const presentation = deriveMaterialPresentation(source);
 
               return (
-                <Card key={source.id} className="p-4">
-                  <div className="flex items-center gap-4">
-                    <div className="w-10 h-10 rounded-xl bg-gray-50 flex items-center justify-center flex-shrink-0">
-                      <TypeIcon type={source.type} />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <h3 className="text-sm font-medium text-gray-900 truncate">
-                        {source.title || source.url || "未命名资源"}
-                      </h3>
-                      <div className="flex items-center gap-2 mt-1">
-                        <StatusBadge status={source.status} />
-                        <span className="text-xs text-gray-400">
-                          {new Date(source.created_at).toLocaleDateString("zh-CN")}
-                        </span>
+                <Card key={source.id} className="p-0 transition hover:border-blue-200 hover:shadow-sm">
+                  <button
+                    className="w-full bg-transparent p-4 text-left"
+                    onClick={() => setSelectedSourceId(source.id)}
+                    type="button"
+                  >
+                    <div className="flex items-start gap-4">
+                      <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-2xl bg-gray-100">
+                        <TypeIcon type={source.type} />
                       </div>
-                      {errorMessage && (
-                        <p className="text-xs text-red-500 mt-0.5 truncate">
-                          {errorMessage}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-start justify-between gap-3">
+                          <h2 className="truncate text-sm font-semibold text-gray-900">
+                            {source.title || source.url || "未命名资料"}
+                          </h2>
+                          <span className="rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-600">
+                            {presentation.badge}
+                          </span>
+                        </div>
+                        <p className="mt-2 line-clamp-2 text-sm text-gray-500">
+                          {presentation.supportingText}
                         </p>
-                      )}
+                        <div className="mt-3 flex items-center justify-between gap-3 text-xs text-gray-400">
+                          <span>{new Date(source.updated_at).toLocaleDateString("zh-CN")}</span>
+                          <span>{source.course_count} 门课程</span>
+                        </div>
+                      </div>
                     </div>
-                  </div>
+                  </button>
                 </Card>
               );
             })}
           </div>
         )}
+
+        <SourceDetailDrawer
+          onClose={() => setSelectedSourceId(null)}
+          open={selectedSource !== null}
+          source={selectedSource}
+        />
       </div>
     </div>
   );

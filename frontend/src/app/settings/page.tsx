@@ -16,6 +16,43 @@ import {
   logoutBilibili,
 } from "@/lib/api";
 import type { ModelConfigResponse, ModelRouteResponse } from "@/lib/api";
+import {
+  DEEPSEEK_BASE_URL,
+  DEEPSEEK_DEFAULT_CHAT_MODEL,
+  DEEPSEEK_DEFAULT_MODEL_NAME,
+} from "@/lib/model-provider-presets";
+
+type ProviderType = "anthropic" | "openai" | "openai_compatible" | "codex";
+type ModelType = "chat" | "embedding";
+type ProviderPreset = ProviderType | "deepseek";
+
+const providerPresets: Array<{
+  id: ProviderPreset;
+  label: string;
+  providerType: ProviderType;
+  chatOnly?: boolean;
+  defaultName?: string;
+  defaultModelId?: string;
+  defaultBaseUrl?: string;
+}> = [
+  { id: "anthropic", label: "Anthropic", providerType: "anthropic" },
+  { id: "codex", label: "Codex（ChatGPT 登录）", providerType: "codex", chatOnly: true },
+  { id: "openai", label: "OpenAI", providerType: "openai" },
+  {
+    id: "deepseek",
+    label: "DeepSeek",
+    providerType: "openai_compatible",
+    chatOnly: true,
+    defaultName: DEEPSEEK_DEFAULT_MODEL_NAME,
+    defaultModelId: DEEPSEEK_DEFAULT_CHAT_MODEL,
+    defaultBaseUrl: DEEPSEEK_BASE_URL,
+  },
+  { id: "openai_compatible", label: "OpenAI 兼容（自定义）", providerType: "openai_compatible" },
+];
+
+function getProviderPreset(id: ProviderPreset) {
+  return providerPresets.find((preset) => preset.id === id) ?? providerPresets[0];
+}
 
 export default function SettingsPage() {
   const [models, setModels] = useState<ModelConfigResponse[]>([]);
@@ -30,10 +67,12 @@ export default function SettingsPage() {
     Record<string, { success: boolean; message: string }>
   >({});
   const [showAddForm, setShowAddForm] = useState(false);
+  const [providerPreset, setProviderPreset] =
+    useState<ProviderPreset>("anthropic");
   const [newModel, setNewModel] = useState({
     name: "",
-    provider_type: "anthropic",
-    model_type: "chat",
+    provider_type: "anthropic" as ProviderType,
+    model_type: "chat" as ModelType,
     model_id: "",
     api_key: "",
     base_url: "",
@@ -161,6 +200,9 @@ export default function SettingsPage() {
   }
 
   async function handleDelete(name: string) {
+    if (!window.confirm(`确定要删除模型「${name}」吗？此操作不可撤销。`)) {
+      return;
+    }
     try {
       await deleteModel(name);
       setModels((prev) => prev.filter((m) => m.name !== name));
@@ -214,6 +256,7 @@ export default function SettingsPage() {
         api_key: "",
         base_url: "",
       });
+      setProviderPreset("anthropic");
       setShowAddForm(false);
     } catch (err) {
       setAddError(err instanceof Error ? err.message : "添加失败");
@@ -295,6 +338,37 @@ export default function SettingsPage() {
     return models.filter((model) => model.model_type !== "embedding");
   }
 
+  function handleModelTypeChange(modelType: ModelType) {
+    const nextPreset =
+      modelType === "embedding" && getProviderPreset(providerPreset).chatOnly
+        ? "openai_compatible"
+        : providerPreset;
+    const preset = getProviderPreset(nextPreset);
+
+    setProviderPreset(nextPreset);
+    setNewModel((prev) => ({
+      ...prev,
+      model_type: modelType,
+      provider_type: preset.providerType,
+      base_url:
+        preset.defaultBaseUrl ??
+        (preset.providerType === "openai_compatible" ? prev.base_url : ""),
+    }));
+  }
+
+  function handleProviderPresetChange(presetId: ProviderPreset) {
+    const preset = getProviderPreset(presetId);
+    setProviderPreset(presetId);
+    setNewModel((prev) => ({
+      ...prev,
+      name: preset.defaultName ?? prev.name,
+      provider_type: preset.providerType,
+      model_type: preset.chatOnly ? "chat" : prev.model_type,
+      model_id: preset.defaultModelId ?? "",
+      base_url: preset.defaultBaseUrl ?? "",
+    }));
+  }
+
   const hasRouteChanges = routes.some(
     (route) => (routeDrafts[route.task_type] || route.model_name) !== route.model_name
   );
@@ -308,15 +382,15 @@ export default function SettingsPage() {
   if (loading) {
     return (
       <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6">
-        <h1 className="text-xl font-bold text-gray-900 mb-6">设置</h1>
-        <div className="text-sm text-gray-500">加载中...</div>
+        <h1 className="text-xl font-bold mb-6" style={{ color: "var(--text)" }}>设置</h1>
+        <div className="text-sm" style={{ color: "var(--text-secondary)" }}>加载中...</div>
       </div>
     );
   }
 
   return (
     <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6">
-      <h1 className="text-xl font-bold text-gray-900 mb-6">设置</h1>
+      <h1 className="text-xl font-bold mb-6" style={{ color: "var(--text)" }}>设置</h1>
 
       {/* Model Routes */}
       {routes.length > 0 && (
@@ -608,16 +682,7 @@ export default function SettingsPage() {
               </label>
               <select
                 value={newModel.model_type}
-                onChange={(e) =>
-                  setNewModel({
-                    ...newModel,
-                    model_type: e.target.value,
-                    provider_type:
-                      e.target.value === "embedding"
-                        ? "openai_compatible"
-                        : newModel.provider_type,
-                  })
-                }
+                onChange={(e) => handleModelTypeChange(e.target.value as ModelType)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 <option value="chat">聊天 / 推理模型</option>
@@ -626,32 +691,34 @@ export default function SettingsPage() {
             </div>
             <div>
               <label className="block text-xs text-gray-600 mb-1">
-                Provider 类型
+                Provider 预设
               </label>
               <select
-                value={newModel.provider_type}
+                aria-label="Provider 预设"
+                value={providerPreset}
                 onChange={(e) =>
-                  setNewModel({
-                    ...newModel,
-                    provider_type: e.target.value,
-                    model_type:
-                      e.target.value === "codex" ? "chat" : newModel.model_type,
-                  })
+                  handleProviderPresetChange(e.target.value as ProviderPreset)
                 }
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
-                <option value="anthropic" disabled={newModel.model_type === "embedding"}>
-                  Anthropic
-                </option>
-                <option value="codex" disabled={newModel.model_type === "embedding"}>
-                  Codex（ChatGPT 登录）
-                </option>
-                <option value="openai">OpenAI</option>
-                <option value="openai_compatible">OpenAI 兼容</option>
+                {providerPresets.map((preset) => (
+                  <option
+                    key={preset.id}
+                    value={preset.id}
+                    disabled={newModel.model_type === "embedding" && preset.chatOnly}
+                  >
+                    {preset.label}
+                  </option>
+                ))}
               </select>
               {newModel.provider_type === "codex" && (
                 <p className="mt-1 text-xs text-gray-400">
                   Codex 通过 backend 容器里的官方 CLI 登录，不需要 API Key 和 Base URL。
+                </p>
+              )}
+              {providerPreset === "deepseek" && (
+                <p className="mt-1 text-xs text-gray-400">
+                  DeepSeek 使用 OpenAI 兼容接口，保存时会作为 openai_compatible provider 写入。
                 </p>
               )}
             </div>
@@ -670,6 +737,8 @@ export default function SettingsPage() {
                     ? "例如 text-embedding-3-small 或 nomic-embed-text"
                     : newModel.provider_type === "codex"
                     ? "例如 gpt-5-codex"
+                    : providerPreset === "deepseek"
+                    ? DEEPSEEK_DEFAULT_CHAT_MODEL
                     : "例如 claude-sonnet-4-20250514"
                 }
                 required

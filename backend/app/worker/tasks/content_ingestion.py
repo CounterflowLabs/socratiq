@@ -14,6 +14,12 @@ from sqlalchemy.ext.asyncio import (
 
 from app.config import Settings, get_settings
 from app.services.llm.router import ModelRouter
+from app.services.source_tasks import (
+    dispatch_course_generation,
+    finish_source_processing_and_enqueue_course,
+    mark_source_task,
+    recover_course_generation_dispatch_failure,
+)
 from app.worker.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -104,6 +110,7 @@ async def _clone_source_async(task, source_id: str, ref_source_id: str) -> dict:
         async with resources.session_factory() as db:
             target = await db.get(Source, sid)
             ref = await db.get(Source, ref_sid)
+            completion = None
 
             if not target or not ref or ref.status != "ready":
                 if target:
@@ -161,15 +168,17 @@ async def _clone_source_async(task, source_id: str, ref_source_id: str) -> dict:
                     )
                     concept_count += 1
 
-                await _update_status(db, sid, "assembling_course")
-                task.update_state(state="PROGRESS", meta={"stage": "assembling_course"})
-                course_id = await _assemble_course_for_source(
-                    db,
+                completion = await finish_source_processing_and_enqueue_course(
+                    db=db,
                     source=target,
-                    model_router=resources.model_router,
+                    processing_task=await _get_source_processing_task(db, sid),
+                    payload={
+                        "source_id": source_id,
+                        "ref_source_id": ref_source_id,
+                        "chunks_cloned": chunk_count,
+                        "concepts_linked": concept_count,
+                    },
                 )
-
-                await _update_status(db, sid, "ready")
                 await db.commit()
 
                 logger.info(
@@ -179,14 +188,6 @@ async def _clone_source_async(task, source_id: str, ref_source_id: str) -> dict:
                     chunk_count,
                     concept_count,
                 )
-                return {
-                    "source_id": source_id,
-                    "ref_source_id": ref_source_id,
-                    "chunks_cloned": chunk_count,
-                    "concepts_linked": concept_count,
-                    "course_id": course_id,
-                    "status": "ready",
-                }
             except Exception as exc:
                 logger.error(
                     "Clone ingestion failed for source %s: %s",
@@ -197,6 +198,30 @@ async def _clone_source_async(task, source_id: str, ref_source_id: str) -> dict:
                 await _update_status(db, sid, "error", error_message=str(exc))
                 await db.commit()
                 raise
+        if completion is None:
+            raise RuntimeError("Clone finished without preparing course generation")
+        try:
+            dispatch_course_generation(
+                payload=completion.course_dispatch.payload,
+                task_id=completion.course_dispatch.task_id,
+                user_id=completion.course_dispatch.user_id,
+            )
+        except Exception as exc:
+            logger.error(
+                "Failed to dispatch course generation for cloned source %s: %s",
+                source_id,
+                exc,
+                exc_info=True,
+            )
+            await recover_course_generation_dispatch_failure(
+                session_factory=resources.session_factory,
+                source_id=sid,
+                course_task_id=completion.course_dispatch.task_id,
+                fallback_task_id=completion.course_dispatch.fallback_task_id,
+                error_message=str(exc),
+            )
+            raise RuntimeError(f"Failed to dispatch course generation: {exc}") from exc
+        return completion.result
     finally:
         await resources.engine.dispose()
 
@@ -210,6 +235,7 @@ async def _ingest_source_async(task, source_id: str) -> dict:
     from app.db.models.source import Source
     from app.services.content_analyzer import ContentAnalyzer
     from app.services.embedding import EmbeddingService
+    from app.services.teaching_asset_planner import TeachingAssetPlanner
 
     resources = _create_worker_resources()
     sid = UUID(source_id)
@@ -217,6 +243,7 @@ async def _ingest_source_async(task, source_id: str) -> dict:
     try:
         async with resources.session_factory() as db:
             source = await db.get(Source, sid)
+            completion = None
             if not source:
                 raise ValueError(f"Source {source_id} not found")
 
@@ -266,17 +293,33 @@ async def _ingest_source_async(task, source_id: str) -> dict:
                     len(analysis.chunks),
                 )
 
+                planner = TeachingAssetPlanner()
+                asset_plan = planner.plan(
+                    source_title=source.title or "Untitled",
+                    source_type=source.type,
+                    overall_summary=analysis.overall_summary,
+                    chunk_topics=[chunk.topic for chunk in analysis.chunks],
+                    has_code=any(chunk.has_code for chunk in analysis.chunks),
+                )
+
                 # === STEP 3: GENERATE LESSONS ===
                 await _update_status(db, sid, "generating_lessons")
                 task.update_state(state="PROGRESS", meta={"stage": "generating_lessons"})
 
                 from app.services.lesson_generator import LessonGenerator
                 from app.services.llm.router import TaskType
+                from app.services.profile import load_profile
 
                 lesson_provider = await resources.model_router.get_provider(
                     TaskType.CONTENT_ANALYSIS
                 )
                 lesson_gen = LessonGenerator(lesson_provider)
+
+                if source.created_by is not None:
+                    uploader_profile = await load_profile(db, source.created_by)
+                    target_language = uploader_profile.preferred_language
+                else:
+                    target_language = "zh-CN"
 
                 page_groups: dict[int, list] = {}
                 for chunk in analysis.chunks:
@@ -292,56 +335,81 @@ async def _ingest_source_async(task, source_id: str) -> dict:
                         or source.title
                         or "Untitled"
                     )
-                    lesson_content = await lesson_gen.generate(chunk_texts, page_title)
+                    lesson_content = await lesson_gen.generate(
+                        chunk_texts, page_title, target_language=target_language
+                    )
                     lesson_by_page[page_idx] = lesson_content
                     logger.info(
-                        "Generated lesson for page %s: %s sections",
+                        "Generated lesson for page %s: %s blocks",
                         page_idx,
-                        len(lesson_content.sections),
+                        len(lesson_content.blocks),
                     )
 
-                # === STEP 4: GENERATE LABS ===
-                await _update_status(db, sid, "generating_labs")
-                task.update_state(state="PROGRESS", meta={"stage": "generating_labs"})
-
-                from app.db.models.lab import Lab
-                from app.services.lab_generator import LabGenerator
-
-                lab_gen = LabGenerator(lesson_provider)
                 labs_by_page: dict[int, dict | None] = {}
+                graph_by_page: dict[int, dict[str, object]] = {}
                 for page_idx, lesson_content in lesson_by_page.items():
-                    all_snippets = []
-                    for section in lesson_content.sections:
-                        all_snippets.extend(section.code_snippets)
+                    key_concepts: list[str] = []
+                    for block in lesson_content.blocks:
+                        if block.type == "concept_relation":
+                            key_concepts.extend(c.label for c in block.concepts)
+                    deduped_concepts = list(dict.fromkeys(key_concepts))
+                    graph_by_page[page_idx] = {
+                        "current": deduped_concepts[:2],
+                        "prerequisites": analysis.suggested_prerequisites[:3],
+                        "unlocks": deduped_concepts[2:5],
+                        "section_anchor": page_idx,
+                    }
 
-                    if not all_snippets:
-                        labs_by_page[page_idx] = None
-                        continue
+                if asset_plan.lab_mode == "inline":
+                    # === STEP 4: GENERATE LABS ===
+                    await _update_status(db, sid, "generating_labs")
+                    task.update_state(state="PROGRESS", meta={"stage": "generating_labs"})
 
-                    lang_counts: dict[str, int] = {}
-                    for snippet in all_snippets:
-                        lang_counts[snippet.language] = (
-                            lang_counts.get(snippet.language, 0) + 1
-                        )
-                    language = max(lang_counts, key=lang_counts.__getitem__)
+                    from app.services.lab_generator import LabGenerator
 
-                    lab_result = await lab_gen.generate(
-                        code_snippets=all_snippets,
-                        lesson_context=lesson_content.summary,
-                        language=language,
-                    )
-                    labs_by_page[page_idx] = lab_result
-                    if lab_result:
-                        logger.info(
-                            "Generated lab for page %s: %s",
-                            page_idx,
-                            lab_result.get("title"),
+                    lab_gen = LabGenerator(lesson_provider)
+                    for page_idx, lesson_content in lesson_by_page.items():
+                        from app.models.lesson import CodeSnippet
+
+                        all_snippets = [
+                            CodeSnippet(
+                                language=block.language or "python",
+                                code=block.code,
+                                context=block.body or "",
+                            )
+                            for block in lesson_content.blocks
+                            if block.type == "code_example" and block.code
+                        ]
+
+                        if not all_snippets:
+                            labs_by_page[page_idx] = None
+                            continue
+
+                        lang_counts: dict[str, int] = {}
+                        for snippet in all_snippets:
+                            lang_counts[snippet.language] = (
+                                lang_counts.get(snippet.language, 0) + 1
+                            )
+                        language = max(lang_counts, key=lang_counts.__getitem__)
+
+                        lab_result = await lab_gen.generate(
+                            code_snippets=all_snippets,
+                            lesson_context=lesson_content.summary,
+                            language=language,
+                            target_language=target_language,
                         )
-                    else:
-                        logger.info(
-                            "No lab generated for page %s (low confidence or error)",
-                            page_idx,
-                        )
+                        labs_by_page[page_idx] = lab_result
+                        if lab_result:
+                            logger.info(
+                                "Generated lab for page %s: %s",
+                                page_idx,
+                                lab_result.get("title"),
+                            )
+                        else:
+                            logger.info(
+                                "No lab generated for page %s (low confidence or error)",
+                                page_idx,
+                            )
 
                 # === STEP 5: STORE ===
                 await _update_status(db, sid, "storing")
@@ -399,9 +467,14 @@ async def _ingest_source_async(task, source_id: str) -> dict:
                     "chunk_count": len(analysis.chunks),
                     "estimated_study_minutes": analysis.estimated_study_minutes,
                     "suggested_prerequisites": analysis.suggested_prerequisites,
+                    "asset_plan": asset_plan.model_dump(),
                     "lesson_by_page": {
                         str(page_idx): lesson.model_dump()
                         for page_idx, lesson in lesson_by_page.items()
+                    },
+                    "graph_by_page": {
+                        str(page_idx): graph
+                        for page_idx, graph in graph_by_page.items()
                     },
                     "labs_by_page": {
                         str(page_idx): lab_data
@@ -432,29 +505,22 @@ async def _ingest_source_async(task, source_id: str) -> dict:
                 )
 
                 # === STEP 7: DONE ===
-                await _update_status(db, sid, "assembling_course")
-                task.update_state(state="PROGRESS", meta={"stage": "assembling_course"})
-                course_id = await _assemble_course_for_source(
-                    db,
+                completion = await finish_source_processing_and_enqueue_course(
+                    db=db,
                     source=source,
-                    model_router=resources.model_router,
+                    processing_task=await _get_source_processing_task(db, sid),
+                    payload={
+                        "source_id": source_id,
+                        "title": source.title,
+                        "chunks_created": len(chunk_ids),
+                        "concepts_created": len(concept_ids),
+                        "lessons_generated": len(lesson_by_page),
+                        "labs_generated": sum(
+                            1 for lab_data in labs_by_page.values() if lab_data is not None
+                        ),
+                    },
                 )
-
-                await _update_status(db, sid, "ready")
                 await db.commit()
-
-                return {
-                    "source_id": source_id,
-                    "title": source.title,
-                    "chunks_created": len(chunk_ids),
-                    "concepts_created": len(concept_ids),
-                    "lessons_generated": len(lesson_by_page),
-                    "labs_generated": sum(
-                        1 for lab_data in labs_by_page.values() if lab_data is not None
-                    ),
-                    "course_id": course_id,
-                    "status": "ready",
-                }
             except Exception as exc:
                 logger.error(
                     "Ingestion failed for source %s: %s",
@@ -468,6 +534,30 @@ async def _ingest_source_async(task, source_id: str) -> dict:
                     str(exc),
                 )
                 raise
+        if completion is None:
+            raise RuntimeError("Ingestion finished without preparing course generation")
+        try:
+            dispatch_course_generation(
+                payload=completion.course_dispatch.payload,
+                task_id=completion.course_dispatch.task_id,
+                user_id=completion.course_dispatch.user_id,
+            )
+        except Exception as exc:
+            logger.error(
+                "Failed to dispatch course generation for source %s: %s",
+                source_id,
+                exc,
+                exc_info=True,
+            )
+            await recover_course_generation_dispatch_failure(
+                session_factory=resources.session_factory,
+                source_id=sid,
+                course_task_id=completion.course_dispatch.task_id,
+                fallback_task_id=completion.course_dispatch.fallback_task_id,
+                error_message=str(exc),
+            )
+            raise RuntimeError(f"Failed to dispatch course generation: {exc}") from exc
+        return completion.result
     finally:
         await resources.engine.dispose()
 
@@ -521,7 +611,7 @@ async def _get_whisper_config(db) -> dict:
     from sqlalchemy import select
 
     from app.db.models.whisper_config import WhisperConfig
-    from app.services.llm.encryption import decrypt_api_key
+    from app.services.llm.encryption import decrypt_api_key_or_none
 
     settings = get_settings()
 
@@ -532,15 +622,18 @@ async def _get_whisper_config(db) -> dict:
         config = None
 
     if config:
-        api_key = (
-            decrypt_api_key(config.api_key_encrypted, settings.llm_encryption_key)
-            if config.api_key_encrypted
-            else settings.whisper_api_key
+        api_key = decrypt_api_key_or_none(
+            config.api_key_encrypted,
+            settings.llm_encryption_key,
         )
+        if config.api_key_encrypted and api_key is None:
+            logger.warning(
+                "Failed to decrypt stored Whisper API key; falling back to env/default for ingestion."
+            )
         return {
             "whisper_mode": config.mode or settings.whisper_mode,
             "whisper_model": config.local_model or settings.whisper_model,
-            "whisper_api_key": api_key,
+            "whisper_api_key": api_key or settings.whisper_api_key,
             "whisper_api_base_url": config.api_base_url or settings.whisper_api_base_url,
             "whisper_api_model": config.api_model or settings.whisper_api_model,
         }
@@ -570,53 +663,61 @@ def _create_extractor(source, whisper_kwargs: dict, bilibili_credential=None):
     raise ValueError(f"Unsupported source type: {source.type}")
 
 
-async def _assemble_course_for_source(
-    db: AsyncSession,
-    source,
-    model_router: ModelRouter,
-) -> str:
-    """Create the course for a fully processed source and return its ID."""
-    from app.services.course_generator import CourseGenerator
-
-    generator = CourseGenerator(model_router)
-    course = await generator.generate(
-        db=db,
-        source_ids=[source.id],
-        title=source.title,
-        user_id=source.created_by,
-        skip_ready_check=True,
-    )
-    source.metadata_ = {
-        **(source.metadata_ or {}),
-        "course_id": str(course.id),
-    }
-    await db.flush()
-    return str(course.id)
-
-
 async def _update_status(
     db,
     source_id: UUID,
     status: str,
     error_message: str | None = None,
 ) -> None:
-    """Update source status in the database."""
-    from sqlalchemy import update as sa_update
+    """Update source and source-task lifecycle state in the database."""
+
+    from sqlalchemy import select
 
     from app.db.models.source import Source
+    from app.db.models.source_task import SourceTask
 
-    if error_message:
-        source = await db.get(Source, source_id)
-        if source:
-            source.metadata_ = {**source.metadata_, "error": error_message}
-            source.status = status
-            await db.flush()
-            return
-
-    await db.execute(
-        sa_update(Source).where(Source.id == source_id).values(status=status)
+    task_status, stage, task_error_summary = _source_task_lifecycle(
+        status, error_message
     )
+
+    source = await db.get(Source, source_id)
+    if source:
+        source.status = status
+        if error_message:
+            source.metadata_ = {**source.metadata_, "error": error_message}
+
+    result = await db.execute(
+        select(SourceTask).where(
+            SourceTask.source_id == source_id,
+            SourceTask.task_type == "source_processing",
+        )
+    )
+    source_task = result.scalar_one_or_none()
+    if source_task:
+        await mark_source_task(
+            db,
+            source_id=source_id,
+            task_type="source_processing",
+            status=task_status,
+            stage=stage,
+            error_summary=task_error_summary,
+        )
+
     await db.flush()
+
+
+def _source_task_lifecycle(
+    status: str,
+    error_message: str | None = None,
+) -> tuple[str, str, str | None]:
+    """Map source status into persisted task lifecycle fields."""
+    if status == "pending":
+        return "pending", "pending", None
+    if status == "ready":
+        return "success", "ready", None
+    if status == "error":
+        return "failure", "error", error_message
+    return "running", status, None
 
 
 async def _mark_source_error(
@@ -635,6 +736,24 @@ async def _mark_source_error(
             source_id,
             exc_info=True,
         )
+
+
+async def _get_source_processing_task(
+    db: AsyncSession,
+    source_id: UUID,
+):
+    """Load the persisted source_processing task row, if present."""
+    from sqlalchemy import select
+
+    from app.db.models.source_task import SourceTask
+
+    result = await db.execute(
+        select(SourceTask).where(
+            SourceTask.source_id == source_id,
+            SourceTask.task_type == "source_processing",
+        )
+    )
+    return result.scalar_one_or_none()
 
 
 async def _get_or_create_concept(db, ext_concept):

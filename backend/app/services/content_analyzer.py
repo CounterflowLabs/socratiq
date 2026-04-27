@@ -2,14 +2,18 @@
 
 import json
 import logging
+from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from app.prompt_template import load_prompt
 from app.services.llm.base import LLMProvider, UnifiedMessage
 from app.services.llm.router import ModelRouter, TaskType
 from app.tools.extractors.base import RawContentChunk
 
 logger = logging.getLogger(__name__)
+
+_PROMPT = load_prompt(Path(__file__).parent / "prompts" / "content_analysis.md")
 
 
 # --- Pydantic models for analysis results ---
@@ -47,48 +51,6 @@ class AnalysisResult(BaseModel):
     estimated_study_minutes: int = 0
 
 
-ANALYSIS_SYSTEM_PROMPT = """You are a content analysis engine for an educational platform.
-Your job is to analyze learning content and produce structured JSON output.
-
-You MUST respond with ONLY valid JSON (no markdown, no extra text).
-
-Required JSON structure:
-{
-  "source_title": "string — refined title",
-  "overall_summary": "string — 3-5 sentence overview of the content",
-  "overall_difficulty": 3,
-  "concepts": [
-    {
-      "name": "string — canonical concept name in English",
-      "description": "string — 1-2 sentence description",
-      "aliases": ["alias1", "别名"],
-      "prerequisites": ["concept_name"],
-      "category": "string — domain category"
-    }
-  ],
-  "chunks": [
-    {
-      "topic": "string — topic title for this chunk",
-      "summary": "string — 1-3 sentence summary",
-      "concepts": ["concept_name"],
-      "difficulty": 3,
-      "key_terms": ["term1", "term2"],
-      "has_code": false,
-      "has_formula": false
-    }
-  ],
-  "suggested_prerequisites": ["concept_name"],
-  "estimated_study_minutes": 30
-}
-
-Rules:
-- The "chunks" array MUST have the same number of items as the input chunks, in the same order.
-- Concept names should be consistent.
-- Extract 3-15 concepts per source.
-- Difficulty scale: 1=no prior knowledge needed, 3=some programming background, 5=PhD-level.
-"""
-
-
 class ContentAnalyzer:
     """Analyzes raw content chunks using LLM for structured understanding."""
 
@@ -100,24 +62,26 @@ class ContentAnalyzer:
         title: str,
         chunks: list[RawContentChunk],
         source_type: str,
+        user_directive: str = "",
     ) -> AnalysisResult:
         """Analyze extracted content chunks."""
         provider = await self._router.get_provider(TaskType.CONTENT_ANALYSIS)
+        system_prompt = _PROMPT.render(user_directive=user_directive)
 
         total_text = "\n\n---\n\n".join(c.raw_text for c in chunks)
 
         if len(total_text) < 8000:
-            return await self._analyze_single(provider, title, chunks, source_type)
+            return await self._analyze_single(provider, system_prompt, title, chunks, source_type)
         else:
-            return await self._analyze_batched(provider, title, chunks, source_type)
+            return await self._analyze_batched(provider, system_prompt, title, chunks, source_type)
 
     async def _analyze_single(
-        self, provider: LLMProvider, title: str,
+        self, provider: LLMProvider, system_prompt: str, title: str,
         chunks: list[RawContentChunk], source_type: str,
     ) -> AnalysisResult:
         content_text = self._format_chunks_for_llm(chunks, source_type)
         messages = [
-            UnifiedMessage(role="system", content=ANALYSIS_SYSTEM_PROMPT),
+            UnifiedMessage(role="system", content=system_prompt),
             UnifiedMessage(
                 role="user",
                 content=f'Analyze the following content from a {source_type} source titled "{title}":\n\n{content_text}',
@@ -128,7 +92,7 @@ class ContentAnalyzer:
         return self._parse_analysis_response(response_text, title, chunks)
 
     async def _analyze_batched(
-        self, provider: LLMProvider, title: str,
+        self, provider: LLMProvider, system_prompt: str, title: str,
         chunks: list[RawContentChunk], source_type: str,
     ) -> AnalysisResult:
         BATCH_CHAR_LIMIT = 6000
@@ -152,7 +116,7 @@ class ContentAnalyzer:
         for i, batch in enumerate(batches):
             content_text = self._format_chunks_for_llm(batch, source_type)
             messages = [
-                UnifiedMessage(role="system", content=ANALYSIS_SYSTEM_PROMPT),
+                UnifiedMessage(role="system", content=system_prompt),
                 UnifiedMessage(
                     role="user",
                     content=f'Analyze part {i + 1}/{len(batches)} of a {source_type} source titled "{title}":\n\n{content_text}',

@@ -51,3 +51,8 @@ class Source(BaseMixin, Base):
     creator: Mapped["User | None"] = relationship(  # noqa: F821
         "User", back_populates="sources"
     )
+    tasks: Mapped[list["SourceTask"]] = relationship(  # noqa: F821
+        "SourceTask",
+        back_populates="source",
+        cascade="all, delete-orphan",
+    )

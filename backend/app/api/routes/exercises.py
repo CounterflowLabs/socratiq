@@ -4,16 +4,18 @@ import uuid
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_local_user, get_model_router
+from app.db.models.course import Section
 from app.db.models.exercise import Exercise
 from app.db.models.exercise_submission import ExerciseSubmission
 from app.db.models.user import User
 from app.services.exercise import ExerciseService
 from app.services.llm.router import ModelRouter, TaskType
+from app.services.profile import load_profile
 
 router = APIRouter(prefix="/api/v1/exercises", tags=["exercises"])
 
@@ -48,6 +50,11 @@ class SubmitAnswerResponse(BaseModel):
 class ExerciseListResponse(BaseModel):
     items: list[ExerciseResponse]
     total: int
+
+
+class GenerateExercisesRequest(BaseModel):
+    count: int = Field(default=3, ge=1, le=10)
+    types: list[str] | None = None
 
 
 @router.get("/{exercise_id}", response_model=ExerciseResponse)
@@ -181,5 +188,99 @@ async def list_exercises_for_section(
             concepts=ex.concepts,
         )
         for ex in exercises
+    ]
+    return ExerciseListResponse(items=items, total=len(items))
+
+
+def _extract_lesson_content(section_content: dict | None) -> str:
+    """Pull readable lesson text from a Section.content blob for exercise generation."""
+    if not section_content:
+        return ""
+    lesson = section_content.get("lesson") or {}
+    parts: list[str] = []
+    if lesson.get("summary"):
+        parts.append(str(lesson["summary"]))
+    for block in lesson.get("blocks") or []:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") in {"intro_card", "prose", "recap", "next_step"}:
+            body = block.get("body")
+            if body:
+                parts.append(str(body))
+    if not parts and section_content.get("summary"):
+        parts.append(str(section_content["summary"]))
+    return "\n\n".join(parts)
+
+
+@router.post(
+    "/section/{section_id}/generate",
+    response_model=ExerciseListResponse,
+    status_code=201,
+)
+async def generate_exercises_for_section(
+    section_id: uuid.UUID,
+    request: GenerateExercisesRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_local_user)],
+    model_router: Annotated[ModelRouter, Depends(get_model_router)],
+) -> ExerciseListResponse:
+    """Generate (and persist) practice exercises for a section.
+
+    Idempotency note: this always creates new rows; callers that want to
+    avoid duplicates should check ``GET /section/{section_id}`` first.
+    """
+    section = await db.get(Section, section_id)
+    if section is None:
+        raise HTTPException(404, f"Section {section_id} not found")
+
+    content = _extract_lesson_content(section.content)
+    if not content.strip():
+        raise HTTPException(
+            400, "Section has no lesson content to generate exercises from."
+        )
+
+    profile = await load_profile(db, user.id)
+
+    provider = await model_router.get_provider(TaskType.EVALUATION)
+    service = ExerciseService(provider)
+    raw_items = await service.generate_from_content(
+        content=content,
+        count=request.count,
+        types=request.types,
+        target_language=profile.preferred_language,
+    )
+
+    created: list[Exercise] = []
+    for item in raw_items:
+        if not isinstance(item, dict) or not item.get("question"):
+            continue
+        exercise = Exercise(
+            section_id=section_id,
+            type=str(item.get("type") or "open"),
+            question=str(item["question"]),
+            options=item.get("options"),
+            answer=item.get("answer"),
+            explanation=item.get("explanation"),
+            difficulty=int(item.get("difficulty") or 3),
+            concepts=[],
+        )
+        db.add(exercise)
+        created.append(exercise)
+    await db.commit()
+    for ex in created:
+        await db.refresh(ex)
+
+    items = [
+        ExerciseResponse(
+            id=ex.id,
+            section_id=ex.section_id,
+            type=ex.type,
+            question=ex.question,
+            options=ex.options,
+            explanation=None,
+            difficulty=ex.difficulty,
+            concepts=ex.concepts,
+        )
+        for ex in created
     ]
     return ExerciseListResponse(items=items, total=len(items))

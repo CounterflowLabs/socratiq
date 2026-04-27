@@ -1,12 +1,17 @@
 "use client";
 
-import { useEffect, useSyncExternalStore, useCallback, useState } from "react";
+import { useSyncExternalStore, useCallback, useState } from "react";
 import { usePathname } from "next/navigation";
 import "./globals.css";
 import { Sidebar } from "@/components/sidebar";
 
 // Pages that show the sidebar
-const SIDEBAR_PAGES = ["/", "/import", "/settings"];
+const SIDEBAR_PAGES = ["/", "/import", "/settings", "/sources"];
+export const SIDEBAR_DESKTOP_QUERY = "(min-width: 1024px)";
+
+function isDedicatedLearnRoute(pathname: string): boolean {
+  return pathname === "/learn" || pathname.startsWith("/learn/");
+}
 
 // Use useSyncExternalStore for media queries to avoid React Compiler issues
 function useMediaQuery(query: string): boolean {
@@ -29,27 +34,24 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="zh">
+    <html lang="zh" suppressHydrationWarning>
       <body className="bg-[var(--bg)]">
+        <a href="#main-content" className="skip-to-content">跳到主要内容</a>
         <LayoutInner>{children}</LayoutInner>
       </body>
     </html>
   );
 }
 
-function LayoutInner({ children }: { children: React.ReactNode }) {
+export function LayoutInner({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
-  const [mobileOpen, setMobileOpen] = useState(false);
-  const isDesktop = useMediaQuery("(min-width: 768px)");
+  const [mobileOpenPath, setMobileOpenPath] = useState<string | null>(null);
+  const isDesktop = useMediaQuery(SIDEBAR_DESKTOP_QUERY);
   const showDesktopSidebar = SIDEBAR_PAGES.includes(pathname);
-  const hideSidebarEntirely = pathname === "/login" || pathname === "/setup";
-
-  // Close mobile sidebar on route change
-  useEffect(() => {
-    setMobileOpen(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: only on pathname change
-  }, [pathname]);
+  const hideSidebarEntirely =
+    pathname === "/login" || pathname === "/setup" || isDedicatedLearnRoute(pathname);
+  const mobileOpen = mobileOpenPath === pathname;
 
   if (hideSidebarEntirely) {
     return <>{children}</>;
@@ -61,11 +63,15 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
     <div className="app-layout">
       <Sidebar
         collapsed={collapsed}
+        desktopMode={isDesktop}
         onToggle={() => setCollapsed(!collapsed)}
         mobileOpen={mobileOpen}
-        onMobileToggle={() => setMobileOpen(!mobileOpen)}
+        onMobileToggle={() =>
+          setMobileOpenPath((currentPath) => (currentPath === pathname ? null : pathname))
+        }
       />
       <main
+        id="main-content"
         className="main-content transition-[margin] duration-200 min-h-screen"
         style={{ marginLeft }}
       >

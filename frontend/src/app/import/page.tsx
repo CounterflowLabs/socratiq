@@ -2,25 +2,17 @@
 
 import { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { Brain, Sparkles, Eye, Target, FileText, Upload, Loader, Play, X, AlertCircle } from "lucide-react";
+import { Brain, Sparkles, FileText, Upload, Loader, Play, X, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { clsx } from "clsx";
 import { createSourceFromURL, createSourceFromFile } from "@/lib/api";
 import { useSourcesStore, useTasksStore } from "@/lib/stores";
-
-const goals = [
-  { id: "overview", label: "快速了解大意", icon: Eye, desc: "用最短时间抓住核心思想" },
-  { id: "master", label: "系统掌握核心概念", icon: Brain, desc: "深入理解每个知识点" },
-  { id: "apply", label: "实战应用", icon: Target, desc: "做项目、写代码、能上手" },
-];
-
 
 export default function ImportPage() {
   const router = useRouter();
   const addSource = useSourcesStore((s) => s.addSource);
   const addTask = useTasksStore((s) => s.addTask);
   const [url, setUrl] = useState("");
-  const [goal, setGoal] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [sourceType, setSourceType] = useState<"bilibili" | "youtube" | "pdf">("bilibili");
   const [dragOver, setDragOver] = useState(false);
@@ -28,7 +20,7 @@ export default function ImportPage() {
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const canSubmit = goal && (sourceType === "bilibili" || sourceType === "youtube" ? url.trim() : pdfName);
+  const canSubmit = Boolean(sourceType === "bilibili" || sourceType === "youtube" ? url.trim() : pdfName);
 
   const handleImport = async () => {
     if (!canSubmit) return;
@@ -50,7 +42,7 @@ export default function ImportPage() {
       addSource(source);
 
       if (source.task_id) {
-        // Add to task store and redirect — Dashboard will show progress
+        // Add to task store and redirect to the materials hub for progress tracking.
         addTask({
           taskId: source.task_id,
           sourceId: source.id,
@@ -58,10 +50,10 @@ export default function ImportPage() {
           sourceType,
           state: "PENDING",
         });
-        router.push("/");
+        router.push("/sources");
       } else {
-        // Source ready immediately, go to dashboard
-        router.push("/");
+        // Source ready immediately, return to the materials hub.
+        router.push("/sources");
       }
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : "导入失败，请检查链接或文件后重试");
@@ -77,20 +69,20 @@ export default function ImportPage() {
   };
 
   return (
-    <div className="min-h-screen bg-white flex flex-col">
-      <header className="flex items-center justify-between px-4 sm:px-6 h-14 border-b border-gray-100">
+    <div className="min-h-screen flex flex-col" style={{ background: "var(--bg)" }}>
+      <header className="flex items-center justify-between px-4 sm:px-6 h-14 border-b" style={{ borderColor: "var(--border)", background: "var(--surface)" }}>
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center">
+          <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: "var(--primary)" }}>
             <Brain className="w-4 h-4 text-white" />
           </div>
-          <span className="font-semibold text-gray-900">Socratiq</span>
+          <span className="font-semibold" style={{ color: "var(--text)" }}>Socratiq</span>
         </div>
       </header>
 
       <div className="flex-1 flex items-center justify-center px-4 sm:px-6">
         <div className="w-full max-w-xl">
-          <h1 className="text-2xl font-bold text-gray-900 mb-2">导入学习资料</h1>
-          <p className="text-sm text-gray-500 mb-8">粘贴 B站视频链接或上传 PDF，开始你的个性化学习之旅</p>
+          <h1 className="text-2xl font-bold mb-2" style={{ color: "var(--text)" }}>导入学习资料</h1>
+          <p className="text-sm mb-8" style={{ color: "var(--text-secondary)" }}>粘贴 B站或 YouTube 链接，或上传 PDF，导入后我们会为你准备课程素材。</p>
 
           {/* Error message */}
           {errorMsg && (
@@ -224,33 +216,13 @@ export default function ImportPage() {
             </div>
           )}
 
-          {/* Goal Selection */}
-          <div className="mb-8">
-            <label className="block text-sm font-medium text-gray-700 mb-3">选择学习目标</label>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              {goals.map((g) => (
-                <button
-                  key={g.id}
-                  onClick={() => setGoal(g.id)}
-                  className={clsx(
-                    "p-4 min-h-[44px] rounded-xl border text-left transition-all duration-150 bg-white",
-                    goal === g.id
-                      ? "border-blue-500 bg-blue-50 ring-1 ring-blue-500"
-                      : "border-gray-200 hover:border-gray-300"
-                  )}
-                >
-                  <g.icon className={clsx("w-5 h-5 mb-2", goal === g.id ? "text-blue-600" : "text-gray-400")} />
-                  <div className={clsx("text-sm font-medium mb-0.5", goal === g.id ? "text-blue-700" : "text-gray-700")}>
-                    {g.label}
-                  </div>
-                  <div className="text-xs text-gray-500">{g.desc}</div>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <Button size="lg" className="w-full" onClick={handleImport} disabled={!canSubmit}>
-            <Sparkles className="w-4 h-4" /> 生成学习路径
+          <Button size="lg" className="w-full" onClick={handleImport} disabled={!canSubmit || loading}>
+            {loading ? (
+              <Loader className="w-4 h-4 animate-spin" />
+            ) : (
+              <Sparkles className="w-4 h-4" />
+            )}{" "}
+            开始导入
           </Button>
         </div>
       </div>

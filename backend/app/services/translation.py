@@ -1,14 +1,18 @@
 """Subtitle translation service with caching."""
 
 import logging
+from pathlib import Path
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.prompt_template import load_prompt
 from app.services.llm.base import LLMProvider, UnifiedMessage
 
 logger = logging.getLogger(__name__)
+
+_PROMPT = load_prompt(Path(__file__).parent / "prompts" / "translation.md")
 
 _LANG_NAMES: dict[str, str] = {
     "zh": "Chinese",
@@ -53,11 +57,7 @@ class TranslationService:
                 messages=[
                     UnifiedMessage(
                         role="user",
-                        content=(
-                            f"Translate the following text to {lang_name}. "
-                            "Return ONLY the translation, no explanations:\n\n"
-                            f"{text}"
-                        ),
+                        content=_PROMPT.render(lang_name=lang_name, text=text),
                     )
                 ],
                 max_tokens=len(text) * 3,

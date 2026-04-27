@@ -56,6 +56,14 @@ async function responseError(res: Response): Promise<Error> {
 
 // ─── Source APIs ───────────────────────────────────────
 
+export interface SourceTaskSummary {
+  task_type: string;
+  status: string;
+  stage?: string | null;
+  error_summary?: string | null;
+  celery_task_id?: string | null;
+}
+
 export interface SourceResponse {
   id: string;
   type: string;
@@ -64,6 +72,10 @@ export interface SourceResponse {
   status: string;
   metadata_: Record<string, unknown>;
   task_id?: string;
+  latest_processing_task?: SourceTaskSummary | null;
+  latest_course_task?: SourceTaskSummary | null;
+  course_count: number;
+  latest_course_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -140,6 +152,9 @@ export interface CourseResponse {
   id: string;
   title: string;
   description?: string;
+  parent_id?: string | null;
+  regeneration_directive?: string | null;
+  version_index: number;
   created_at: string;
   updated_at: string;
 }
@@ -147,6 +162,77 @@ export interface CourseResponse {
 export interface CourseDetailResponse extends CourseResponse {
   sources: SourceSummary[];
   sections: SectionResponse[];
+  active_regeneration_task_id?: string | null;
+}
+
+export interface RegenerateCourseResponse {
+  task_id: string;
+  parent_course_id: string;
+}
+
+export interface RegenerationStatus {
+  status: "pending" | "running" | "success" | "failure";
+  stage?: string | null;
+  current?: number | null;
+  total?: number | null;
+  course_id?: string;
+  parent_course_id?: string;
+  error?: string;
+}
+
+export interface LessonConcept {
+  label: string;
+  description?: string | null;
+}
+
+export interface GraphCard {
+  current: string[];
+  prerequisites: string[];
+  unlocks: string[];
+  section_anchor?: string | number | null;
+}
+
+export type LabMode = "inline" | "none";
+
+export interface LessonBlock {
+  type:
+    | "intro_card"
+    | "prose"
+    | "diagram"
+    | "code_example"
+    | "concept_relation"
+    | "practice_trigger"
+    | "exercise_trigger"
+    | "recap"
+    | "next_step";
+  title?: string | null;
+  body?: string | null;
+  concepts?: LessonConcept[];
+  code?: string | null;
+  language?: string | null;
+  diagram_type?: string | null;
+  diagram_content?: string | null;
+  metadata?: Record<string, string | number | boolean | null>;
+}
+
+export interface LessonSectionContent {
+  heading: string;
+  content: string;
+  timestamp: number;
+  code_snippets: Array<{ language: string; code: string; context: string }>;
+  key_concepts: string[];
+  diagrams: Array<{ type: string; title: string; content: string }>;
+  interactive_steps: {
+    title: string;
+    steps: Array<{ label: string; detail: string; code?: string | null }>;
+  } | null;
+}
+
+export interface LessonContent {
+  title: string;
+  summary: string;
+  sections: LessonSectionContent[];
+  blocks?: LessonBlock[] | null;
 }
 
 export async function generateCourse(
@@ -175,6 +261,34 @@ export async function getCourse(id: string): Promise<CourseDetailResponse> {
   const res = await apiFetch(`${API_BASE}/courses/${id}`);
   if (!res.ok) throw await responseError(res);
   return res.json();
+}
+
+export async function regenerateCourse(
+  courseId: string,
+  directive?: string
+): Promise<RegenerateCourseResponse> {
+  const res = await apiFetch(`${API_BASE}/courses/${courseId}/regenerate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ directive: directive ?? null }),
+  });
+  if (!res.ok) throw await responseError(res);
+  return res.json();
+}
+
+export async function getRegenerationStatus(
+  taskId: string
+): Promise<RegenerationStatus> {
+  const res = await apiFetch(`${API_BASE}/courses/regenerations/${taskId}`);
+  if (!res.ok) throw await responseError(res);
+  return res.json();
+}
+
+export async function clearCourseRegeneration(courseId: string): Promise<void> {
+  const res = await apiFetch(`${API_BASE}/courses/${courseId}/regeneration`, {
+    method: "DELETE",
+  });
+  if (!res.ok && res.status !== 404) throw await responseError(res);
 }
 
 // ─── Chat APIs (SSE) ──────────────────────────────────
@@ -464,6 +578,21 @@ export async function submitExercise(exerciseId: string, answer: string): Promis
   return res.json();
 }
 
+export async function generateSectionExercises(
+  sectionId: string,
+  count = 3,
+  types: Array<"mcq" | "open" | "code"> = ["mcq", "open"],
+): Promise<{ exercises: ExerciseResponse[] }> {
+  const res = await apiFetch(`${API_BASE}/exercises/section/${sectionId}/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ count, types }),
+  });
+  if (!res.ok) throw await responseError(res);
+  const data = await res.json();
+  return { exercises: data.items ?? [] };
+}
+
 // ─── Review APIs ────────────────────────────────────
 export interface ReviewItemDetail {
   id: string;
@@ -629,7 +758,8 @@ export interface LabResponse {
 
 export async function getSectionLab(sectionId: string): Promise<LabResponse | null> {
   const res = await apiFetch(`${API_BASE}/labs/section/${sectionId}`);
-  if (!res.ok) return null;
+  if (res.status === 404) return null;
+  if (!res.ok) throw await responseError(res);
   const data = await res.json();
   return data || null;
 }

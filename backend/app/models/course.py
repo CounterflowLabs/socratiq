@@ -18,6 +18,9 @@ class CourseResponse(BaseModel):
     id: uuid.UUID
     title: str
     description: str | None = None
+    parent_id: uuid.UUID | None = None
+    regeneration_directive: str | None = None
+    version_index: int = 1
     created_at: datetime
     updated_at: datetime
 
@@ -49,12 +52,27 @@ class CourseDetailResponse(BaseModel):
     id: uuid.UUID
     title: str
     description: str | None = None
+    parent_id: uuid.UUID | None = None
+    regeneration_directive: str | None = None
+    version_index: int = 1
+    active_regeneration_task_id: str | None = None
     sources: list[SourceSummary] = Field(default_factory=list)
     sections: list[SectionResponse] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class RegenerateCourseRequest(BaseModel):
+    """Request body for regenerating a course."""
+    directive: str | None = Field(default=None, max_length=1000)
+
+
+class RegenerateCourseResponse(BaseModel):
+    """Response from POST /courses/{id}/regenerate."""
+    task_id: str
+    parent_course_id: uuid.UUID
 
 
 class CourseListResponse(BaseModel):

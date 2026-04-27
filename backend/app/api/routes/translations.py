@@ -34,21 +34,21 @@ async def estimate_translation(
         raise HTTPException(404, "Section not found")
 
     # Fetch chunks belonging to this section's source (via source_id or section_id)
-    chunks_q = (
-        select(ContentChunk)
-        .where(
-            (ContentChunk.section_id == section_id)
-            | (
-                (ContentChunk.source_id == section.source_id)
-                & (section.source_id.isnot(None))  # type: ignore[union-attr]
+    if section.source_id:
+        chunks_q = (
+            select(ContentChunk)
+            .where(
+                (ContentChunk.section_id == section_id)
+                | (ContentChunk.source_id == section.source_id)
             )
+            .limit(50)
         )
-        .limit(50)
-    ) if section.source_id else (
-        select(ContentChunk)
-        .where(ContentChunk.section_id == section_id)
-        .limit(50)
-    )
+    else:
+        chunks_q = (
+            select(ContentChunk)
+            .where(ContentChunk.section_id == section_id)
+            .limit(50)
+        )
 
     result = await db.execute(chunks_q)
     chunks = result.scalars().all()

@@ -189,14 +189,25 @@ async def get_bilibili_status(
     user: Annotated[User, Depends(get_local_user)],
     db: AsyncSession = Depends(get_db),
 ):
-    """Return whether a Bilibili account is already linked for the local user."""
+    """Return whether a Bilibili credential is configured for the current user.
+
+    Reflects the credential the worker would actually use: a stored DB row
+    takes priority, but an env-var fallback (`bilibili_sessdata`) is also
+    honoured so the import preflight stays in sync with extraction.
+    """
     result = await db.execute(
         select(BilibiliCredential).where(BilibiliCredential.user_id == user.id)
     )
     credential = result.scalar_one_or_none()
-    if credential and credential.sessdata_encrypted:
-        return {"logged_in": True, "dedeuserid": credential.dedeuserid}
-    return {"logged_in": False}
+
+    has_db = bool(credential and credential.sessdata_encrypted)
+    has_env = bool(get_settings().bilibili_sessdata)
+
+    return {
+        "logged_in": has_db or has_env,
+        "dedeuserid": credential.dedeuserid if has_db else None,
+        "source": "db" if has_db else ("env" if has_env else None),
+    }
 
 
 @router.post("/bilibili/qrcode")

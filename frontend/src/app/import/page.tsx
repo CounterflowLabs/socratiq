@@ -1,11 +1,16 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Brain, Sparkles, FileText, Upload, Loader, Play, X, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { clsx } from "clsx";
-import { createSourceFromURL, createSourceFromFile } from "@/lib/api";
+import {
+  ApiError,
+  createSourceFromURL,
+  createSourceFromFile,
+  getBilibiliStatus,
+} from "@/lib/api";
 import { useSourcesStore, useTasksStore } from "@/lib/stores";
 
 export default function ImportPage() {
@@ -19,8 +24,26 @@ export default function ImportPage() {
   const [pdfName, setPdfName] = useState("");
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [biliLoggedIn, setBiliLoggedIn] = useState<boolean | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const canSubmit = Boolean(sourceType === "bilibili" || sourceType === "youtube" ? url.trim() : pdfName);
+  const bilibiliBlocked = sourceType === "bilibili" && biliLoggedIn === false;
+
+  useEffect(() => {
+    if (sourceType !== "bilibili") return;
+    let cancelled = false;
+    getBilibiliStatus()
+      .then((status) => {
+        if (!cancelled) setBiliLoggedIn(status.logged_in);
+      })
+      .catch(() => {
+        // 状态接口失败时不卡住用户，由后端 412 兜底
+        if (!cancelled) setBiliLoggedIn(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sourceType]);
 
   const handleImport = async () => {
     if (!canSubmit) return;
@@ -56,7 +79,16 @@ export default function ImportPage() {
         router.push("/sources");
       }
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : "导入失败，请检查链接或文件后重试");
+      if (
+        err instanceof ApiError &&
+        err.status === 412 &&
+        err.code === "bilibili_credential_required"
+      ) {
+        setBiliLoggedIn(false);
+        setErrorMsg(null);
+      } else {
+        setErrorMsg(err instanceof Error ? err.message : "导入失败，请检查链接或文件后重试");
+      }
       setLoading(false);
     }
   };
@@ -89,6 +121,26 @@ export default function ImportPage() {
             <div className="mb-6 flex items-start gap-2 p-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">
               <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
               <span>{errorMsg}</span>
+            </div>
+          )}
+
+          {/* Bilibili credential gate */}
+          {bilibiliBlocked && (
+            <div
+              role="alert"
+              className="mb-6 flex items-start gap-2 p-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700"
+            >
+              <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+              <div className="flex-1">
+                <div>导入 B 站视频需要先登录 B 站账号才能抓取字幕。</div>
+                <button
+                  type="button"
+                  onClick={() => router.push("/settings")}
+                  className="mt-2 text-xs font-medium text-red-700 underline hover:no-underline bg-transparent border-none cursor-pointer p-0"
+                >
+                  前往设置登录 →
+                </button>
+              </div>
             </div>
           )}
 
@@ -216,7 +268,12 @@ export default function ImportPage() {
             </div>
           )}
 
-          <Button size="lg" className="w-full" onClick={handleImport} disabled={!canSubmit || loading}>
+          <Button
+            size="lg"
+            className="w-full"
+            onClick={handleImport}
+            disabled={!canSubmit || loading || bilibiliBlocked}
+          >
             {loading ? (
               <Loader className="w-4 h-4 animate-spin" />
             ) : (

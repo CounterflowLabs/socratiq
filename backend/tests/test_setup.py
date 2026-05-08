@@ -3,6 +3,8 @@
 from cryptography.fernet import Fernet
 import pytest
 
+from app.config import get_settings
+from app.db.models.bilibili_credential import BilibiliCredential
 from app.db.models.whisper_config import WhisperConfig
 from app.services.llm.encryption import encrypt_api_key
 
@@ -35,3 +37,59 @@ async def test_get_whisper_config_handles_unreadable_encrypted_key(
     assert data["api_model"] == "whisper-large-v3"
     assert data["local_model"] == "base"
     assert "gsk-test-whisper-key" not in str(data.get("api_key_masked"))
+
+
+@pytest.mark.asyncio
+async def test_bilibili_status_returns_logged_out_when_unconfigured(
+    client, demo_user, monkeypatch
+):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "bilibili_sessdata", "")
+
+    res = await client.get("/api/v1/setup/bilibili/status")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["logged_in"] is False
+    assert body["source"] is None
+
+
+@pytest.mark.asyncio
+async def test_bilibili_status_reports_db_credential(
+    client, db_session, demo_user, monkeypatch
+):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "bilibili_sessdata", "")
+
+    db_session.add(
+        BilibiliCredential(
+            user_id=demo_user.id,
+            sessdata_encrypted=encrypt_api_key(
+                "fake-sessdata", settings.llm_encryption_key
+            ),
+            dedeuserid="123456",
+        )
+    )
+    await db_session.flush()
+
+    res = await client.get("/api/v1/setup/bilibili/status")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["logged_in"] is True
+    assert body["source"] == "db"
+    assert body["dedeuserid"] == "123456"
+
+
+@pytest.mark.asyncio
+async def test_bilibili_status_reports_env_fallback(client, demo_user, monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "bilibili_sessdata", "env-sessdata")
+
+    res = await client.get("/api/v1/setup/bilibili/status")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["logged_in"] is True
+    assert body["source"] == "env"
+    assert body["dedeuserid"] is None

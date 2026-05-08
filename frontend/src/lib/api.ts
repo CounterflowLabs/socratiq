@@ -26,32 +26,60 @@ async function apiFetch(
   }
 }
 
-async function responseError(res: Response): Promise<Error> {
-  const body = await res.text();
-  let detail = body.trim();
+export class ApiError extends Error {
+  status: number;
+  detail: unknown;
+  code?: string;
 
-  if (detail) {
+  constructor(
+    message: string,
+    options: { status: number; detail: unknown; code?: string }
+  ) {
+    super(message);
+    this.name = "ApiError";
+    this.status = options.status;
+    this.detail = options.detail;
+    this.code = options.code;
+  }
+}
+
+async function responseError(res: Response): Promise<ApiError> {
+  const body = await res.text();
+  let detail: unknown = body.trim() || null;
+  let detailText = body.trim();
+  let code: string | undefined;
+
+  if (detailText) {
     try {
-      const parsed = JSON.parse(detail);
-      if (typeof parsed.detail === "string") {
-        detail = parsed.detail;
-      } else if (parsed.detail) {
-        detail = JSON.stringify(parsed.detail);
+      const parsed = JSON.parse(detailText);
+      if (parsed && typeof parsed === "object" && "detail" in parsed) {
+        detail = (parsed as { detail: unknown }).detail;
+        if (typeof detail === "string") {
+          detailText = detail;
+        } else if (detail && typeof detail === "object") {
+          const obj = detail as Record<string, unknown>;
+          if (typeof obj.code === "string") code = obj.code;
+          if (typeof obj.message === "string") detailText = obj.message;
+          else detailText = JSON.stringify(detail);
+        } else {
+          detailText = JSON.stringify(detail);
+        }
       } else {
-        detail = JSON.stringify(parsed);
+        detail = parsed;
+        detailText = JSON.stringify(parsed);
       }
     } catch {
       // Keep the plain response body.
     }
   }
 
-  return new Error(
-    [
-      `API 请求失败：${res.status} ${res.statusText}`,
-      `URL：${res.url || "unknown"}`,
-      `详情：${detail || "响应体为空"}`,
-    ].join("\n")
-  );
+  const message = [
+    `API 请求失败：${res.status} ${res.statusText}`,
+    `URL：${res.url || "unknown"}`,
+    `详情：${detailText || "响应体为空"}`,
+  ].join("\n");
+
+  return new ApiError(message, { status: res.status, detail, code });
 }
 
 // ─── Source APIs ───────────────────────────────────────
@@ -677,7 +705,8 @@ export async function getSetupStatus(): Promise<{
 
 export async function getBilibiliStatus(): Promise<{
   logged_in: boolean;
-  dedeuserid?: string;
+  dedeuserid?: string | null;
+  source?: "db" | "env" | null;
 }> {
   const res = await apiFetch(`${API_BASE}/setup/bilibili/status`);
   if (!res.ok) throw await responseError(res);

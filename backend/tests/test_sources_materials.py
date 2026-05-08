@@ -5,10 +5,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 from sqlalchemy import select
 
+from app.config import get_settings
+from app.db.models.bilibili_credential import BilibiliCredential
 from app.db.models.course import Course, CourseSource
 from app.db.models.source import Source
 from app.db.models.source_task import SourceTask
 from app.db.models.user import User
+from app.services.llm.encryption import encrypt_api_key
 
 
 @pytest.mark.asyncio
@@ -34,6 +37,77 @@ async def test_create_source_persists_processing_task(client, db_session):
     assert tasks[0].task_type == "source_processing"
     assert tasks[0].status == "pending"
     assert tasks[0].celery_task_id == "fake-task-001"
+
+
+@pytest.mark.asyncio
+async def test_create_bilibili_source_requires_credential(
+    client, db_session, demo_user, monkeypatch
+):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "bilibili_sessdata", "")
+
+    with patch("app.api.routes.sources.ingest_source") as mock_task:
+        res = await client.post("/api/v1/sources", data={
+            "url": "https://www.bilibili.com/video/BV1xx411c7XW",
+        })
+
+    assert res.status_code == 412
+    body = res.json()
+    assert body["detail"]["code"] == "bilibili_credential_required"
+
+    sources = (await db_session.execute(select(Source))).scalars().all()
+    assert sources == []
+    mock_task.delay.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_bilibili_source_passes_when_db_credential_present(
+    client, db_session, demo_user, monkeypatch
+):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "bilibili_sessdata", "")
+
+    db_session.add(
+        BilibiliCredential(
+            user_id=demo_user.id,
+            sessdata_encrypted=encrypt_api_key(
+                "fake-sessdata", settings.llm_encryption_key
+            ),
+        )
+    )
+    await db_session.flush()
+
+    with patch("app.api.routes.sources.ingest_source") as mock_task:
+        mock_result = MagicMock()
+        mock_result.id = "fake-bili-task"
+        mock_task.delay.return_value = mock_result
+
+        res = await client.post("/api/v1/sources", data={
+            "url": "https://www.bilibili.com/video/BV1xx411c7XW",
+        })
+
+    assert res.status_code == 201
+    mock_task.delay.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_create_bilibili_source_passes_when_env_credential_present(
+    client, db_session, demo_user, monkeypatch
+):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "bilibili_sessdata", "env-sessdata")
+
+    with patch("app.api.routes.sources.ingest_source") as mock_task:
+        mock_result = MagicMock()
+        mock_result.id = "fake-bili-env-task"
+        mock_task.delay.return_value = mock_result
+
+        res = await client.post("/api/v1/sources", data={
+            "url": "https://www.bilibili.com/video/BV1xx411c7XW",
+        })
+
+    assert res.status_code == 201
+    mock_task.delay.assert_called_once()
 
 
 @pytest.mark.asyncio

@@ -564,46 +564,9 @@ async def _ingest_source_async(task, source_id: str) -> dict:
 
 async def _get_bilibili_credential(db):
     """Load a stored Bilibili credential, falling back to environment variables."""
-    from bilibili_api import Credential
-    from sqlalchemy import select
+    from app.services.bilibili_credential import load_bilibili_credential
 
-    from app.db.models.bilibili_credential import BilibiliCredential
-    from app.services.llm.encryption import decrypt_api_key
-
-    settings = get_settings()
-
-    try:
-        result = await db.execute(select(BilibiliCredential).limit(1))
-        stored = result.scalar_one_or_none()
-        if stored and stored.sessdata_encrypted:
-            sessdata = decrypt_api_key(
-                stored.sessdata_encrypted,
-                settings.llm_encryption_key,
-            )
-            bili_jct = (
-                decrypt_api_key(
-                    stored.bili_jct_encrypted,
-                    settings.llm_encryption_key,
-                )
-                if stored.bili_jct_encrypted
-                else ""
-            )
-            return Credential(sessdata=sessdata, bili_jct=bili_jct)
-    except Exception:
-        logger.warning(
-            "Failed to load stored Bilibili credential; falling back to env.",
-            exc_info=True,
-        )
-
-    sessdata = getattr(settings, "bilibili_sessdata", "")
-    if sessdata:
-        return Credential(
-            sessdata=sessdata,
-            bili_jct=getattr(settings, "bilibili_bili_jct", ""),
-            buvid3=getattr(settings, "bilibili_buvid3", ""),
-        )
-
-    return None
+    return await load_bilibili_credential(db)
 
 
 async def _get_whisper_config(db) -> dict:

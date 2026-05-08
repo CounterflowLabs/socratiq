@@ -16,6 +16,7 @@ from app.db.models.source import Source
 from app.db.models.source_task import SourceTask
 from app.db.models.user import User
 from app.models.source import SourceListResponse, SourceResponse, SourceTaskSummary
+from app.services.bilibili_credential import has_bilibili_credential
 from app.services.content_key import extract_content_key
 from app.services.source_tasks import create_source_task
 from app.worker.tasks.content_ingestion import ingest_source, clone_source
@@ -78,6 +79,15 @@ async def create_source(
             source_type = _detect_source_type(url)
         if source_type not in ("bilibili", "youtube"):
             raise HTTPException(400, f"Unsupported source type: {source_type}")
+
+    if source_type == "bilibili" and not await has_bilibili_credential(db):
+        raise HTTPException(
+            status_code=412,
+            detail={
+                "code": "bilibili_credential_required",
+                "message": "导入 B 站视频需要先登录 B 站账号才能抓取字幕。",
+            },
+        )
 
     content_key = extract_content_key(
         source_type=source_type,

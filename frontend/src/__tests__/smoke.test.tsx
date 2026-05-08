@@ -176,6 +176,22 @@ describe("Dashboard", () => {
 // ─── Import Tests ────────────────────────────────────
 
 describe("Import Page", () => {
+  beforeEach(() => {
+    globalThis.fetch = vi.fn((url: RequestInfo | URL) => {
+      const u = typeof url === "string" ? url : url.toString();
+      if (u.includes("/setup/bilibili/status")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ logged_in: true, source: "db" }),
+        }) as ReturnType<typeof fetch>;
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({}),
+      }) as ReturnType<typeof fetch>;
+    }) as unknown as typeof fetch;
+  });
+
   it("renders both source type tabs", async () => {
     const ImportPage = (await import("@/app/import/page")).default;
     render(<ImportPage />);
@@ -198,6 +214,88 @@ describe("Import Page", () => {
       );
       expect(input).toBeInTheDocument();
     });
+  });
+
+  it("blocks bilibili import and shows settings link when no credential is configured", async () => {
+    const push = vi.fn();
+    vi.doMock("next/navigation", () => ({
+      useRouter: () => ({ push, back: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
+      useSearchParams: () => new URLSearchParams(),
+      usePathname: () => "/import",
+    }));
+
+    globalThis.fetch = vi.fn((url: RequestInfo | URL) => {
+      const u = typeof url === "string" ? url : url.toString();
+      if (u.includes("/setup/bilibili/status")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ logged_in: false, source: null }),
+        }) as ReturnType<typeof fetch>;
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) }) as ReturnType<typeof fetch>;
+    }) as unknown as typeof fetch;
+
+    vi.resetModules();
+    const ImportPage = (await import("@/app/import/page")).default;
+    render(<ImportPage />);
+
+    const banner = await screen.findByRole("alert");
+    expect(banner.textContent).toContain("登录 B 站账号");
+
+    const submitBtn = screen.getByRole("button", { name: "开始导入" });
+    expect(submitBtn).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: /前往设置登录/ }));
+    expect(push).toHaveBeenCalledWith("/settings");
+  });
+
+  it("falls back to credential-required banner on 412 from create_source", async () => {
+    vi.doMock("next/navigation", () => ({
+      useRouter: () => ({ push: vi.fn(), back: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
+      useSearchParams: () => new URLSearchParams(),
+      usePathname: () => "/import",
+    }));
+
+    let statusCalls = 0;
+    globalThis.fetch = vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
+      const u = typeof url === "string" ? url : url.toString();
+      if (u.includes("/setup/bilibili/status")) {
+        statusCalls += 1;
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ logged_in: true, source: "db" }),
+        }) as ReturnType<typeof fetch>;
+      }
+      if (u.includes("/sources") && init?.method === "POST") {
+        const body = JSON.stringify({
+          detail: {
+            code: "bilibili_credential_required",
+            message: "需要登录 B 站",
+          },
+        });
+        return Promise.resolve({
+          ok: false,
+          status: 412,
+          statusText: "Precondition Failed",
+          url: u,
+          text: () => Promise.resolve(body),
+        }) as ReturnType<typeof fetch>;
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) }) as ReturnType<typeof fetch>;
+    }) as unknown as typeof fetch;
+
+    vi.resetModules();
+    const ImportPage = (await import("@/app/import/page")).default;
+    render(<ImportPage />);
+
+    fireEvent.change(
+      await screen.findByPlaceholderText("https://www.bilibili.com/video/BV..."),
+      { target: { value: "https://www.bilibili.com/video/BV1xx" } }
+    );
+    fireEvent.click(screen.getByRole("button", { name: "开始导入" }));
+
+    await screen.findByRole("alert");
+    expect(statusCalls).toBeGreaterThanOrEqual(1);
   });
 
   it("shows upload area on PDF tab", async () => {
@@ -225,11 +323,23 @@ describe("Import Page", () => {
       usePathname: () => "/import",
     }));
 
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ id: "src1", type: "bilibili", status: "pending", task_id: "t1" }),
+    let createCalls = 0;
+    const fetchMock = vi.fn((url: RequestInfo | URL) => {
+      const u = typeof url === "string" ? url : url.toString();
+      if (u.includes("/setup/bilibili/status")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ logged_in: true, source: "db" }),
+        }) as ReturnType<typeof fetch>;
+      }
+      createCalls += 1;
+      return Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({ id: "src1", type: "bilibili", status: "pending", task_id: "t1" }),
+      }) as ReturnType<typeof fetch>;
     });
-    globalThis.fetch = fetchMock as typeof fetch;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
 
     vi.resetModules();
     const ImportPage = (await import("@/app/import/page")).default;
@@ -240,7 +350,7 @@ describe("Import Page", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "开始导入" }));
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(createCalls).toBe(1));
     await waitFor(() => expect(push).toHaveBeenCalledWith("/sources"));
   });
 });

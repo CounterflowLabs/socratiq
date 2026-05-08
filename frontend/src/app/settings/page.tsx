@@ -617,7 +617,10 @@ export default function SettingsPage() {
                 <option value="large">large（最准）</option>
               </select>
               <p className="mt-1 text-xs text-gray-400">
-                当前 Docker 镜像还没有内置本地 Whisper 依赖；如果使用本地模式，需要额外安装模型运行时。
+                Docker 镜像默认不含本地 Whisper 依赖，且容器内拿不到 Metal/GPU 加速。
+                推荐在宿主机另起一个 OpenAI 兼容的 Whisper 服务（如 speaches），
+                再切回上方的 API 模式、把 Base URL 指向 <code>http://host.docker.internal:8001/v1</code>。
+                完整方案见 <code>docs/whisper-setup.md</code>。
               </p>
             </div>
           )}

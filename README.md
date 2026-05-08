@@ -33,6 +33,7 @@ Open [http://localhost:3000](http://localhost:3000). The setup page will guide y
 - One LLM backend:
   - **Ollama** (recommended for getting started): [Install Ollama](https://ollama.ai), then `ollama pull qwen2.5`
   - **API key** for OpenAI, Anthropic, or DeepSeek
+- (Optional) Whisper for video without subtitles — see [docs/whisper-setup.md](docs/whisper-setup.md). Cloud API (Groq) is the easy path; for offline use, run a Whisper server on the host and point the backend at it.
 
 ## Supported LLM Providers
 

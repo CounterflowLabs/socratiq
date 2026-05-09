@@ -626,20 +626,31 @@ export default function SettingsPage() {
               value={whisperEdits.mode}
               onChange={(e) => {
                 const next = getWhisperPreset(e.target.value);
-                setWhisperEdits((prev) => ({
-                  ...prev,
-                  mode: next.id,
-                  // Prefill defaults only when the user hasn't typed something
-                  // custom; this keeps user edits intact when they switch back.
-                  api_base_url:
-                    prev.api_base_url && prev.api_base_url !== ""
-                      ? prev.api_base_url
-                      : next.defaultBaseUrl ?? "",
-                  api_model:
-                    prev.api_model && prev.api_model !== ""
-                      ? prev.api_model
-                      : next.defaultModel ?? "",
-                }));
+                setWhisperEdits((prev) => {
+                  // If the current value matches any known preset's default,
+                  // it's auto-filled — overwrite with the new preset's default.
+                  // If it's something the user typed manually, preserve it.
+                  const isAutoUrl =
+                    !prev.api_base_url ||
+                    whisperPresets.some(
+                      (p) => p.defaultBaseUrl === prev.api_base_url
+                    );
+                  const isAutoModel =
+                    !prev.api_model ||
+                    whisperPresets.some(
+                      (p) => p.defaultModel === prev.api_model
+                    );
+                  return {
+                    ...prev,
+                    mode: next.id,
+                    api_base_url: isAutoUrl
+                      ? next.defaultBaseUrl ?? ""
+                      : prev.api_base_url,
+                    api_model: isAutoModel
+                      ? next.defaultModel ?? ""
+                      : prev.api_model,
+                  };
+                });
               }}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             >

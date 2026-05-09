@@ -54,6 +54,88 @@ function getProviderPreset(id: ProviderPreset) {
   return providerPresets.find((preset) => preset.id === id) ?? providerPresets[0];
 }
 
+type WhisperProtocol = "openai_compat" | "whispercpp" | "local";
+type WhisperPresetId =
+  | "groq"
+  | "openai"
+  | "siliconflow"
+  | "whispercpp"
+  | "openai_compat"
+  | "local";
+
+const whisperPresets: Array<{
+  id: WhisperPresetId;
+  label: string;
+  protocol: WhisperProtocol;
+  defaultBaseUrl?: string;
+  defaultModel?: string;
+  requiresKey?: boolean;
+  hint?: string;
+}> = [
+  {
+    id: "groq",
+    label: "Groq（whisper-large-v3，免费额度大）",
+    protocol: "openai_compat",
+    defaultBaseUrl: "https://api.groq.com/openai/v1",
+    defaultModel: "whisper-large-v3",
+    requiresKey: true,
+  },
+  {
+    id: "openai",
+    label: "OpenAI",
+    protocol: "openai_compat",
+    defaultBaseUrl: "https://api.openai.com/v1",
+    defaultModel: "whisper-1",
+    requiresKey: true,
+  },
+  {
+    id: "siliconflow",
+    label: "SiliconFlow（国内可用）",
+    protocol: "openai_compat",
+    defaultBaseUrl: "https://api.siliconflow.cn/v1",
+    defaultModel: "FunAudioLLM/SenseVoiceSmall",
+    requiresKey: true,
+  },
+  {
+    id: "whispercpp",
+    label: "whisper.cpp（宿主机本地，Metal/GPU 加速）",
+    protocol: "whispercpp",
+    defaultBaseUrl: "http://host.docker.internal:8001",
+    defaultModel: "",
+    requiresKey: false,
+    hint: "在宿主机启动 whisper-server（详见 docs/whisper-setup.md）。后端容器通过 host.docker.internal 访问。",
+  },
+  {
+    id: "openai_compat",
+    label: "OpenAI 兼容（自定义 URL）",
+    protocol: "openai_compat",
+    requiresKey: true,
+  },
+  {
+    id: "local",
+    label: "进程内 Whisper（需 [whisper] extra）",
+    protocol: "local",
+    hint: "在 backend 镜像里跑，纯 CPU、无 Metal/GPU；不推荐生产使用。",
+  },
+];
+
+function getWhisperPreset(id: string) {
+  return (
+    whisperPresets.find((preset) => preset.id === id) ??
+    // Legacy rows used `mode='api'` for any OpenAI-compatible service —
+    // map them to the custom OpenAI-compat preset so existing data still loads.
+    whisperPresets.find((preset) => preset.id === "openai_compat")!
+  );
+}
+
+function guessLegacyPreset(baseUrl: string): WhisperPresetId {
+  const url = baseUrl.toLowerCase();
+  if (url.includes("groq.com")) return "groq";
+  if (url.includes("openai.com")) return "openai";
+  if (url.includes("siliconflow")) return "siliconflow";
+  return "openai_compat";
+}
+
 export default function SettingsPage() {
   const [models, setModels] = useState<ModelConfigResponse[]>([]);
   const [routes, setRoutes] = useState<ModelRouteResponse[]>([]);
@@ -96,7 +178,7 @@ export default function SettingsPage() {
     local_model?: string;
   } | null>(null);
   const [whisperEdits, setWhisperEdits] = useState({
-    mode: "api",
+    mode: "groq" as string,
     api_base_url: "",
     api_model: "",
     api_key: "",
@@ -167,8 +249,15 @@ export default function SettingsPage() {
       setRoutes(r);
       setBiliStatus(b);
       setWhisperConfig(w);
+      // Legacy rows persisted mode="api" for any OpenAI-compatible service;
+      // pick a preset based on the stored base URL so the dropdown lands sensibly.
+      const storedMode = w.mode || "groq";
+      const initialPreset =
+        storedMode === "api"
+          ? guessLegacyPreset(w.api_base_url || "")
+          : storedMode;
       setWhisperEdits({
-        mode: w.mode || "api",
+        mode: initialPreset,
         api_base_url: w.api_base_url || "",
         api_model: w.api_model || "",
         api_key: "",
@@ -531,73 +620,42 @@ export default function SettingsPage() {
 
         <div className="space-y-4">
           <div>
-            <label className="block text-xs text-gray-600 mb-1">模式</label>
+            <label className="block text-xs text-gray-600 mb-1">Provider</label>
             <select
               value={whisperEdits.mode}
-              onChange={(e) =>
-                setWhisperEdits((prev) => ({ ...prev, mode: e.target.value }))
-              }
+              onChange={(e) => {
+                const next = getWhisperPreset(e.target.value);
+                setWhisperEdits((prev) => ({
+                  ...prev,
+                  mode: next.id,
+                  // Prefill defaults only when the user hasn't typed something
+                  // custom; this keeps user edits intact when they switch back.
+                  api_base_url:
+                    prev.api_base_url && prev.api_base_url !== ""
+                      ? prev.api_base_url
+                      : next.defaultBaseUrl ?? "",
+                  api_model:
+                    prev.api_model && prev.api_model !== ""
+                      ? prev.api_model
+                      : next.defaultModel ?? "",
+                }));
+              }}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
-              <option value="api">API（Groq / OpenAI / SiliconFlow 等）</option>
-              <option value="local">本地模型</option>
+              {whisperPresets.map((preset) => (
+                <option key={preset.id} value={preset.id}>
+                  {preset.label}
+                </option>
+              ))}
             </select>
+            {getWhisperPreset(whisperEdits.mode).hint && (
+              <p className="mt-1 text-xs text-gray-500">
+                {getWhisperPreset(whisperEdits.mode).hint}
+              </p>
+            )}
           </div>
 
-          {whisperEdits.mode === "api" ? (
-            <>
-              <div>
-                <label className="block text-xs text-gray-600 mb-1">API Base URL</label>
-                <input
-                  type="text"
-                  value={whisperEdits.api_base_url}
-                  onChange={(e) =>
-                    setWhisperEdits((prev) => ({
-                      ...prev,
-                      api_base_url: e.target.value,
-                    }))
-                  }
-                  placeholder="https://api.groq.com/openai/v1"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-600 mb-1">模型</label>
-                <input
-                  type="text"
-                  value={whisperEdits.api_model}
-                  onChange={(e) =>
-                    setWhisperEdits((prev) => ({
-                      ...prev,
-                      api_model: e.target.value,
-                    }))
-                  }
-                  placeholder="whisper-large-v3 或 whisper-1"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-600 mb-1">API Key</label>
-                <input
-                  type="password"
-                  value={whisperEdits.api_key}
-                  onChange={(e) =>
-                    setWhisperEdits((prev) => ({
-                      ...prev,
-                      api_key: e.target.value,
-                    }))
-                  }
-                  placeholder={whisperConfig?.api_key_masked || "输入 API Key"}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                {whisperConfig?.api_key_masked && !whisperEdits.api_key && (
-                  <p className="mt-1 text-xs text-gray-400">
-                    当前: {whisperConfig.api_key_masked}（留空表示不修改）
-                  </p>
-                )}
-              </div>
-            </>
-          ) : (
+          {getWhisperPreset(whisperEdits.mode).protocol === "local" ? (
             <div>
               <label className="block text-xs text-gray-600 mb-1">本地模型大小</label>
               <select
@@ -616,13 +674,74 @@ export default function SettingsPage() {
                 <option value="medium">medium</option>
                 <option value="large">large（最准）</option>
               </select>
-              <p className="mt-1 text-xs text-gray-400">
-                Docker 镜像默认不含本地 Whisper 依赖，且容器内拿不到 Metal/GPU 加速。
-                推荐在宿主机另起一个 OpenAI 兼容的 Whisper 服务（如 speaches），
-                再切回上方的 API 模式、把 Base URL 指向 <code>http://host.docker.internal:8001/v1</code>。
-                完整方案见 <code>docs/whisper-setup.md</code>。
-              </p>
             </div>
+          ) : (
+            <>
+              <div>
+                <label className="block text-xs text-gray-600 mb-1">
+                  {getWhisperPreset(whisperEdits.mode).protocol === "whispercpp"
+                    ? "Server URL（whisper.cpp 根地址，自动追加 /inference）"
+                    : "API Base URL（OpenAI 兼容根地址，自动追加 /audio/transcriptions）"}
+                </label>
+                <input
+                  type="text"
+                  value={whisperEdits.api_base_url}
+                  onChange={(e) =>
+                    setWhisperEdits((prev) => ({
+                      ...prev,
+                      api_base_url: e.target.value,
+                    }))
+                  }
+                  placeholder={
+                    getWhisperPreset(whisperEdits.mode).defaultBaseUrl ||
+                    "https://example.com/v1"
+                  }
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              {getWhisperPreset(whisperEdits.mode).protocol === "openai_compat" && (
+                <div>
+                  <label className="block text-xs text-gray-600 mb-1">模型</label>
+                  <input
+                    type="text"
+                    value={whisperEdits.api_model}
+                    onChange={(e) =>
+                      setWhisperEdits((prev) => ({
+                        ...prev,
+                        api_model: e.target.value,
+                      }))
+                    }
+                    placeholder={
+                      getWhisperPreset(whisperEdits.mode).defaultModel ||
+                      "whisper-large-v3"
+                    }
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              )}
+              {getWhisperPreset(whisperEdits.mode).requiresKey && (
+                <div>
+                  <label className="block text-xs text-gray-600 mb-1">API Key</label>
+                  <input
+                    type="password"
+                    value={whisperEdits.api_key}
+                    onChange={(e) =>
+                      setWhisperEdits((prev) => ({
+                        ...prev,
+                        api_key: e.target.value,
+                      }))
+                    }
+                    placeholder={whisperConfig?.api_key_masked || "输入 API Key"}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  {whisperConfig?.api_key_masked && !whisperEdits.api_key && (
+                    <p className="mt-1 text-xs text-gray-400">
+                      当前: {whisperConfig.api_key_masked}（留空表示不修改）
+                    </p>
+                  )}
+                </div>
+              )}
+            </>
           )}
 
           <div className="flex items-center gap-3">

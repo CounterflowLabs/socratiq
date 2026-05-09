@@ -6,6 +6,8 @@ import logging
 import tempfile
 from pathlib import Path
 
+import httpx
+
 logger = logging.getLogger(__name__)
 
 MAX_API_AUDIO_BYTES = 24 * 1024 * 1024
@@ -13,13 +15,27 @@ TARGET_API_CHUNK_BYTES = 20 * 1024 * 1024
 API_AUDIO_BITRATE = "32k"
 API_AUDIO_SAMPLE_RATE = "16000"
 
+LOCAL_MODE = "local"
+WHISPERCPP_MODE = "whispercpp"
+OPENAI_COMPAT_MODES = {"api", "openai_compat", "groq", "openai", "siliconflow"}
+
 
 class WhisperService:
-    """Audio-to-text transcription via Whisper-compatible API or local model."""
+    """Audio-to-text transcription via a Whisper-compatible HTTP API or local model.
+
+    `mode` selects the transport:
+      - ``local`` — in-process ``openai-whisper`` library (requires the
+        optional ``[whisper]`` extra installed in the runtime).
+      - ``whispercpp`` — call a host-run ``whisper.cpp`` server's
+        ``POST <base>/inference`` endpoint (no auth header sent).
+      - any of ``api`` / ``openai_compat`` / ``groq`` / ``openai`` /
+        ``siliconflow`` — call ``POST <base>/audio/transcriptions`` with a
+        Bearer token, OpenAI-compatible multipart upload.
+    """
 
     def __init__(
         self,
-        mode: str = "api",
+        mode: str = "openai_compat",
         model: str = "base",
         api_key: str = "",
         api_base_url: str = "https://api.groq.com/openai/v1",
@@ -36,11 +52,11 @@ class WhisperService:
         audio_path = await self._download_audio(url)
         cleanup_paths: list[Path] = []
         try:
-            if self._mode == "api":
-                segments, extra_paths = await self._transcribe_api(audio_path)
-                cleanup_paths.extend(extra_paths)
-                return segments
-            return await self._transcribe_local(audio_path)
+            if self._mode == LOCAL_MODE:
+                return await self._transcribe_local(audio_path)
+            segments, extra_paths = await self._transcribe_remote(audio_path)
+            cleanup_paths.extend(extra_paths)
+            return segments
         finally:
             audio_path.unlink(missing_ok=True)
             for path in cleanup_paths:
@@ -86,56 +102,85 @@ class WhisperService:
         logger.info("Downloaded audio: %s (%s bytes)", output_path, size)
         return output_path
 
-    async def _transcribe_api(self, audio_path: Path) -> tuple[list[dict], list[Path]]:
-        """Transcribe via Whisper-compatible API, chunking oversized files when needed."""
-        import openai
+    async def _transcribe_remote(self, audio_path: Path) -> tuple[list[dict], list[Path]]:
+        """Transcribe via a Whisper-compatible HTTP service, chunking oversized files."""
+        url, extra_data, headers = self._build_remote_request()
 
-        if not self._api_key:
-            raise RuntimeError(
-                "Whisper API 未配置。请在设置页填写 API Key，或切换到本地 Whisper 模式。"
-            )
-
-        client = openai.AsyncOpenAI(
-            api_key=self._api_key,
-            base_url=self._api_base_url or None,
-        )
         upload_paths: list[tuple[Path, float]] = [(audio_path, 0.0)]
         cleanup_paths: list[Path] = []
 
-        try:
-            if audio_path.stat().st_size > MAX_API_AUDIO_BYTES:
-                upload_paths, cleanup_paths = await self._prepare_api_chunks(audio_path)
+        if audio_path.stat().st_size > MAX_API_AUDIO_BYTES:
+            upload_paths, cleanup_paths = await self._prepare_api_chunks(audio_path)
 
-            segments: list[dict] = []
+        segments: list[dict] = []
+        async with httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=30.0)) as client:
             for chunk_path, offset in upload_paths:
-                response = await client.audio.transcriptions.create(
-                    model=self._api_model,
-                    file=chunk_path,
-                    response_format="verbose_json",
-                    timestamp_granularities=["segment"],
-                )
-                for seg in response.segments or []:
+                with chunk_path.open("rb") as fp:
+                    files = {"file": (chunk_path.name, fp, "audio/mpeg")}
+                    response = await client.post(
+                        url, headers=headers, data=extra_data, files=files
+                    )
+                if response.status_code == 413:
+                    raise RuntimeError(
+                        "Whisper 音频文件仍然过大，已超过转写服务的上传限制。"
+                        " 可以换更短的视频，或改用带现成字幕的内容。"
+                    )
+                if response.status_code >= 400:
+                    raise RuntimeError(
+                        f"Whisper {self._mode} 转写失败 (HTTP {response.status_code}): "
+                        f"{response.text[:500]}"
+                    )
+                body = response.json()
+                for seg in body.get("segments") or []:
                     segments.append(
                         {
-                            "text": seg.text.strip(),
-                            "start": seg.start + offset,
-                            "end": seg.end + offset,
+                            "text": (seg.get("text") or "").strip(),
+                            "start": float(seg["start"]) + offset,
+                            "end": float(seg["end"]) + offset,
                         }
                     )
 
-            logger.info(
-                "Whisper API transcribed %s segments across %s upload(s)",
-                len(segments),
-                len(upload_paths),
+        logger.info(
+            "Whisper (%s) transcribed %s segments across %s upload(s)",
+            self._mode,
+            len(segments),
+            len(upload_paths),
+        )
+        return segments, cleanup_paths
+
+    def _build_remote_request(self) -> tuple[str, dict, dict]:
+        """Build (url, form-data, headers) for the configured Whisper mode.
+
+        Returns a fully-qualified URL — base_url is treated as the service root,
+        and the per-mode endpoint suffix is appended here.
+        """
+        base = (self._api_base_url or "").rstrip("/")
+        if not base:
+            raise RuntimeError("Whisper API Base URL 未配置。")
+
+        if self._mode == WHISPERCPP_MODE:
+            return (
+                f"{base}/inference",
+                {"response_format": "verbose_json"},
+                {},
             )
-            return segments, cleanup_paths
-        except openai.APIStatusError as exc:
-            if exc.status_code == 413:
+
+        if self._mode in OPENAI_COMPAT_MODES:
+            if not self._api_key:
                 raise RuntimeError(
-                    "Whisper 音频文件仍然过大，已超过转写服务的上传限制。"
-                    " 可以换更短的视频，或改用带现成字幕的内容。"
-                ) from exc
-            raise
+                    "Whisper API 未配置。请在设置页填写 API Key，或切换到本地 Whisper 模式。"
+                )
+            return (
+                f"{base}/audio/transcriptions",
+                {
+                    "model": self._api_model,
+                    "response_format": "verbose_json",
+                    "timestamp_granularities[]": "segment",
+                },
+                {"Authorization": f"Bearer {self._api_key}"},
+            )
+
+        raise RuntimeError(f"Whisper 未知 mode: {self._mode!r}")
 
     async def _transcribe_local(self, audio_path: Path) -> list[dict]:
         """Transcribe via local whisper model."""

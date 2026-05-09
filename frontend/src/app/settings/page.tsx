@@ -163,7 +163,8 @@ export default function SettingsPage() {
   const [adding, setAdding] = useState(false);
   const [biliStatus, setBiliStatus] = useState<{
     logged_in: boolean;
-    dedeuserid?: string;
+    dedeuserid?: string | null;
+    source?: "db" | "env" | null;
   } | null>(null);
   const [biliQrcode, setBiliQrcode] = useState<string | null>(null);
   const [biliQrStatus, setBiliQrStatus] = useState<string | null>(null);

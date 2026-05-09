@@ -1,15 +1,9 @@
 """Celery application configuration."""
 
-import asyncio
-import logging
-
 from celery import Celery
-from celery.signals import worker_process_init, worker_process_shutdown
 
 from app.config import get_settings
-from app.worker.resources import dispose_worker_resources, init_worker_resources
 
-logger = logging.getLogger(__name__)
 settings = get_settings()
 
 celery_app = Celery(
@@ -28,20 +22,6 @@ celery_app.conf.update(
     task_acks_late=True,
     worker_prefetch_multiplier=1,
 )
-
-
-@worker_process_init.connect
-def _init_resources(**_kwargs) -> None:
-    init_worker_resources()
-
-
-@worker_process_shutdown.connect
-def _dispose_resources(**_kwargs) -> None:
-    try:
-        asyncio.run(dispose_worker_resources())
-    except RuntimeError:
-        # If a loop is already running (rare during shutdown), skip dispose.
-        logger.warning("Skipping worker resource dispose (event loop unavailable)")
 
 
 # Explicitly import tasks so they register with Celery

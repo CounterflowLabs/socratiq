@@ -16,13 +16,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from celery.signals import worker_ready
 from sqlalchemy import select
 
 from app.db.models.source_task import SourceTask
-from app.worker.resources import get_worker_resources
+from app.worker.resources import _create_worker_resources
 
 logger = logging.getLogger(__name__)
 
@@ -33,48 +33,52 @@ async def _reap_pending_course_tasks() -> int:
     """Re-dispatch pending course_generation tasks older than the grace window."""
     from app.services.source_tasks import dispatch_course_generation
 
-    resources = get_worker_resources()
-    cutoff = datetime.now(timezone.utc) - _REAPER_GRACE
+    resources = _create_worker_resources()
+    # source_tasks.created_at is TIMESTAMP WITHOUT TIME ZONE; compare with naive UTC.
+    cutoff = datetime.utcnow() - _REAPER_GRACE
     redispatched = 0
 
-    async with resources.session_factory() as db:
-        rows = (
-            await db.execute(
-                select(SourceTask)
-                .where(
-                    SourceTask.task_type == "course_generation",
-                    SourceTask.status == "pending",
-                    SourceTask.created_at < cutoff,
+    try:
+        async with resources.session_factory() as db:
+            rows = (
+                await db.execute(
+                    select(SourceTask)
+                    .where(
+                        SourceTask.task_type == "course_generation",
+                        SourceTask.status == "pending",
+                        SourceTask.created_at < cutoff,
+                    )
                 )
-            )
-        ).scalars().all()
+            ).scalars().all()
 
-        for task in rows:
-            if not task.celery_task_id:
-                continue
-            payload = {"source_id": str(task.source_id)}
-            user_id = (
-                task.metadata_.get("pending_user_id")
-                if isinstance(task.metadata_, dict)
-                else None
-            )
-            try:
-                dispatch_course_generation(
-                    payload=payload,
-                    task_id=task.celery_task_id,
-                    user_id=user_id,
+            for task in rows:
+                if not task.celery_task_id:
+                    continue
+                payload = {"source_id": str(task.source_id)}
+                user_id = (
+                    task.metadata_.get("pending_user_id")
+                    if isinstance(task.metadata_, dict)
+                    else None
                 )
-                redispatched += 1
-                logger.info(
-                    "Reaper re-dispatched course_generation task %s (source %s)",
-                    task.celery_task_id,
-                    task.source_id,
-                )
-            except Exception:
-                logger.exception(
-                    "Reaper failed to re-dispatch task %s",
-                    task.celery_task_id,
-                )
+                try:
+                    dispatch_course_generation(
+                        payload=payload,
+                        task_id=task.celery_task_id,
+                        user_id=user_id,
+                    )
+                    redispatched += 1
+                    logger.info(
+                        "Reaper re-dispatched course_generation task %s (source %s)",
+                        task.celery_task_id,
+                        task.source_id,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Reaper failed to re-dispatch task %s",
+                        task.celery_task_id,
+                    )
+    finally:
+        await resources.engine.dispose()
 
     return redispatched
 

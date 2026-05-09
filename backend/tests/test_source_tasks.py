@@ -108,7 +108,7 @@ def test_dispatch_course_generation_uses_preallocated_task_id(monkeypatch):
 def test_generate_course_task_ignores_legacy_goal_kwarg(monkeypatch):
     captured: dict[str, object] = {}
 
-    async def fake_generate_course_async(task, source_id, user_id):
+    async def fake_generate_course_async(task, source_id, user_id, resources):
         captured.update(
             {
                 "task": task,
@@ -307,7 +307,7 @@ async def test_generate_course_marks_task_success_with_course_id(
 
     monkeypatch.setattr(
         course_generation,
-        "get_worker_resources",
+        "_create_worker_resources",
         lambda: fake_resources,
     )
 
@@ -320,7 +320,8 @@ async def test_generate_course_marks_task_success_with_course_id(
     result = await course_generation._generate_course_async(
         FakeTask(),
         str(source.id),
-        user_id=str(demo_user.id),
+        str(demo_user.id),
+        fake_resources,
     )
 
     task_row = (
@@ -437,7 +438,7 @@ async def test_generate_course_legacy_metadata_without_asset_plan_still_creates_
 
     monkeypatch.setattr(
         course_generation,
-        "get_worker_resources",
+        "_create_worker_resources",
         lambda: fake_resources,
     )
 
@@ -448,7 +449,8 @@ async def test_generate_course_legacy_metadata_without_asset_plan_still_creates_
     result = await course_generation._generate_course_async(
         FakeTask(),
         str(source.id),
-        user_id=str(demo_user.id),
+        str(demo_user.id),
+        fake_resources,
     )
 
     task_row = (

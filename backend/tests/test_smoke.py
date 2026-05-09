@@ -667,7 +667,7 @@ async def test_course_generation_reuses_source_metadata_without_regenerating(
 
     monkeypatch.setattr(
         course_generation,
-        "get_worker_resources",
+        "_create_worker_resources",
         lambda: fake_resources,
     )
 
@@ -686,7 +686,8 @@ async def test_course_generation_reuses_source_metadata_without_regenerating(
     result = await course_generation._generate_course_async(
         FakeTask(),
         str(source.id),
-        user_id=str(demo_user.id),
+        str(demo_user.id),
+        fake_resources,
     )
 
     created_course = await db_session.get(Course, uuid.UUID(result["course_id"]))

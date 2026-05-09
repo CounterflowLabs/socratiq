@@ -70,7 +70,7 @@ def test_create_worker_resources_builds_dedicated_session_factory(monkeypatch):
     }
 
 
-def test_get_worker_resources_caches_singleton(monkeypatch):
+def test_create_worker_resources_returns_fresh_session_factory_each_time(monkeypatch):
     from app.worker import resources as worker_resources
 
     session_factories = [object(), object()]
@@ -105,18 +105,16 @@ def test_get_worker_resources_caches_singleton(monkeypatch):
     monkeypatch.setattr(worker_resources, "async_sessionmaker", fake_async_sessionmaker)
     monkeypatch.setattr(worker_resources, "ModelRouter", FakeModelRouter)
 
-    worker_resources.reset_worker_resources_for_test()
-    first = worker_resources.get_worker_resources()
-    second = worker_resources.get_worker_resources()
+    first = worker_resources._create_worker_resources()
+    second = worker_resources._create_worker_resources()
 
-    assert first is second
-    assert calls["engines"] == 1
-    assert calls["factories"] == 1
     assert first.engine is engine_instances[0]
+    assert second.engine is engine_instances[1]
     assert first.session_factory is session_factories[0]
+    assert second.session_factory is session_factories[1]
+    assert first.session_factory is not second.session_factory
     assert first.model_router.session_factory is session_factories[0]
-
-    worker_resources.reset_worker_resources_for_test()
+    assert second.model_router.session_factory is session_factories[1]
 
 
 @pytest.mark.asyncio
@@ -216,7 +214,7 @@ async def test_ingest_source_queues_course_generation_when_pipeline_finishes(
 
     monkeypatch.setattr(
         content_ingestion,
-        "get_worker_resources",
+        "_create_worker_resources",
         lambda: fake_resources,
     )
     async def fake_get_whisper_config(_db):
@@ -349,7 +347,9 @@ async def test_ingest_source_queues_course_generation_when_pipeline_finishes(
         def update_state(self, state, meta=None):
             task_updates.append((state, meta or {}))
 
-    result = await content_ingestion._ingest_source_async(FakeTask(), str(source.id))
+    result = await content_ingestion._ingest_source_async(
+        FakeTask(), str(source.id), fake_resources
+    )
 
     assert result["status"] == "ready"
     assert result["queued_course_task_id"] == "course-task-1"
@@ -425,7 +425,7 @@ async def test_ingestion_persists_asset_plan_and_graph_by_page(
 
     monkeypatch.setattr(
         content_ingestion,
-        "get_worker_resources",
+        "_create_worker_resources",
         lambda: fake_resources,
     )
     monkeypatch.setattr(content_ingestion, "_get_whisper_config", AsyncMock(return_value={}))
@@ -557,7 +557,9 @@ async def test_ingestion_persists_asset_plan_and_graph_by_page(
         def update_state(self, *_args, **_kwargs):
             return None
 
-    result = await content_ingestion._ingest_source_async(FakeTask(), str(source.id))
+    result = await content_ingestion._ingest_source_async(
+        FakeTask(), str(source.id), fake_resources
+    )
 
     await db_session.refresh(source)
 
@@ -652,7 +654,7 @@ async def test_clone_source_queues_course_generation_when_clone_finishes(
 
     monkeypatch.setattr(
         content_ingestion,
-        "get_worker_resources",
+        "_create_worker_resources",
         lambda: fake_resources,
     )
     monkeypatch.setattr(
@@ -675,6 +677,7 @@ async def test_clone_source_queues_course_generation_when_clone_finishes(
         FakeTask(),
         str(target.id),
         str(donor.id),
+        fake_resources,
     )
 
     target_row = await db_session.get(Source, target.id)
@@ -768,7 +771,7 @@ async def test_clone_source_recovers_when_course_dispatch_fails(
 
     monkeypatch.setattr(
         content_ingestion,
-        "get_worker_resources",
+        "_create_worker_resources",
         lambda: fake_resources,
     )
     monkeypatch.setattr(
@@ -790,6 +793,7 @@ async def test_clone_source_recovers_when_course_dispatch_fails(
             FakeTask(),
             str(target.id),
             str(donor.id),
+            fake_resources,
         )
 
     target_row = await db_session.get(Source, target.id)

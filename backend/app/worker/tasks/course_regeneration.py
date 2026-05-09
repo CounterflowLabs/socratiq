@@ -33,7 +33,7 @@ from app.services.source_tasks import mark_source_task
 from app.services.teaching_asset_planner import TeachingAssetPlanner
 from app.tools.extractors.base import RawContentChunk
 from app.worker.celery_app import celery_app
-from app.worker.resources import get_worker_resources
+from app.worker.resources import _create_worker_resources
 
 logger = logging.getLogger(__name__)
 
@@ -53,9 +53,17 @@ def regenerate_course(
     user_id: str,
 ) -> dict:
     """Celery entry point. Returns ``{course_id, parent_course_id, status}``."""
-    return asyncio.run(
-        _regenerate_course_async(self, parent_course_id, user_directive, user_id)
-    )
+
+    async def _runner():
+        resources = _create_worker_resources()
+        try:
+            return await _regenerate_course_async(
+                self, parent_course_id, user_directive, user_id, resources
+            )
+        finally:
+            await resources.engine.dispose()
+
+    return asyncio.run(_runner())
 
 
 async def _regenerate_course_async(
@@ -63,12 +71,11 @@ async def _regenerate_course_async(
     parent_course_id: str,
     user_directive: str,
     user_id: str,
+    resources,
 ) -> dict:
     parent_uuid = UUID(parent_course_id)
     user_uuid = UUID(user_id)
     directive = user_directive.strip()
-
-    resources = get_worker_resources()
 
     try:
         async with resources.session_factory() as db:

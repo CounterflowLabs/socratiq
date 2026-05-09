@@ -17,7 +17,7 @@ from app.services.source_tasks import (
     recover_course_generation_dispatch_failure,
 )
 from app.worker.celery_app import celery_app
-from app.worker.resources import get_worker_resources
+from app.worker.resources import _create_worker_resources
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,14 @@ def ingest_source(self, source_id: str) -> dict:
     """
     import asyncio
 
-    return asyncio.run(_ingest_source_async(self, source_id))
+    async def _runner():
+        resources = _create_worker_resources()
+        try:
+            return await _ingest_source_async(self, source_id, resources)
+        finally:
+            await resources.engine.dispose()
+
+    return asyncio.run(_runner())
 
 
 @celery_app.task(
@@ -52,10 +59,19 @@ def clone_source(self, source_id: str, ref_source_id: str) -> dict:
     """Clone already extracted content from a ready donor source."""
     import asyncio
 
-    return asyncio.run(_clone_source_async(self, source_id, ref_source_id))
+    async def _runner():
+        resources = _create_worker_resources()
+        try:
+            return await _clone_source_async(self, source_id, ref_source_id, resources)
+        finally:
+            await resources.engine.dispose()
+
+    return asyncio.run(_runner())
 
 
-async def _clone_source_async(task, source_id: str, ref_source_id: str) -> dict:
+async def _clone_source_async(
+    task, source_id: str, ref_source_id: str, resources
+) -> dict:
     """Async implementation of source cloning."""
     from sqlalchemy import select
 
@@ -63,7 +79,6 @@ async def _clone_source_async(task, source_id: str, ref_source_id: str) -> dict:
     from app.db.models.content_chunk import ContentChunk as ContentChunkModel
     from app.db.models.source import Source
 
-    resources = get_worker_resources()
     sid = UUID(source_id)
     ref_sid = UUID(ref_source_id)
 
@@ -196,7 +211,7 @@ async def _clone_source_async(task, source_id: str, ref_source_id: str) -> dict:
     return completion.result
 
 
-async def _ingest_source_async(task, source_id: str) -> dict:
+async def _ingest_source_async(task, source_id: str, resources) -> dict:
     """Async implementation of the ingestion pipeline."""
     from sqlalchemy import select
 
@@ -207,7 +222,6 @@ async def _ingest_source_async(task, source_id: str) -> dict:
     from app.services.embedding import EmbeddingService
     from app.services.teaching_asset_planner import TeachingAssetPlanner
 
-    resources = get_worker_resources()
     sid = UUID(source_id)
 
     async with resources.session_factory() as db:
@@ -646,7 +660,10 @@ async def _update_status(
             error_summary=task_error_summary,
         )
 
-    await db.flush()
+    # Commit per stage so /sources/{id}/progress sees mid-pipeline transitions.
+    # Data writes (chunks, embeddings, etc.) live in their own commit at the
+    # end of each stage block.
+    await db.commit()
 
 
 def _source_task_lifecycle(

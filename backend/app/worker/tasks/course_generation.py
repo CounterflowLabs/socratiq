@@ -5,7 +5,7 @@ from uuid import UUID
 
 from app.services.source_tasks import mark_source_task
 from app.worker.celery_app import celery_app
-from app.worker.resources import get_worker_resources
+from app.worker.resources import _create_worker_resources
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +34,20 @@ def generate_course_task(
     import asyncio
 
     source_id = ingest_result["source_id"]
-    return asyncio.run(_generate_course_async(self, source_id, user_id))
+
+    async def _runner():
+        resources = _create_worker_resources()
+        try:
+            return await _generate_course_async(self, source_id, user_id, resources)
+        finally:
+            await resources.engine.dispose()
+
+    return asyncio.run(_runner())
 
 
-async def _generate_course_async(task, source_id: str, user_id: str | None) -> dict:
+async def _generate_course_async(
+    task, source_id: str, user_id: str | None, resources
+) -> dict:
     """Async implementation of course generation."""
     from sqlalchemy import select
     from app.db.models.course import Section
@@ -45,8 +55,6 @@ async def _generate_course_async(task, source_id: str, user_id: str | None) -> d
     from app.db.models.source import Source
     from app.db.models.source_task import SourceTask
     from app.services.course_generator import CourseGenerator
-
-    resources = get_worker_resources()
 
     sid = UUID(source_id)
     uid = UUID(user_id) if user_id else None

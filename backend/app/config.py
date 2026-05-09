@@ -37,6 +37,14 @@ class Settings(BaseSettings):
     # Observability
     sentry_dsn: str = ""
 
+    # LLM timeouts and concurrency (Tier 3/4 of async refactor)
+    # Note: idle timeout doubles as the per-request read deadline for
+    # non-streaming OpenAI-compatible providers, so set generously enough
+    # for slow local backends (Ollama on CPU can hit 2-3 minutes per call).
+    llm_total_timeout: float = 600.0  # non-stream wall-clock cap
+    llm_idle_timeout: float = 300.0   # streaming inter-chunk idle cap (and non-stream read)
+    llm_max_concurrency: int = 4      # gather() semaphore for page-level gen
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 @lru_cache

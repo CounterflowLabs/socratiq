@@ -313,6 +313,110 @@ async def get_source(
     return await _source_to_response(db, source, user_id=user.id)
 
 
+@router.post("/{source_id}/cancel", status_code=202)
+async def cancel_source(
+    source_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_local_user)],
+) -> dict:
+    """Request cooperative cancellation of any running tasks for this source.
+
+    Sets ``cancel_requested=true`` on active SourceTask rows and revokes the
+    Celery task without terminating (so workers exit cleanly at the next
+    safe break point).
+    """
+    from celery.result import AsyncResult
+    from app.worker.celery_app import celery_app
+
+    source = (
+        await db.execute(
+            select(Source).where(
+                Source.id == source_id, Source.created_by == user.id
+            )
+        )
+    ).scalar_one_or_none()
+    if not source:
+        raise HTTPException(404, f"Source {source_id} not found")
+
+    rows = (
+        await db.execute(
+            select(SourceTask)
+            .where(
+                SourceTask.source_id == source_id,
+                SourceTask.status.in_(("pending", "running")),
+            )
+        )
+    ).scalars().all()
+
+    if not rows:
+        return {"cancelled": 0, "source_id": str(source_id)}
+
+    for row in rows:
+        row.cancel_requested = True
+        if row.celery_task_id:
+            try:
+                AsyncResult(row.celery_task_id, app=celery_app).revoke(terminate=False)
+            except Exception:
+                pass
+    await db.commit()
+    return {"cancelled": len(rows), "source_id": str(source_id)}
+
+
+@router.post("/{source_id}/retry", status_code=202)
+async def retry_source(
+    source_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_local_user)],
+) -> dict:
+    """Re-dispatch ingest_source for a cancelled or errored source.
+
+    Tier 3 strict resume: relies on idempotent task entry + per-stage
+    persistence to skip stages that already completed.
+    """
+    source = (
+        await db.execute(
+            select(Source).where(
+                Source.id == source_id, Source.created_by == user.id
+            )
+        )
+    ).scalar_one_or_none()
+    if not source:
+        raise HTTPException(404, f"Source {source_id} not found")
+
+    if source.status not in {"cancelled", "error"}:
+        raise HTTPException(
+            409,
+            f"Source is {source.status!r}; only cancelled/error sources can be retried",
+        )
+
+    # Reset cancel flag on the active SourceTask rows.
+    rows = (
+        await db.execute(
+            select(SourceTask).where(SourceTask.source_id == source_id)
+        )
+    ).scalars().all()
+    for row in rows:
+        row.cancel_requested = False
+
+    source.status = "pending"
+    if isinstance(source.metadata_, dict):
+        new_meta = dict(source.metadata_)
+        new_meta.pop("error", None)
+        source.metadata_ = new_meta
+
+    task = ingest_source.delay(str(source.id))
+    source.celery_task_id = task.id
+    await create_source_task(
+        db,
+        source_id=source.id,
+        task_type="source_processing",
+        status="pending",
+        celery_task_id=task.id,
+    )
+    await db.commit()
+    return {"task_id": task.id, "source_id": str(source_id)}
+
+
 @router.get("/{source_id}/progress", response_model=SourceProgressResponse)
 async def get_source_progress(
     source_id: uuid.UUID,

@@ -129,6 +129,40 @@ async def mark_source_task(
     return task
 
 
+class TaskCancelledError(Exception):
+    """Raised inside a worker when a cooperative cancel has been requested."""
+
+
+async def is_cancel_requested(
+    db: AsyncSession, *, source_id, task_type: str
+) -> bool:
+    """True if the latest SourceTask row for this (source, task_type) is flagged."""
+    row = (
+        await db.execute(
+            select(SourceTask)
+            .where(
+                SourceTask.source_id == source_id,
+                SourceTask.task_type == task_type,
+            )
+            .order_by(SourceTask.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return False
+    # Force a fresh read since cancel flag is set from another connection.
+    await db.refresh(row, attribute_names=["cancel_requested"])
+    return bool(row.cancel_requested)
+
+
+async def raise_if_cancelled(
+    db: AsyncSession, *, source_id, task_type: str
+) -> None:
+    """Helper for safe break-points: raise TaskCancelledError if flagged."""
+    if await is_cancel_requested(db, source_id=source_id, task_type=task_type):
+        raise TaskCancelledError(f"{task_type} cancelled for source {source_id}")
+
+
 async def finish_source_processing_and_enqueue_course(
     db: AsyncSession,
     *,

@@ -44,17 +44,33 @@ class OpenAICompatProvider(LLMProvider):
         supports_tools: bool = True,
         supports_stream: bool = True,
         max_tokens_limit: int = 4096,
-        timeout: float = 300.0,
+        timeout: float | None = None,
     ) -> None:
+        from app.config import get_settings
+        import httpx
+
+        settings = get_settings()
         self._model = model
         self._base_url = base_url
         self._supports_tools = supports_tools
         self._supports_stream = supports_stream
         self._max_tokens_limit = max_tokens_limit
+
+        # httpx Timeout split: connect/write/pool stay short; ``read`` is the
+        # idle timeout for streaming responses (gap between chunks).
+        # ``timeout`` arg, if provided, overrides only the ``read`` slot for
+        # backwards compat with older callers.
+        idle = timeout if timeout is not None else settings.llm_idle_timeout
+        client_timeout = httpx.Timeout(
+            connect=10.0,
+            read=idle,
+            write=10.0,
+            pool=10.0,
+        )
         self._client = openai.AsyncOpenAI(
             api_key=api_key or "not-needed",  # local models may not need a key
             base_url=base_url,
-            timeout=timeout,
+            timeout=client_timeout,
             max_retries=3,
         )
 

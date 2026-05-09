@@ -566,20 +566,10 @@ async def test_ingestion_persists_asset_plan_and_graph_by_page(
     assert result["status"] == "ready"
     assert source.metadata_["asset_plan"]["graph_mode"] == "inline_and_overview"
     assert source.metadata_["asset_plan"]["lab_mode"] == "none"
-    assert source.metadata_["graph_by_page"] == {
-        "0": {
-            "current": ["attention"],
-            "prerequisites": ["Vectors", "Embeddings"],
-            "unlocks": [],
-            "section_anchor": 0,
-        },
-        "1": {
-            "current": ["decoder"],
-            "prerequisites": ["Vectors", "Embeddings"],
-            "unlocks": [],
-            "section_anchor": 1,
-        },
-    }
+    # Tier 2: graph_by_page is no longer materialized at ingest time —
+    # course_generator builds it from the lessons it generates.
+    assert "graph_by_page" not in source.metadata_
+    assert "lesson_by_page" not in source.metadata_
 
 
 @pytest.mark.asyncio

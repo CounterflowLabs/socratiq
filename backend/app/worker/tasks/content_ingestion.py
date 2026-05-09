@@ -11,9 +11,11 @@ from sqlalchemy.ext.asyncio import (
 
 from app.config import get_settings
 from app.services.source_tasks import (
+    TaskCancelledError,
     dispatch_course_generation,
     finish_source_processing_and_enqueue_course,
     mark_source_task,
+    raise_if_cancelled,
     recover_course_generation_dispatch_failure,
 )
 from app.worker.celery_app import celery_app
@@ -27,8 +29,6 @@ logger = logging.getLogger(__name__)
     name="content_ingestion.ingest_source",
     max_retries=2,
     default_retry_delay=30,
-    soft_time_limit=600,
-    time_limit=660,
 )
 def ingest_source(self, source_id: str) -> dict:
     """Main content ingestion pipeline task.
@@ -245,6 +245,7 @@ async def _ingest_source_async(task, source_id: str, resources) -> dict:
 
         try:
             # === STEP 1: EXTRACT ===
+            await raise_if_cancelled(db, source_id=sid, task_type="source_processing")
             await _update_status(db, sid, "extracting")
             task.update_state(state="PROGRESS", meta={"stage": "extracting"})
 
@@ -273,6 +274,7 @@ async def _ingest_source_async(task, source_id: str, resources) -> dict:
             logger.info("Extracted %s chunks from source %s", len(result.chunks), source_id)
 
             # === STEP 2: ANALYZE ===
+            await raise_if_cancelled(db, source_id=sid, task_type="source_processing")
             await _update_status(db, sid, "analyzing")
             task.update_state(state="PROGRESS", meta={"stage": "analyzing"})
 
@@ -298,116 +300,12 @@ async def _ingest_source_async(task, source_id: str, resources) -> dict:
                 has_code=any(chunk.has_code for chunk in analysis.chunks),
             )
 
-            # === STEP 3: GENERATE LESSONS ===
-            await _update_status(db, sid, "generating_lessons")
-            task.update_state(state="PROGRESS", meta={"stage": "generating_lessons"})
-
-            from app.services.lesson_generator import LessonGenerator
-            from app.services.llm.router import TaskType
-            from app.services.profile import load_profile
-
-            lesson_provider = await resources.model_router.get_provider(
-                TaskType.CONTENT_ANALYSIS
-            )
-            lesson_gen = LessonGenerator(lesson_provider)
-
-            if source.created_by is not None:
-                uploader_profile = await load_profile(db, source.created_by)
-                target_language = uploader_profile.preferred_language
-            else:
-                target_language = "zh-CN"
-
-            page_groups: dict[int, list] = {}
-            for chunk in analysis.chunks:
-                page_idx = chunk.metadata.get("page_index", 0)
-                page_groups.setdefault(page_idx, []).append(chunk)
-
-            lesson_by_page: dict[int, object] = {}
-            for page_idx in sorted(page_groups.keys()):
-                page_chunks = page_groups[page_idx]
-                chunk_texts = [c.raw_text for c in page_chunks]
-                page_title = (
-                    page_chunks[0].metadata.get("page_title")
-                    or source.title
-                    or "Untitled"
-                )
-                lesson_content = await lesson_gen.generate(
-                    chunk_texts, page_title, target_language=target_language
-                )
-                lesson_by_page[page_idx] = lesson_content
-                logger.info(
-                    "Generated lesson for page %s: %s blocks",
-                    page_idx,
-                    len(lesson_content.blocks),
-                )
-
-            labs_by_page: dict[int, dict | None] = {}
-            graph_by_page: dict[int, dict[str, object]] = {}
-            for page_idx, lesson_content in lesson_by_page.items():
-                key_concepts: list[str] = []
-                for block in lesson_content.blocks:
-                    if block.type == "concept_relation":
-                        key_concepts.extend(c.label for c in block.concepts)
-                deduped_concepts = list(dict.fromkeys(key_concepts))
-                graph_by_page[page_idx] = {
-                    "current": deduped_concepts[:2],
-                    "prerequisites": analysis.suggested_prerequisites[:3],
-                    "unlocks": deduped_concepts[2:5],
-                    "section_anchor": page_idx,
-                }
-
-            if asset_plan.lab_mode == "inline":
-                # === STEP 4: GENERATE LABS ===
-                await _update_status(db, sid, "generating_labs")
-                task.update_state(state="PROGRESS", meta={"stage": "generating_labs"})
-
-                from app.services.lab_generator import LabGenerator
-
-                lab_gen = LabGenerator(lesson_provider)
-                for page_idx, lesson_content in lesson_by_page.items():
-                    from app.models.lesson import CodeSnippet
-
-                    all_snippets = [
-                        CodeSnippet(
-                            language=block.language or "python",
-                            code=block.code,
-                            context=block.body or "",
-                        )
-                        for block in lesson_content.blocks
-                        if block.type == "code_example" and block.code
-                    ]
-
-                    if not all_snippets:
-                        labs_by_page[page_idx] = None
-                        continue
-
-                    lang_counts: dict[str, int] = {}
-                    for snippet in all_snippets:
-                        lang_counts[snippet.language] = (
-                            lang_counts.get(snippet.language, 0) + 1
-                        )
-                    language = max(lang_counts, key=lang_counts.__getitem__)
-
-                    lab_result = await lab_gen.generate(
-                        code_snippets=all_snippets,
-                        lesson_context=lesson_content.summary,
-                        language=language,
-                        target_language=target_language,
-                    )
-                    labs_by_page[page_idx] = lab_result
-                    if lab_result:
-                        logger.info(
-                            "Generated lab for page %s: %s",
-                            page_idx,
-                            lab_result.get("title"),
-                        )
-                    else:
-                        logger.info(
-                            "No lab generated for page %s (low confidence or error)",
-                            page_idx,
-                        )
+            # Lesson/lab/graph generation now lives in course_generator.
+            # Ingest only produces the content fingerprint (chunks + concepts +
+            # embeddings + analysis); teaching assets are course-level.
 
             # === STEP 5: STORE ===
+            await raise_if_cancelled(db, source_id=sid, task_type="source_processing")
             await _update_status(db, sid, "storing")
             task.update_state(state="PROGRESS", meta={"stage": "storing"})
 
@@ -464,19 +362,6 @@ async def _ingest_source_async(task, source_id: str, resources) -> dict:
                 "estimated_study_minutes": analysis.estimated_study_minutes,
                 "suggested_prerequisites": analysis.suggested_prerequisites,
                 "asset_plan": asset_plan.model_dump(),
-                "lesson_by_page": {
-                    str(page_idx): lesson.model_dump()
-                    for page_idx, lesson in lesson_by_page.items()
-                },
-                "graph_by_page": {
-                    str(page_idx): graph
-                    for page_idx, graph in graph_by_page.items()
-                },
-                "labs_by_page": {
-                    str(page_idx): lab_data
-                    for page_idx, lab_data in labs_by_page.items()
-                    if lab_data is not None
-                },
             }
             await db.flush()
             logger.info(
@@ -486,6 +371,7 @@ async def _ingest_source_async(task, source_id: str, resources) -> dict:
             )
 
             # === STEP 6: EMBED ===
+            await raise_if_cancelled(db, source_id=sid, task_type="source_processing")
             await _update_status(db, sid, "embedding")
             task.update_state(state="PROGRESS", meta={"stage": "embedding"})
 
@@ -510,13 +396,13 @@ async def _ingest_source_async(task, source_id: str, resources) -> dict:
                     "title": source.title,
                     "chunks_created": len(chunk_ids),
                     "concepts_created": len(concept_ids),
-                    "lessons_generated": len(lesson_by_page),
-                    "labs_generated": sum(
-                        1 for lab_data in labs_by_page.values() if lab_data is not None
-                    ),
                 },
             )
             await db.commit()
+        except TaskCancelledError:
+            logger.info("Ingestion cancelled for source %s", source_id)
+            await _mark_source_cancelled(resources.session_factory, sid)
+            return {"source_id": source_id, "status": "cancelled"}
         except Exception as exc:
             logger.error(
                 "Ingestion failed for source %s: %s",
@@ -644,10 +530,13 @@ async def _update_status(
             source.metadata_ = {**source.metadata_, "error": error_message}
 
     result = await db.execute(
-        select(SourceTask).where(
+        select(SourceTask)
+        .where(
             SourceTask.source_id == source_id,
             SourceTask.task_type == "source_processing",
         )
+        .order_by(SourceTask.created_at.desc())
+        .limit(1)
     )
     source_task = result.scalar_one_or_none()
     if source_task:
@@ -677,6 +566,8 @@ def _source_task_lifecycle(
         return "success", "ready", None
     if status == "error":
         return "failure", "error", error_message
+    if status == "cancelled":
+        return "cancelled", "cancelled", None
     return "running", status, None
 
 
@@ -693,6 +584,23 @@ async def _mark_source_error(
     except Exception:
         logger.error(
             "Failed to persist error status for source %s",
+            source_id,
+            exc_info=True,
+        )
+
+
+async def _mark_source_cancelled(
+    session_factory: async_sessionmaker[AsyncSession],
+    source_id: UUID,
+) -> None:
+    """Persist a cancelled state using a fresh session."""
+    try:
+        async with session_factory() as db:
+            await _update_status(db, source_id, "cancelled")
+            await db.commit()
+    except Exception:
+        logger.error(
+            "Failed to persist cancelled status for source %s",
             source_id,
             exc_info=True,
         )

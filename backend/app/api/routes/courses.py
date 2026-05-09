@@ -340,6 +340,56 @@ async def clear_regeneration(
     await db.commit()
 
 
+@router.post("/{course_id}/regeneration/cancel", status_code=202)
+async def cancel_regeneration(
+    course_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_local_user)],
+) -> dict:
+    """Request cooperative cancellation of an in-flight regeneration."""
+    from celery.result import AsyncResult
+
+    course = (
+        await db.execute(
+            select(Course).where(Course.id == course_id, Course.created_by == user.id)
+        )
+    ).scalar_one_or_none()
+    if not course:
+        raise HTTPException(404, f"Course {course_id} not found")
+
+    if not course.active_regeneration_task_id:
+        return {"cancelled": False, "course_id": str(course_id)}
+
+    # Flag every linked source's course_regeneration row.
+    source_ids = (
+        await db.execute(
+            select(CourseSource.source_id).where(CourseSource.course_id == course_id)
+        )
+    ).scalars().all()
+
+    rows = (
+        await db.execute(
+            select(SourceTask).where(
+                SourceTask.source_id.in_(source_ids) if source_ids else False,
+                SourceTask.task_type == "course_regeneration",
+                SourceTask.status.in_(("pending", "running")),
+            )
+        )
+    ).scalars().all()
+    for row in rows:
+        row.cancel_requested = True
+
+    try:
+        AsyncResult(course.active_regeneration_task_id, app=celery_app).revoke(
+            terminate=False
+        )
+    except Exception:
+        pass
+
+    await db.commit()
+    return {"cancelled": True, "course_id": str(course_id)}
+
+
 @router.get("/regenerations/{task_id}", deprecated=True)
 async def get_regeneration_status(
     task_id: str,

@@ -15,8 +15,6 @@ logger = logging.getLogger(__name__)
     name="course_generation.generate_course",
     max_retries=1,
     default_retry_delay=30,
-    soft_time_limit=600,
-    time_limit=660,
 )
 def generate_course_task(
     self,
@@ -103,11 +101,16 @@ async def _generate_course_async(
 
             from app.services.profile import load_profile
 
-            if source.created_by is not None:
+            # Tier 2: prefer the course owner's language over the uploader's,
+            # so multiple users can derive courses in their preferred language
+            # from the same source.
+            target_language = "zh-CN"
+            if uid is not None:
+                owner_profile = await load_profile(db, uid)
+                target_language = owner_profile.preferred_language
+            elif source.created_by is not None:
                 uploader_profile = await load_profile(db, source.created_by)
                 target_language = uploader_profile.preferred_language
-            else:
-                target_language = "zh-CN"
 
             generator = CourseGenerator(resources.model_router)
             course = await generator.generate(

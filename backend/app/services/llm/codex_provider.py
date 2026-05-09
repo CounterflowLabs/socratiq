@@ -31,13 +31,30 @@ class CodexProvider(LLMProvider):
         supports_tools: bool = False,
         supports_stream: bool = False,
         max_tokens_limit: int = 4096,
-        timeout: float = 180.0,
+        timeout: float | None = None,
+        request_timeout: float | None = None,
+        inactivity_timeout: float | None = None,
     ) -> None:
+        from app.config import get_settings
+
+        settings = get_settings()
         self._model = model
         self._supports_tools = supports_tools
         self._supports_stream = supports_stream
         self._max_tokens_limit = max_tokens_limit
-        self._timeout = timeout
+        # Total wall-clock cap for non-stream calls.
+        self._request_timeout = (
+            request_timeout
+            if request_timeout is not None
+            else (timeout if timeout is not None else settings.llm_total_timeout)
+        )
+        # Idle timeout — gap between successive output chunks. Streams that
+        # keep producing tokens never exceed this even if total wall-clock is huge.
+        self._inactivity_timeout = (
+            inactivity_timeout
+            if inactivity_timeout is not None
+            else settings.llm_idle_timeout
+        )
 
     def _stringify_content(self, content: str | list[ContentBlock]) -> str:
         if isinstance(content, str):
@@ -125,8 +142,8 @@ class CodexProvider(LLMProvider):
             async with CodexClient.connect_stdio(
                 command=get_codex_app_server_command(),
                 env=get_codex_env(),
-                request_timeout=self._timeout,
-                inactivity_timeout=self._timeout,
+                request_timeout=self._request_timeout,
+                inactivity_timeout=self._inactivity_timeout,
             ) as client:
                 result = await client.chat_once(
                     prompt,

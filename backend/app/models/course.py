@@ -81,3 +81,12 @@ class CourseListResponse(BaseModel):
     total: int
     skip: int
     limit: int
+
+
+class CourseProgressResponse(BaseModel):
+    """Aggregate progress for a course's generation/regeneration tasks."""
+
+    course_id: uuid.UUID
+    parent_course_id: uuid.UUID | None = None
+    active_regeneration_task_id: str | None = None
+    tasks: list[Any] = Field(default_factory=list)

@@ -7,16 +7,15 @@ import { Brain, Plus, ChevronRight, BookOpen, Loader, AlertCircle, CheckCircle }
 import {
   listCourses,
   getSetupStatus,
-  getTaskStatus,
-  getSource,
+  getSourceProgress,
   getDueReviews,
   completeReview,
   getCourseProgress,
   type CourseResponse,
   type ReviewItemDetail,
+  type SourceProgressResponse,
 } from "@/lib/api";
 import { useCoursesStore, useTasksStore } from "@/lib/stores";
-import { deriveTaskSyncState } from "@/lib/task-sync";
 import ReviewCard from "@/components/review-card";
 
 function taskStateLabel(state: string): string {
@@ -37,20 +36,48 @@ function taskStateLabel(state: string): string {
   return labels[state] || state;
 }
 
-function getSourceErrorMessage(source: {
-  metadata_?: Record<string, unknown>;
-} | null): string | null {
-  const error = source?.metadata_?.error;
+interface DerivedTaskState {
+  state: string;
+  courseId?: string;
+  nextTaskId?: string;
+  error?: string;
+}
 
-  if (typeof error === "string" && error.trim()) {
-    return error;
+function deriveStateFromProgress(
+  progress: SourceProgressResponse,
+  currentTaskId: string
+): DerivedTaskState {
+  const byType: Record<string, SourceProgressResponse["tasks"][number]> = {};
+  for (const t of progress.tasks) byType[t.task_type] = t;
+  const proc = byType.source_processing;
+  const gen = byType.course_generation;
+
+  if (gen?.status === "success" && (gen.course_id || progress.course_id)) {
+    return {
+      state: "SUCCESS",
+      courseId: gen.course_id ?? progress.course_id ?? undefined,
+    };
   }
 
-  if (typeof error !== "undefined" && error !== null) {
-    return String(error);
+  if (proc?.status === "failure" || gen?.status === "failure") {
+    return {
+      state: "FAILURE",
+      error:
+        gen?.error_summary ||
+        proc?.error_summary ||
+        progress.error ||
+        "导入失败，但后端没有返回更具体的原因。",
+    };
   }
 
-  return null;
+  if (proc?.status === "success" && gen) {
+    if (gen.celery_task_id && gen.celery_task_id !== currentTaskId) {
+      return { state: "assembling_course", nextTaskId: gen.celery_task_id };
+    }
+    return { state: gen.stage ?? "generating_course" };
+  }
+
+  return { state: proc?.stage ?? progress.source_status ?? "PENDING" };
 }
 
 interface CourseProgress {
@@ -135,7 +162,7 @@ export default function DashboardPage() {
     []
   );
 
-  // Poll active tasks
+  // Poll active tasks (DB-authoritative via /sources/{id}/progress)
   useEffect(() => {
     const activeTasks = tasks.filter((t) => t.state !== "SUCCESS" && t.state !== "FAILURE" && !t.courseId);
     if (activeTasks.length === 0) return;
@@ -143,47 +170,29 @@ export default function DashboardPage() {
     const interval = setInterval(async () => {
       for (const task of activeTasks) {
         try {
-          const [status, source] = await Promise.all([
-            getTaskStatus(task.taskId).catch(() => null),
-            getSource(task.sourceId).catch(() => null),
-          ]);
+          const progress = await getSourceProgress(task.sourceId).catch(() => null);
+          if (!progress) continue;
 
-          const sourceError = getSourceErrorMessage(source);
+          const derived = deriveStateFromProgress(progress, task.taskId);
 
-          if (source?.status === "error") {
+          if (derived.nextTaskId && derived.nextTaskId !== task.taskId) {
             updateTask(task.taskId, {
-              state: "FAILURE",
-              error: sourceError || status?.error || "导入失败，但后端没有返回更具体的原因。",
-            });
-            continue;
-          }
-
-          const syncState = deriveTaskSyncState({
-            currentTaskId: task.taskId,
-            currentState: task.state,
-            taskStatus: status,
-            source,
-          });
-
-          if (syncState.nextTaskId && syncState.nextTaskId !== task.taskId) {
-            updateTask(task.taskId, {
-              taskId: syncState.nextTaskId,
-              state: syncState.state,
-              error: syncState.error || sourceError || status?.error,
-              courseId: syncState.courseId,
+              taskId: derived.nextTaskId,
+              state: derived.state,
+              error: derived.error,
+              courseId: derived.courseId,
             });
             continue;
           }
 
           updateTask(task.taskId, {
-            state: syncState.state,
-            error: syncState.error || sourceError || status?.error,
-            courseId: syncState.courseId,
+            state: derived.state,
+            error: derived.error,
+            courseId: derived.courseId,
           });
 
-          if (syncState.courseId) {
+          if (derived.courseId) {
             listCourses().then((res) => setCourses(res.items)).catch(() => {});
-            // Auto-dismiss successful tasks after 8 seconds
             setTimeout(() => removeTask(task.taskId), 8000);
             continue;
           }
@@ -194,7 +203,7 @@ export default function DashboardPage() {
     }, 3000);
 
     return () => clearInterval(interval);
-  }, [tasks, updateTask, setCourses]);
+  }, [tasks, updateTask, removeTask, setCourses]);
 
   const showReviewSection = dueReviews.length > 0 || allReviewsDone;
 

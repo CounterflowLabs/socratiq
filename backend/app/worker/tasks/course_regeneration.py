@@ -33,7 +33,7 @@ from app.services.source_tasks import mark_source_task
 from app.services.teaching_asset_planner import TeachingAssetPlanner
 from app.tools.extractors.base import RawContentChunk
 from app.worker.celery_app import celery_app
-from app.worker.tasks.content_ingestion import _create_worker_resources
+from app.worker.resources import get_worker_resources
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,7 @@ async def _regenerate_course_async(
     user_uuid = UUID(user_id)
     directive = user_directive.strip()
 
-    resources = _create_worker_resources()
+    resources = get_worker_resources()
 
     try:
         async with resources.session_factory() as db:
@@ -180,8 +180,6 @@ async def _regenerate_course_async(
         except Exception:
             logger.warning("Failed to record regeneration failure marker", exc_info=True)
         raise
-    finally:
-        await resources.engine.dispose()
 
 
 async def _refresh_source_metadata(

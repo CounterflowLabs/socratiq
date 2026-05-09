@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import ForeignKey, String, Text, text
+from sqlalchemy import Boolean, ForeignKey, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -31,6 +31,9 @@ class SourceTask(BaseMixin, Base):
     celery_task_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     metadata_: Mapped[dict[str, Any]] = mapped_column(
         "metadata_", JSONB, server_default=text("'{}'"), nullable=False
+    )
+    cancel_requested: Mapped[bool] = mapped_column(
+        Boolean, server_default=text("false"), nullable=False
     )
 
     source: Mapped["Source"] = relationship(  # noqa: F821

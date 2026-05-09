@@ -482,14 +482,45 @@ export async function updateWhisperConfig(data: {
   return res.json();
 }
 
-export async function getTaskStatus(taskId: string): Promise<{
-  task_id: string;
-  state: string;
-  result?: unknown;
-  error?: string;
-  progress?: unknown;
-}> {
-  const res = await apiFetch(`${API_BASE}/tasks/${taskId}/status`);
+export interface SourceTaskProgress {
+  task_type: string;
+  status: string;
+  stage?: string | null;
+  error_summary?: string | null;
+  celery_task_id?: string | null;
+  cancel_requested: boolean;
+  course_id?: string | null;
+  updated_at: string;
+  created_at: string;
+}
+
+export interface SourceProgressResponse {
+  source_id: string;
+  source_status: string;
+  error?: string | null;
+  course_id?: string | null;
+  tasks: SourceTaskProgress[];
+}
+
+export interface CourseProgressResponse {
+  course_id: string;
+  parent_course_id?: string | null;
+  active_regeneration_task_id?: string | null;
+  tasks: SourceTaskProgress[];
+}
+
+export async function getSourceProgress(
+  sourceId: string
+): Promise<SourceProgressResponse> {
+  const res = await apiFetch(`${API_BASE}/sources/${sourceId}/progress`);
+  if (!res.ok) throw await responseError(res);
+  return res.json();
+}
+
+export async function getCourseTaskProgress(
+  courseId: string
+): Promise<CourseProgressResponse> {
+  const res = await apiFetch(`${API_BASE}/courses/${courseId}/task-progress`);
   if (!res.ok) throw await responseError(res);
   return res.json();
 }

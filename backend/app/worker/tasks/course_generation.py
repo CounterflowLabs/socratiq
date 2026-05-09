@@ -1,58 +1,13 @@
 """Course generation Celery task — assembles courses from persisted source assets."""
 
 import logging
-from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy.ext.asyncio import (
-    AsyncEngine,
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
-
-from app.config import Settings, get_settings
-from app.services.llm.router import ModelRouter
 from app.services.source_tasks import mark_source_task
 from app.worker.celery_app import celery_app
+from app.worker.resources import get_worker_resources
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class WorkerResources:
-    """Loop-local resources for a single Celery task run."""
-
-    settings: Settings
-    engine: AsyncEngine
-    session_factory: async_sessionmaker[AsyncSession]
-    model_router: ModelRouter
-
-
-def _create_worker_resources() -> WorkerResources:
-    """Create a fresh async engine/session factory/router for the current loop."""
-    settings = get_settings()
-    engine = create_async_engine(
-        settings.database_url,
-        echo=False,
-        pool_size=5,
-        max_overflow=10,
-    )
-    session_factory = async_sessionmaker(
-        engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-    )
-    model_router = ModelRouter(
-        session_factory=session_factory,
-        encryption_key=settings.llm_encryption_key,
-    )
-    return WorkerResources(
-        settings=settings,
-        engine=engine,
-        session_factory=session_factory,
-        model_router=model_router,
-    )
 
 
 @celery_app.task(
@@ -88,9 +43,10 @@ async def _generate_course_async(task, source_id: str, user_id: str | None) -> d
     from app.db.models.course import Section
     from app.db.models.lab import Lab
     from app.db.models.source import Source
+    from app.db.models.source_task import SourceTask
     from app.services.course_generator import CourseGenerator
 
-    resources = _create_worker_resources()
+    resources = get_worker_resources()
 
     sid = UUID(source_id)
     uid = UUID(user_id) if user_id else None
@@ -100,6 +56,33 @@ async def _generate_course_async(task, source_id: str, user_id: str | None) -> d
             source = await db.get(Source, sid)
             if not source or source.status != "ready":
                 raise ValueError(f"Source {source_id} not ready for course generation")
+
+            # Idempotency: a redelivered task for a source whose course is
+            # already generated should return the existing course_id.
+            existing_task = (
+                await db.execute(
+                    select(SourceTask)
+                    .where(
+                        SourceTask.source_id == sid,
+                        SourceTask.task_type == "course_generation",
+                        SourceTask.status == "success",
+                    )
+                    .order_by(SourceTask.created_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if existing_task and existing_task.metadata_.get("course_id"):
+                logger.info(
+                    "Skipping course generation for %s: already produced %s",
+                    source_id,
+                    existing_task.metadata_["course_id"],
+                )
+                return {
+                    "source_id": source_id,
+                    "course_id": existing_task.metadata_["course_id"],
+                    "status": "ready",
+                    "skipped": True,
+                }
 
             await mark_source_task(
                 db,
@@ -176,5 +159,3 @@ async def _generate_course_async(task, source_id: str, user_id: str | None) -> d
             )
             await db.commit()
         raise
-    finally:
-        await resources.engine.dispose()

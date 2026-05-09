@@ -51,3 +51,29 @@ class SourceListResponse(BaseModel):
     total: int
     skip: int
     limit: int
+
+
+class SourceTaskProgress(BaseModel):
+    """Per-task progress slice exposed to the frontend."""
+
+    task_type: str
+    status: str
+    stage: str | None = None
+    error_summary: str | None = None
+    celery_task_id: str | None = None
+    cancel_requested: bool = False
+    course_id: uuid.UUID | None = None
+    updated_at: datetime
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class SourceProgressResponse(BaseModel):
+    """Aggregate progress for a source across its task types."""
+
+    source_id: uuid.UUID
+    source_status: str
+    error: str | None = None
+    course_id: uuid.UUID | None = None
+    tasks: list[SourceTaskProgress] = Field(default_factory=list)

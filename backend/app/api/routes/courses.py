@@ -6,16 +6,19 @@ from math import inf
 from typing import Annotated, Any
 
 from celery.result import AsyncResult
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_local_user, get_model_router
 from app.db.models.course import Course, CourseSource, Section
 from app.db.models.source import Source
+from app.db.models.source_task import SourceTask
+from app.models.source import SourceTaskProgress
 from app.worker.celery_app import celery_app
 from app.models.course import (
     CourseGenerateRequest,
+    CourseProgressResponse,
     CourseResponse,
     CourseDetailResponse,
     CourseListResponse,
@@ -337,16 +340,24 @@ async def clear_regeneration(
     await db.commit()
 
 
-@router.get("/regenerations/{task_id}")
+@router.get("/regenerations/{task_id}", deprecated=True)
 async def get_regeneration_status(
     task_id: str,
     user: Annotated[User, Depends(get_local_user)],
+    response: Response,
 ) -> dict:
-    """Poll the status of a regeneration task.
+    """Deprecated. Use ``GET /courses/{course_id}/task-progress`` instead.
 
-    Returns ``{status, stage, course_id?, error?}``. Frontend polls this every
-    few seconds until ``status`` is ``success`` or ``failure``.
+    Reads from Celery's result backend, which has a TTL — once the result
+    expires this endpoint cannot distinguish "expired success" from "never
+    queued". The DB-backed progress endpoint is authoritative.
     """
+    response.headers["Deprecation"] = "true"
+    response.headers["Sunset"] = "Wed, 09 Jun 2026 00:00:00 GMT"
+    response.headers["Link"] = (
+        '</api/v1/courses/{course_id}/task-progress>; rel="successor-version"'
+    )
+
     result = AsyncResult(task_id, app=celery_app)
     state = result.state
 
@@ -373,3 +384,74 @@ async def get_regeneration_status(
         payload["status"] = "pending"
 
     return payload
+
+
+@router.get("/{course_id}/task-progress", response_model=CourseProgressResponse)
+async def get_course_task_progress(
+    course_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_local_user)],
+) -> CourseProgressResponse:
+    """Aggregate progress for a course's generation and regeneration tasks.
+
+    DB-authoritative. Pulls the latest SourceTask row per relevant task_type
+    across all sources linked to this course.
+    """
+    course = (
+        await db.execute(
+            select(Course).where(
+                Course.id == course_id, Course.created_by == user.id
+            )
+        )
+    ).scalar_one_or_none()
+    if not course:
+        raise HTTPException(404, f"Course {course_id} not found")
+
+    source_ids = (
+        await db.execute(
+            select(CourseSource.source_id).where(
+                CourseSource.course_id == course_id
+            )
+        )
+    ).scalars().all()
+
+    rows: list[SourceTask] = []
+    if source_ids:
+        rows = (
+            await db.execute(
+                select(SourceTask)
+                .where(
+                    SourceTask.source_id.in_(source_ids),
+                    SourceTask.task_type.in_(
+                        ("course_generation", "course_regeneration")
+                    ),
+                )
+                .order_by(SourceTask.created_at.desc())
+            )
+        ).scalars().all()
+
+    tasks = [
+        SourceTaskProgress(
+            task_type=t.task_type,
+            status=t.status,
+            stage=t.stage,
+            error_summary=t.error_summary,
+            celery_task_id=t.celery_task_id,
+            cancel_requested=t.cancel_requested,
+            course_id=(
+                uuid.UUID(t.metadata_["course_id"])
+                if isinstance(t.metadata_, dict) and t.metadata_.get("course_id")
+                else None
+            ),
+            updated_at=t.updated_at,
+            created_at=t.created_at,
+        )
+        for t in rows
+    ]
+
+    return CourseProgressResponse(
+        course_id=course.id,
+        parent_course_id=course.parent_id,
+        active_regeneration_task_id=course.active_regeneration_task_id,
+        tasks=tasks,
+    )

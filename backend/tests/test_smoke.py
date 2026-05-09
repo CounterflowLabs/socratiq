@@ -667,7 +667,7 @@ async def test_course_generation_reuses_source_metadata_without_regenerating(
 
     monkeypatch.setattr(
         course_generation,
-        "_create_worker_resources",
+        "get_worker_resources",
         lambda: fake_resources,
     )
 

@@ -307,7 +307,7 @@ async def test_generate_course_marks_task_success_with_course_id(
 
     monkeypatch.setattr(
         course_generation,
-        "_create_worker_resources",
+        "get_worker_resources",
         lambda: fake_resources,
     )
 
@@ -437,7 +437,7 @@ async def test_generate_course_legacy_metadata_without_asset_plan_still_creates_
 
     monkeypatch.setattr(
         course_generation,
-        "_create_worker_resources",
+        "get_worker_resources",
         lambda: fake_resources,
     )
 

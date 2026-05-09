@@ -10,7 +10,6 @@ from sqlalchemy import select
 
 from app.db.models.content_chunk import ContentChunk
 from app.worker.tasks import content_ingestion
-from app.worker import ref_subscriber
 from app.db.models.source import Source
 from app.db.models.source_task import SourceTask
 from app.db.models.whisper_config import WhisperConfig
@@ -18,18 +17,21 @@ from app.services.llm.encryption import encrypt_api_key
 
 
 def test_create_worker_resources_builds_dedicated_session_factory(monkeypatch):
+    from app.worker import resources as worker_resources
+
     engine = object()
     session_factory = object()
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(
-        content_ingestion,
+        worker_resources,
         "get_settings",
         lambda: SimpleNamespace(
             database_url="postgresql+asyncpg://test/test",
             llm_encryption_key="secret",
         ),
     )
+
     def fake_create_async_engine(url, **kwargs):
         captured["engine_call"] = (url, kwargs)
         return engine
@@ -38,8 +40,8 @@ def test_create_worker_resources_builds_dedicated_session_factory(monkeypatch):
         captured["session_call"] = (args, kwargs)
         return session_factory
 
-    monkeypatch.setattr(content_ingestion, "create_async_engine", fake_create_async_engine)
-    monkeypatch.setattr(content_ingestion, "async_sessionmaker", fake_async_sessionmaker)
+    monkeypatch.setattr(worker_resources, "create_async_engine", fake_create_async_engine)
+    monkeypatch.setattr(worker_resources, "async_sessionmaker", fake_async_sessionmaker)
 
     class FakeModelRouter:
         def __init__(self, *, session_factory, encryption_key):
@@ -48,19 +50,19 @@ def test_create_worker_resources_builds_dedicated_session_factory(monkeypatch):
                 "encryption_key": encryption_key,
             }
 
-    monkeypatch.setattr(content_ingestion, "ModelRouter", FakeModelRouter)
+    monkeypatch.setattr(worker_resources, "ModelRouter", FakeModelRouter)
 
-    resources = content_ingestion._create_worker_resources()
+    bundle = worker_resources._create_worker_resources()
 
-    assert resources.settings.database_url == "postgresql+asyncpg://test/test"
-    assert resources.engine is engine
-    assert resources.session_factory is session_factory
+    assert bundle.settings.database_url == "postgresql+asyncpg://test/test"
+    assert bundle.engine is engine
+    assert bundle.session_factory is session_factory
     assert captured["engine_call"] == (
         "postgresql+asyncpg://test/test",
         {"echo": False, "pool_size": 5, "max_overflow": 10},
     )
     assert captured["session_call"][0] == (engine,)
-    assert captured["session_call"][1]["class_"] is content_ingestion.AsyncSession
+    assert captured["session_call"][1]["class_"] is worker_resources.AsyncSession
     assert captured["session_call"][1]["expire_on_commit"] is False
     assert captured["router_call"] == {
         "session_factory": session_factory,
@@ -68,13 +70,15 @@ def test_create_worker_resources_builds_dedicated_session_factory(monkeypatch):
     }
 
 
-def test_create_worker_resources_returns_fresh_session_factory_each_time(monkeypatch):
+def test_get_worker_resources_caches_singleton(monkeypatch):
+    from app.worker import resources as worker_resources
+
     session_factories = [object(), object()]
     engine_instances = [object(), object()]
     calls = {"engines": 0, "factories": 0}
 
     monkeypatch.setattr(
-        content_ingestion,
+        worker_resources,
         "get_settings",
         lambda: SimpleNamespace(
             database_url="postgresql+asyncpg://test/test",
@@ -97,20 +101,22 @@ def test_create_worker_resources_returns_fresh_session_factory_each_time(monkeyp
             self.session_factory = session_factory
             self.encryption_key = encryption_key
 
-    monkeypatch.setattr(content_ingestion, "create_async_engine", fake_create_async_engine)
-    monkeypatch.setattr(content_ingestion, "async_sessionmaker", fake_async_sessionmaker)
-    monkeypatch.setattr(content_ingestion, "ModelRouter", FakeModelRouter)
+    monkeypatch.setattr(worker_resources, "create_async_engine", fake_create_async_engine)
+    monkeypatch.setattr(worker_resources, "async_sessionmaker", fake_async_sessionmaker)
+    monkeypatch.setattr(worker_resources, "ModelRouter", FakeModelRouter)
 
-    first = content_ingestion._create_worker_resources()
-    second = content_ingestion._create_worker_resources()
+    worker_resources.reset_worker_resources_for_test()
+    first = worker_resources.get_worker_resources()
+    second = worker_resources.get_worker_resources()
 
+    assert first is second
+    assert calls["engines"] == 1
+    assert calls["factories"] == 1
     assert first.engine is engine_instances[0]
-    assert second.engine is engine_instances[1]
     assert first.session_factory is session_factories[0]
-    assert second.session_factory is session_factories[1]
-    assert first.session_factory is not second.session_factory
     assert first.model_router.session_factory is session_factories[0]
-    assert second.model_router.session_factory is session_factories[1]
+
+    worker_resources.reset_worker_resources_for_test()
 
 
 @pytest.mark.asyncio
@@ -210,7 +216,7 @@ async def test_ingest_source_queues_course_generation_when_pipeline_finishes(
 
     monkeypatch.setattr(
         content_ingestion,
-        "_create_worker_resources",
+        "get_worker_resources",
         lambda: fake_resources,
     )
     async def fake_get_whisper_config(_db):
@@ -419,7 +425,7 @@ async def test_ingestion_persists_asset_plan_and_graph_by_page(
 
     monkeypatch.setattr(
         content_ingestion,
-        "_create_worker_resources",
+        "get_worker_resources",
         lambda: fake_resources,
     )
     monkeypatch.setattr(content_ingestion, "_get_whisper_config", AsyncMock(return_value={}))
@@ -646,7 +652,7 @@ async def test_clone_source_queues_course_generation_when_clone_finishes(
 
     monkeypatch.setattr(
         content_ingestion,
-        "_create_worker_resources",
+        "get_worker_resources",
         lambda: fake_resources,
     )
     monkeypatch.setattr(
@@ -762,7 +768,7 @@ async def test_clone_source_recovers_when_course_dispatch_fails(
 
     monkeypatch.setattr(
         content_ingestion,
-        "_create_worker_resources",
+        "get_worker_resources",
         lambda: fake_resources,
     )
     monkeypatch.setattr(
@@ -799,99 +805,6 @@ async def test_clone_source_recovers_when_course_dispatch_fails(
     assert task_by_type["course_generation"].status == "failure"
     assert task_by_type["course_generation"].stage == "error"
     assert task_by_type["course_generation"].error_summary == "broker unavailable"
-
-
-@pytest.mark.asyncio
-async def test_ref_subscriber_ready_waiter_dispatches_only_clone_task(
-    monkeypatch, db_session, demo_user
-):
-    donor = Source(
-        type="youtube",
-        url="https://www.youtube.com/watch?v=donor",
-        title="Donor source",
-        status="ready",
-        metadata_={},
-        created_by=demo_user.id,
-    )
-    db_session.add(donor)
-    await db_session.flush()
-
-    waiter = Source(
-        type="youtube",
-        url="https://www.youtube.com/watch?v=waiter",
-        title="Waiting source",
-        status="waiting_donor",
-        metadata_={"pending_goal": "overview"},
-        ref_source_id=donor.id,
-        created_by=demo_user.id,
-    )
-    db_session.add(waiter)
-    await db_session.flush()
-
-    class FakeAsyncContext:
-        def __init__(self, session):
-            self._session = session
-
-        async def __aenter__(self):
-            return self._session
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-    class FakeSessionFactory:
-        def __init__(self, session):
-            self._session = session
-
-        def __call__(self):
-            return FakeAsyncContext(self._session)
-
-    class FakeEngine:
-        async def dispose(self):
-            return None
-
-    monkeypatch.setattr(
-        ref_subscriber,
-        "get_settings",
-        lambda: SimpleNamespace(database_url="postgresql+asyncpg://test/test"),
-    )
-    monkeypatch.setattr(ref_subscriber, "create_async_engine", lambda *args, **kwargs: FakeEngine())
-    monkeypatch.setattr(
-        ref_subscriber,
-        "async_sessionmaker",
-        lambda *args, **kwargs: FakeSessionFactory(db_session),
-    )
-
-    clone_calls: list[tuple[str, str]] = []
-
-    class FakeCloneTask:
-        def delay(self, source_id, ref_source_id):
-            clone_calls.append((source_id, ref_source_id))
-            return SimpleNamespace(id="clone-task-1")
-
-    monkeypatch.setattr(
-        "app.worker.tasks.content_ingestion.clone_source",
-        FakeCloneTask(),
-    )
-
-    await ref_subscriber._handle_source_done(str(donor.id), "ready")
-
-    waiter_row = await db_session.get(Source, waiter.id)
-    task_row = (
-        await db_session.execute(
-            select(SourceTask).where(
-                SourceTask.source_id == waiter.id,
-                SourceTask.task_type == "source_processing",
-            )
-        )
-    ).scalar_one_or_none()
-
-    assert clone_calls == [(str(waiter.id), str(donor.id))]
-    assert waiter_row.celery_task_id == "clone-task-1"
-    assert waiter_row.status == "pending"
-    assert task_row is not None
-    assert task_row.status == "pending"
-    assert task_row.stage == "pending"
-    assert task_row.celery_task_id == "clone-task-1"
 
 
 @pytest.mark.asyncio

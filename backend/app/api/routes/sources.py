@@ -15,7 +15,13 @@ from app.db.models.course import Course, CourseSource
 from app.db.models.source import Source
 from app.db.models.source_task import SourceTask
 from app.db.models.user import User
-from app.models.source import SourceListResponse, SourceResponse, SourceTaskSummary
+from app.models.source import (
+    SourceListResponse,
+    SourceProgressResponse,
+    SourceResponse,
+    SourceTaskProgress,
+    SourceTaskSummary,
+)
 from app.services.bilibili_credential import has_bilibili_credential
 from app.services.content_key import extract_content_key
 from app.services.source_tasks import create_source_task
@@ -305,6 +311,73 @@ async def get_source(
     if not source:
         raise HTTPException(404, f"Source {source_id} not found")
     return await _source_to_response(db, source, user_id=user.id)
+
+
+@router.get("/{source_id}/progress", response_model=SourceProgressResponse)
+async def get_source_progress(
+    source_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_local_user)],
+) -> SourceProgressResponse:
+    """Aggregate progress for a source — DB-authoritative, no Celery state.
+
+    Returns the latest SourceTask row per task_type so the frontend can render
+    the full pipeline (source_processing + course_generation) in one read.
+    """
+    source = (
+        await db.execute(
+            select(Source).where(
+                Source.id == source_id, Source.created_by == user.id
+            )
+        )
+    ).scalar_one_or_none()
+    if not source:
+        raise HTTPException(404, f"Source {source_id} not found")
+
+    rows = (
+        await db.execute(
+            select(SourceTask)
+            .where(SourceTask.source_id == source_id)
+            .order_by(SourceTask.task_type, SourceTask.created_at.desc())
+        )
+    ).scalars().all()
+
+    latest_by_type: dict[str, SourceTask] = {}
+    for row in rows:
+        latest_by_type.setdefault(row.task_type, row)
+
+    tasks = [
+        SourceTaskProgress(
+            task_type=t.task_type,
+            status=t.status,
+            stage=t.stage,
+            error_summary=t.error_summary,
+            celery_task_id=t.celery_task_id,
+            cancel_requested=t.cancel_requested,
+            course_id=(
+                uuid.UUID(t.metadata_["course_id"])
+                if isinstance(t.metadata_, dict) and t.metadata_.get("course_id")
+                else None
+            ),
+            updated_at=t.updated_at,
+            created_at=t.created_at,
+        )
+        for t in latest_by_type.values()
+    ]
+
+    course_id = next(
+        (t.course_id for t in tasks if t.task_type == "course_generation" and t.course_id),
+        None,
+    )
+    error = (source.metadata_ or {}).get("error") if isinstance(source.metadata_, dict) else None
+
+    return SourceProgressResponse(
+        source_id=source.id,
+        source_status=source.status,
+        error=error,
+        course_id=course_id,
+        tasks=tasks,
+    )
 
 
 @router.get("/{source_id}/file")

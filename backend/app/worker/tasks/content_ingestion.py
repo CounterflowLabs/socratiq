@@ -616,10 +616,13 @@ async def _get_source_processing_task(
     from app.db.models.source_task import SourceTask
 
     result = await db.execute(
-        select(SourceTask).where(
+        select(SourceTask)
+        .where(
             SourceTask.source_id == source_id,
             SourceTask.task_type == "source_processing",
         )
+        .order_by(SourceTask.created_at.desc())
+        .limit(1)
     )
     return result.scalar_one_or_none()
 

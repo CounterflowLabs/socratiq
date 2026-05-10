@@ -645,11 +645,25 @@ export interface SubmissionResult {
   explanation: string | null;
 }
 
-export async function getSectionExercises(sectionId: string): Promise<{ exercises: ExerciseResponse[] }> {
+export interface SectionExercisesPayload {
+  exercises: ExerciseResponse[];
+  is_generating: boolean;
+  error: string | null;
+  active_task_id: string | null;
+}
+
+export async function getSectionExercises(
+  sectionId: string
+): Promise<SectionExercisesPayload> {
   const res = await apiFetch(`${API_BASE}/exercises/section/${sectionId}`);
   if (!res.ok) throw new Error("Failed to fetch exercises");
   const data = await res.json();
-  return { exercises: data.items ?? [] };
+  return {
+    exercises: data.items ?? [],
+    is_generating: Boolean(data.is_generating),
+    error: data.error ?? null,
+    active_task_id: data.active_task_id ?? null,
+  };
 }
 
 export async function submitExercise(exerciseId: string, answer: string): Promise<SubmissionResult> {
@@ -662,19 +676,24 @@ export async function submitExercise(exerciseId: string, answer: string): Promis
   return res.json();
 }
 
+export interface ExerciseGenerateDispatch {
+  task_id: string;
+  section_id: string;
+  status: "dispatched" | "in_flight";
+}
+
 export async function generateSectionExercises(
   sectionId: string,
   count = 3,
   types: Array<"mcq" | "open" | "code"> = ["mcq", "open"],
-): Promise<{ exercises: ExerciseResponse[] }> {
+): Promise<ExerciseGenerateDispatch> {
   const res = await apiFetch(`${API_BASE}/exercises/section/${sectionId}/generate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ count, types }),
   });
   if (!res.ok) throw await responseError(res);
-  const data = await res.json();
-  return { exercises: data.items ?? [] };
+  return res.json();
 }
 
 // ─── Review APIs ────────────────────────────────────

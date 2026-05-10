@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ClipboardList, Loader2, Sparkles } from "lucide-react";
 
@@ -14,7 +14,16 @@ interface ExerciseTriggerCardProps {
   enabled: boolean;
 }
 
-type ExerciseLoadState = "idle" | "checking" | "ready" | "empty" | "error";
+type ExerciseLoadState =
+  | "idle"
+  | "checking"
+  | "ready"
+  | "empty"
+  | "generating"
+  | "error";
+
+const POLL_INTERVAL_MS = 3000;
+const POLL_TIMEOUT_MS = 10 * 60 * 1000;
 
 export function ExerciseTriggerCard({
   title,
@@ -27,8 +36,10 @@ export function ExerciseTriggerCard({
   const [status, setStatus] = useState<ExerciseLoadState>("idle");
   const [count, setCount] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
-  const [generating, setGenerating] = useState(false);
+  const pollDeadlineRef = useRef<number | null>(null);
 
+  // Initial load + listen for in-flight generation that the user
+  // returns to mid-flight.
   useEffect(() => {
     if (!enabled || !sectionId) return;
     let cancelled = false;
@@ -38,7 +49,13 @@ export function ExerciseTriggerCard({
       .then((data) => {
         if (cancelled) return;
         setCount(data.exercises.length);
-        setStatus(data.exercises.length > 0 ? "ready" : "empty");
+        setError(data.error);
+        if (data.is_generating) {
+          pollDeadlineRef.current = Date.now() + POLL_TIMEOUT_MS;
+          setStatus("generating");
+        } else {
+          setStatus(data.exercises.length > 0 ? "ready" : "empty");
+        }
       })
       .catch((err) => {
         if (cancelled) return;
@@ -50,6 +67,51 @@ export function ExerciseTriggerCard({
     };
   }, [enabled, sectionId]);
 
+  // Poll while a generation task is in flight.
+  useEffect(() => {
+    if (status !== "generating" || !sectionId) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const tick = async () => {
+      if (cancelled) return;
+      try {
+        const data = await getSectionExercises(sectionId);
+        if (cancelled) return;
+        setCount(data.exercises.length);
+        if (data.is_generating) {
+          if (
+            pollDeadlineRef.current !== null &&
+            Date.now() > pollDeadlineRef.current
+          ) {
+            setStatus("error");
+            setError("生成超时，请稍后重试");
+            return;
+          }
+          timer = setTimeout(tick, POLL_INTERVAL_MS);
+          return;
+        }
+        // Generation finished
+        setError(data.error);
+        if (data.exercises.length > 0) {
+          setStatus("ready");
+        } else {
+          setStatus("empty");
+        }
+      } catch (err) {
+        if (cancelled) return;
+        setStatus("error");
+        setError(err instanceof Error ? err.message : "生成轮询失败");
+      }
+    };
+
+    timer = setTimeout(tick, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [status, sectionId]);
+
   if (!enabled) return null;
 
   function gotoExercise() {
@@ -60,20 +122,15 @@ export function ExerciseTriggerCard({
   }
 
   async function handleGenerate() {
-    setGenerating(true);
     setError(null);
+    setStatus("generating");
+    pollDeadlineRef.current = Date.now() + POLL_TIMEOUT_MS;
     try {
-      const data = await generateSectionExercises(sectionId, 3, ["mcq", "open"]);
-      setCount(data.exercises.length);
-      setStatus(data.exercises.length > 0 ? "ready" : "empty");
-      if (data.exercises.length > 0) {
-        gotoExercise();
-      }
+      await generateSectionExercises(sectionId, 3, ["mcq", "open"]);
+      // Polling effect handles the rest.
     } catch (err) {
       setStatus("error");
       setError(err instanceof Error ? err.message : "生成失败，请稍后重试");
-    } finally {
-      setGenerating(false);
     }
   }
 
@@ -91,6 +148,8 @@ export function ExerciseTriggerCard({
             <p className="mt-2 text-xs text-sky-700">已为本节生成 {count} 道题</p>
           ) : status === "empty" ? (
             <p className="mt-2 text-xs text-slate-500">本节尚未生成练习题</p>
+          ) : status === "generating" ? (
+            <p className="mt-2 text-xs text-sky-700">正在后台生成练习，可以继续浏览课程，本卡片会自动更新。</p>
           ) : null}
           {error ? (
             <p className="mt-2 text-xs text-red-600">{error}</p>
@@ -109,21 +168,16 @@ export function ExerciseTriggerCard({
             <button
               type="button"
               onClick={handleGenerate}
-              disabled={generating}
-              className="inline-flex items-center gap-1.5 rounded-md bg-sky-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-sky-700 disabled:opacity-60"
+              className="inline-flex items-center gap-1.5 rounded-md bg-sky-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-sky-700"
             >
-              {generating ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  生成中…
-                </>
-              ) : (
-                <>
-                  <Sparkles className="h-4 w-4" />
-                  生成练习
-                </>
-              )}
+              <Sparkles className="h-4 w-4" />
+              生成练习
             </button>
+          ) : status === "generating" ? (
+            <span className="inline-flex items-center gap-1.5 rounded-md border border-sky-200 bg-white px-4 py-2 text-sm text-slate-600">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              生成中…
+            </span>
           ) : status === "checking" ? (
             <span className="inline-flex items-center gap-1.5 rounded-md border border-sky-200 bg-white px-4 py-2 text-sm text-slate-500">
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -132,10 +186,7 @@ export function ExerciseTriggerCard({
           ) : status === "error" ? (
             <button
               type="button"
-              onClick={() => {
-                setStatus("idle");
-                setError(null);
-              }}
+              onClick={handleGenerate}
               className="inline-flex items-center gap-1.5 rounded-md border border-sky-200 bg-white px-4 py-2 text-sm font-medium text-sky-700 transition hover:bg-sky-100"
             >
               重试

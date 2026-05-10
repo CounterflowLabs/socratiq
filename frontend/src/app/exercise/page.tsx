@@ -142,12 +142,22 @@ function ExerciseInner() {
       setGenerating(true);
       setGenerateError(null);
       try {
-        const data = await generateSectionExercises(sectionId, 3, ["mcq", "open"]);
-        if (data.exercises.length === 0) {
-          setGenerateError("生成结果为空，请稍后重试。");
-          return;
+        await generateSectionExercises(sectionId, 3, ["mcq", "open"]);
+        // Poll the exercises endpoint until generation completes.
+        const deadline = Date.now() + 10 * 60 * 1000;
+        while (Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 3000));
+          const fresh = await getSectionExercises(sectionId);
+          if (!fresh.is_generating) {
+            if (fresh.exercises.length > 0) {
+              setExercises(fresh.exercises);
+            } else {
+              setGenerateError(fresh.error ?? "生成结果为空，请稍后重试。");
+            }
+            return;
+          }
         }
-        setExercises(data.exercises);
+        setGenerateError("生成超时，请稍后重试。");
       } catch (err) {
         setGenerateError(err instanceof Error ? err.message : "生成失败，请稍后重试。");
       } finally {

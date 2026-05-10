@@ -15,7 +15,6 @@ from app.db.models.exercise_submission import ExerciseSubmission
 from app.db.models.user import User
 from app.services.exercise import ExerciseService
 from app.services.llm.router import ModelRouter, TaskType
-from app.services.profile import load_profile
 
 router = APIRouter(prefix="/api/v1/exercises", tags=["exercises"])
 
@@ -50,11 +49,20 @@ class SubmitAnswerResponse(BaseModel):
 class ExerciseListResponse(BaseModel):
     items: list[ExerciseResponse]
     total: int
+    is_generating: bool = False
+    error: str | None = None
+    active_task_id: str | None = None
 
 
 class GenerateExercisesRequest(BaseModel):
     count: int = Field(default=3, ge=1, le=10)
     types: list[str] | None = None
+
+
+class GenerateExercisesResponse(BaseModel):
+    task_id: str
+    section_id: uuid.UUID
+    status: str  # "dispatched" | "in_flight"
 
 
 @router.get("/{exercise_id}", response_model=ExerciseResponse)
@@ -168,7 +176,8 @@ async def list_exercises_for_section(
     db: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(get_local_user)],
 ) -> ExerciseListResponse:
-    """List all exercises for a given section."""
+    """List all exercises for a section, plus the async-generation flag/error."""
+    section = await db.get(Section, section_id)
     result = await db.execute(
         select(Exercise)
         .where(Exercise.section_id == section_id)
@@ -189,7 +198,13 @@ async def list_exercises_for_section(
         )
         for ex in exercises
     ]
-    return ExerciseListResponse(items=items, total=len(items))
+    return ExerciseListResponse(
+        items=items,
+        total=len(items),
+        is_generating=bool(section and section.active_exercise_task_id),
+        error=section.exercise_generation_error if section else None,
+        active_task_id=section.active_exercise_task_id if section else None,
+    )
 
 
 def _extract_lesson_content(section_content: dict | None) -> str:
@@ -214,21 +229,26 @@ def _extract_lesson_content(section_content: dict | None) -> str:
 
 @router.post(
     "/section/{section_id}/generate",
-    response_model=ExerciseListResponse,
-    status_code=201,
+    response_model=GenerateExercisesResponse,
+    status_code=202,
 )
 async def generate_exercises_for_section(
     section_id: uuid.UUID,
     request: GenerateExercisesRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(get_local_user)],
-    model_router: Annotated[ModelRouter, Depends(get_model_router)],
-) -> ExerciseListResponse:
-    """Generate (and persist) practice exercises for a section.
+) -> GenerateExercisesResponse:
+    """Dispatch a Celery task to generate exercises in the background.
 
-    Idempotency note: this always creates new rows; callers that want to
-    avoid duplicates should check ``GET /section/{section_id}`` first.
+    Per-section lock: at most one exercise-generation task per section. If a
+    generation is already in flight, the existing task_id is returned and no
+    new task is queued.
     """
+    from celery.result import AsyncResult
+
+    from app.worker.celery_app import celery_app
+    from app.worker.tasks.exercise_generation import generate_section_exercises_task
+
     section = await db.get(Section, section_id)
     if section is None:
         raise HTTPException(404, f"Section {section_id} not found")
@@ -239,48 +259,30 @@ async def generate_exercises_for_section(
             400, "Section has no lesson content to generate exercises from."
         )
 
-    profile = await load_profile(db, user.id)
+    # Idempotent: if a previous task is still pending/running, hand the same
+    # task_id back to the frontend so the user only ever sees one in-flight
+    # generation per section.
+    if section.active_exercise_task_id:
+        existing = AsyncResult(section.active_exercise_task_id, app=celery_app)
+        if existing.state in {"PENDING", "STARTED", "PROGRESS", "RETRY"}:
+            return GenerateExercisesResponse(
+                task_id=section.active_exercise_task_id,
+                section_id=section_id,
+                status="in_flight",
+            )
 
-    provider = await model_router.get_provider(TaskType.EVALUATION)
-    service = ExerciseService(provider)
-    raw_items = await service.generate_from_content(
-        content=content,
-        count=request.count,
-        types=request.types,
-        target_language=profile.preferred_language,
+    celery_task = generate_section_exercises_task.delay(
+        str(section_id),
+        request.count,
+        request.types,
+        str(user.id),
     )
-
-    created: list[Exercise] = []
-    for item in raw_items:
-        if not isinstance(item, dict) or not item.get("question"):
-            continue
-        exercise = Exercise(
-            section_id=section_id,
-            type=str(item.get("type") or "open"),
-            question=str(item["question"]),
-            options=item.get("options"),
-            answer=item.get("answer"),
-            explanation=item.get("explanation"),
-            difficulty=int(item.get("difficulty") or 3),
-            concepts=[],
-        )
-        db.add(exercise)
-        created.append(exercise)
+    section.active_exercise_task_id = celery_task.id
+    section.exercise_generation_error = None
     await db.commit()
-    for ex in created:
-        await db.refresh(ex)
 
-    items = [
-        ExerciseResponse(
-            id=ex.id,
-            section_id=ex.section_id,
-            type=ex.type,
-            question=ex.question,
-            options=ex.options,
-            explanation=None,
-            difficulty=ex.difficulty,
-            concepts=ex.concepts,
-        )
-        for ex in created
-    ]
-    return ExerciseListResponse(items=items, total=len(items))
+    return GenerateExercisesResponse(
+        task_id=celery_task.id,
+        section_id=section_id,
+        status="dispatched",
+    )

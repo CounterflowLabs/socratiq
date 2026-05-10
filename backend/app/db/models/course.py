@@ -51,3 +51,9 @@ class Section(BaseMixin, Base):
     source_end: Mapped[str | None] = mapped_column(String, nullable=True)
     content: Mapped[dict] = mapped_column(JSONB, server_default="{}")
     difficulty: Mapped[int] = mapped_column(Integer, default=1)
+    active_exercise_task_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
+    exercise_generation_error: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )

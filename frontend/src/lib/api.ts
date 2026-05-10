@@ -525,6 +525,31 @@ export async function getCourseTaskProgress(
   return res.json();
 }
 
+export async function cancelSource(sourceId: string): Promise<void> {
+  const res = await apiFetch(`${API_BASE}/sources/${sourceId}/cancel`, {
+    method: "POST",
+  });
+  if (!res.ok) throw await responseError(res);
+}
+
+export async function retrySource(
+  sourceId: string
+): Promise<{ task_id: string }> {
+  const res = await apiFetch(`${API_BASE}/sources/${sourceId}/retry`, {
+    method: "POST",
+  });
+  if (!res.ok) throw await responseError(res);
+  return res.json();
+}
+
+export async function cancelCourseRegeneration(courseId: string): Promise<void> {
+  const res = await apiFetch(
+    `${API_BASE}/courses/${courseId}/regeneration/cancel`,
+    { method: "POST" }
+  );
+  if (!res.ok) throw await responseError(res);
+}
+
 export async function createModel(data: {
   name: string;
   provider_type: string;

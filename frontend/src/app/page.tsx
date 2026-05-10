@@ -11,12 +11,15 @@ import {
   getDueReviews,
   completeReview,
   getCourseProgress,
+  cancelSource,
+  retrySource,
   type CourseResponse,
   type ReviewItemDetail,
   type SourceProgressResponse,
 } from "@/lib/api";
 import { useCoursesStore, useTasksStore } from "@/lib/stores";
 import ReviewCard from "@/components/review-card";
+import SourcePipelineView from "@/components/materials/source-pipeline-view";
 
 function taskStateLabel(state: string): string {
   const labels: Record<string, string> = {
@@ -94,6 +97,7 @@ export default function DashboardPage() {
   const [ratingIds, setRatingIds] = useState<Set<string>>(new Set());
   const [allReviewsDone, setAllReviewsDone] = useState(false);
   const [courseProgressMap, setCourseProgressMap] = useState<Record<string, CourseProgress>>({});
+  const [progressMap, setProgressMap] = useState<Record<string, SourceProgressResponse>>({});
   const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -172,6 +176,7 @@ export default function DashboardPage() {
         try {
           const progress = await getSourceProgress(task.sourceId).catch(() => null);
           if (!progress) continue;
+          setProgressMap((prev) => ({ ...prev, [task.sourceId]: progress }));
 
           const derived = deriveStateFromProgress(progress, task.taskId);
 
@@ -270,52 +275,79 @@ export default function DashboardPage() {
           <section className="mb-8">
             <h2 className="text-base font-semibold mb-4" style={{ color: "var(--text)" }}>处理中的任务</h2>
             <div className="space-y-3">
-              {tasks.map((task) => (
-                <div key={task.taskId} className="card">
-                  <div className="flex items-center gap-4">
-                    <div
-                      className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
-                      style={{
-                        background: task.state === "FAILURE"
-                          ? "var(--error-light)"
-                          : task.courseId
-                          ? "var(--success-light)"
-                          : "var(--primary-light)",
-                      }}
-                    >
-                      {task.state === "FAILURE" ? (
-                        <AlertCircle className="w-5 h-5" style={{ color: "var(--error)" }} />
-                      ) : task.courseId ? (
-                        <CheckCircle className="w-5 h-5" style={{ color: "var(--success)" }} />
-                      ) : (
-                        <Loader className="w-5 h-5 animate-spin" style={{ color: "var(--primary)" }} />
-                      )}
+              {tasks.map((task) => {
+                const progress = progressMap[task.sourceId] ?? null;
+                return (
+                  <div key={task.taskId} className="space-y-2">
+                    <div className="card">
+                      <div className="flex items-center gap-4">
+                        <div
+                          className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
+                          style={{
+                            background: task.state === "FAILURE"
+                              ? "var(--error-light)"
+                              : task.courseId
+                              ? "var(--success-light)"
+                              : "var(--primary-light)",
+                          }}
+                        >
+                          {task.state === "FAILURE" ? (
+                            <AlertCircle className="w-5 h-5" style={{ color: "var(--error)" }} />
+                          ) : task.courseId ? (
+                            <CheckCircle className="w-5 h-5" style={{ color: "var(--success)" }} />
+                          ) : (
+                            <Loader className="w-5 h-5 animate-spin" style={{ color: "var(--primary)" }} />
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <h3 className="text-sm font-medium truncate" style={{ color: "var(--text)" }}>{task.title}</h3>
+                          <p className="text-xs mt-0.5 whitespace-pre-wrap break-words" style={{ color: "var(--text-secondary)" }}>
+                            {task.error || taskStateLabel(task.state)}
+                          </p>
+                        </div>
+                        {task.courseId && (
+                          <button
+                            onClick={() => { router.push(`/path?courseId=${task.courseId}`); removeTask(task.taskId); }}
+                            className="btn-primary text-xs px-3 py-1.5 flex-shrink-0"
+                          >
+                            进入课程
+                          </button>
+                        )}
+                        {task.state === "FAILURE" && (
+                          <button
+                            onClick={() => removeTask(task.taskId)}
+                            className="btn-ghost text-xs flex-shrink-0"
+                          >
+                            关闭
+                          </button>
+                        )}
+                      </div>
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <h3 className="text-sm font-medium truncate" style={{ color: "var(--text)" }}>{task.title}</h3>
-                      <p className="text-xs mt-0.5 whitespace-pre-wrap break-words" style={{ color: "var(--text-secondary)" }}>
-                        {task.error || taskStateLabel(task.state)}
-                      </p>
-                    </div>
-                    {task.courseId && (
-                      <button
-                        onClick={() => { router.push(`/path?courseId=${task.courseId}`); removeTask(task.taskId); }}
-                        className="btn-primary text-xs px-3 py-1.5 flex-shrink-0"
-                      >
-                        进入课程
-                      </button>
-                    )}
-                    {task.state === "FAILURE" && (
-                      <button
-                        onClick={() => removeTask(task.taskId)}
-                        className="btn-ghost text-xs flex-shrink-0"
-                      >
-                        关闭
-                      </button>
+                    {progress && !task.courseId && (
+                      <SourcePipelineView
+                        progress={progress}
+                        title={task.title}
+                        onCancel={async () => {
+                          await cancelSource(task.sourceId);
+                          // Force a refresh on next tick
+                          const fresh = await getSourceProgress(task.sourceId).catch(() => null);
+                          if (fresh) {
+                            setProgressMap((prev) => ({ ...prev, [task.sourceId]: fresh }));
+                          }
+                        }}
+                        onRetry={async () => {
+                          const res = await retrySource(task.sourceId);
+                          updateTask(task.taskId, { taskId: res.task_id, state: "PENDING", error: undefined });
+                          const fresh = await getSourceProgress(task.sourceId).catch(() => null);
+                          if (fresh) {
+                            setProgressMap((prev) => ({ ...prev, [task.sourceId]: fresh }));
+                          }
+                        }}
+                      />
                     )}
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </section>
         )}

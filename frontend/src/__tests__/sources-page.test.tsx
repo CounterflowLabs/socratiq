@@ -85,7 +85,7 @@ describe("/sources page", () => {
         skip: 0,
         limit: 20,
       },
-    ]) as typeof fetch;
+    ]) as unknown as typeof fetch;
 
     const Page = (await import("@/app/sources/page")).default;
     render(<Page />);
@@ -127,7 +127,7 @@ describe("/sources page", () => {
         skip: 0,
         limit: 20,
       },
-    ]) as typeof fetch;
+    ]) as unknown as typeof fetch;
 
     const Page = (await import("@/app/sources/page")).default;
     render(<Page />);
@@ -186,7 +186,7 @@ describe("/sources page", () => {
         skip: 0,
         limit: 20,
       },
-    ]) as typeof fetch;
+    ]) as unknown as typeof fetch;
 
     const Page = (await import("@/app/sources/page")).default;
     render(<Page />);

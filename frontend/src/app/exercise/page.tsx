@@ -2,7 +2,13 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { Loader, CheckCircle, XCircle, ArrowLeft, ArrowRight } from "lucide-react";
+import {
+  IcLoader as Loader,
+  IcCheckCircle as CheckCircle,
+  IcAlert as XCircle,
+  IcArrowLeft as ArrowLeft,
+  IcArrowRight as ArrowRight,
+} from "@/components/icons";
 import Editor from "@monaco-editor/react";
 import {
   generateSectionExercises,

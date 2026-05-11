@@ -1,6 +1,19 @@
 "use client";
 
 import { useEffect, useState } from "react";
+
+import {
+  IcAlert,
+  IcCheck,
+  IcLoader,
+  IcMoon,
+  IcPlus,
+  IcSun,
+} from "@/components/icons";
+import { Avatar } from "@/components/ui/avatar";
+import { Eyebrow } from "@/components/ui/eyebrow";
+import { PageHeader } from "@/components/ui/page-header";
+import { SegmentedControl } from "@/components/ui/segmented";
 import {
   getModels,
   getModelRoutes,
@@ -21,6 +34,7 @@ import {
   DEEPSEEK_DEFAULT_CHAT_MODEL,
   DEEPSEEK_DEFAULT_MODEL_NAME,
 } from "@/lib/model-provider-presets";
+import { useLocaleStore, useT, type Density, type Lang } from "@/lib/i18n";
 
 type ProviderType = "anthropic" | "openai" | "openai_compatible" | "codex";
 type ModelType = "chat" | "embedding";
@@ -36,7 +50,7 @@ const providerPresets: Array<{
   defaultBaseUrl?: string;
 }> = [
   { id: "anthropic", label: "Anthropic", providerType: "anthropic" },
-  { id: "codex", label: "Codex（ChatGPT 登录）", providerType: "codex", chatOnly: true },
+  { id: "codex", label: "Codex (ChatGPT login)", providerType: "codex", chatOnly: true },
   { id: "openai", label: "OpenAI", providerType: "openai" },
   {
     id: "deepseek",
@@ -47,7 +61,7 @@ const providerPresets: Array<{
     defaultModelId: DEEPSEEK_DEFAULT_CHAT_MODEL,
     defaultBaseUrl: DEEPSEEK_BASE_URL,
   },
-  { id: "openai_compatible", label: "OpenAI 兼容（自定义）", providerType: "openai_compatible" },
+  { id: "openai_compatible", label: "OpenAI compatible (custom)", providerType: "openai_compatible" },
 ];
 
 function getProviderPreset(id: ProviderPreset) {
@@ -74,7 +88,7 @@ const whisperPresets: Array<{
 }> = [
   {
     id: "groq",
-    label: "Groq（whisper-large-v3，免费额度大）",
+    label: "Groq · whisper-large-v3",
     protocol: "openai_compat",
     defaultBaseUrl: "https://api.groq.com/openai/v1",
     defaultModel: "whisper-large-v3",
@@ -90,7 +104,7 @@ const whisperPresets: Array<{
   },
   {
     id: "siliconflow",
-    label: "SiliconFlow（国内可用）",
+    label: "SiliconFlow",
     protocol: "openai_compat",
     defaultBaseUrl: "https://api.siliconflow.cn/v1",
     defaultModel: "FunAudioLLM/SenseVoiceSmall",
@@ -98,32 +112,30 @@ const whisperPresets: Array<{
   },
   {
     id: "whispercpp",
-    label: "whisper.cpp（宿主机本地，Metal/GPU 加速）",
+    label: "whisper.cpp (host, Metal/GPU)",
     protocol: "whispercpp",
     defaultBaseUrl: "http://host.docker.internal:8001",
     defaultModel: "",
     requiresKey: false,
-    hint: "在宿主机启动 whisper-server（详见 docs/whisper-setup.md）。后端容器通过 host.docker.internal 访问。",
+    hint: "host whisper-server (see docs/whisper-setup.md). The backend container reaches it via host.docker.internal.",
   },
   {
     id: "openai_compat",
-    label: "OpenAI 兼容（自定义 URL）",
+    label: "OpenAI compatible (custom URL)",
     protocol: "openai_compat",
     requiresKey: true,
   },
   {
     id: "local",
-    label: "进程内 Whisper（需 [whisper] extra）",
+    label: "In-process Whisper ([whisper] extra)",
     protocol: "local",
-    hint: "在 backend 镜像里跑，纯 CPU、无 Metal/GPU；不推荐生产使用。",
+    hint: "Runs in the backend image. CPU-only — not recommended for production.",
   },
 ];
 
 function getWhisperPreset(id: string) {
   return (
     whisperPresets.find((preset) => preset.id === id) ??
-    // Legacy rows used `mode='api'` for any OpenAI-compatible service —
-    // map them to the custom OpenAI-compat preset so existing data still loads.
     whisperPresets.find((preset) => preset.id === "openai_compat")!
   );
 }
@@ -136,7 +148,25 @@ function guessLegacyPreset(baseUrl: string): WhisperPresetId {
   return "openai_compat";
 }
 
+const SECTIONS = [
+  { id: "appearance", labelZh: "外观", labelEn: "Appearance" },
+  { id: "llm", labelZh: "LLM 提供商", labelEn: "LLM providers" },
+  { id: "routes", labelZh: "模型路由", labelEn: "Model routing" },
+  { id: "sources", labelZh: "数据源", labelEn: "Data sources" },
+] as const;
+
+type SectionId = (typeof SECTIONS)[number]["id"];
+
 export default function SettingsPage() {
+  const { t, lang } = useT();
+  const setLang = useLocaleStore((s) => s.setLang);
+  const setDensity = useLocaleStore((s) => s.setDensity);
+  const setTheme = useLocaleStore((s) => s.setTheme);
+  const density = useLocaleStore((s) => s.density);
+  const themePreference = useLocaleStore((s) => s.theme);
+
+  const [activeSection, setActiveSection] = useState<SectionId>("appearance");
+
   const [models, setModels] = useState<ModelConfigResponse[]>([]);
   const [routes, setRoutes] = useState<ModelRouteResponse[]>([]);
   const [routeDrafts, setRouteDrafts] = useState<Record<string, string>>({});
@@ -149,8 +179,7 @@ export default function SettingsPage() {
     Record<string, { success: boolean; message: string }>
   >({});
   const [showAddForm, setShowAddForm] = useState(false);
-  const [providerPreset, setProviderPreset] =
-    useState<ProviderPreset>("anthropic");
+  const [providerPreset, setProviderPreset] = useState<ProviderPreset>("anthropic");
   const [newModel, setNewModel] = useState({
     name: "",
     provider_type: "anthropic" as ProviderType,
@@ -161,6 +190,7 @@ export default function SettingsPage() {
   });
   const [addError, setAddError] = useState("");
   const [adding, setAdding] = useState(false);
+
   const [biliStatus, setBiliStatus] = useState<{
     logged_in: boolean;
     dedeuserid?: string | null;
@@ -171,6 +201,7 @@ export default function SettingsPage() {
   const [biliLoading, setBiliLoading] = useState(false);
   const [biliError, setBiliError] = useState("");
   const [biliSuccess, setBiliSuccess] = useState("");
+
   const [whisperConfig, setWhisperConfig] = useState<{
     mode: string;
     api_base_url?: string;
@@ -203,39 +234,38 @@ export default function SettingsPage() {
       try {
         const status = await checkBilibiliQrcode();
         if (cancelled) return;
-
         setBiliQrStatus(status.status);
-
         if (status.status === "done") {
           setBiliQrcode(null);
           setBiliStatus({ logged_in: true, dedeuserid: status.dedeuserid });
-          setBiliSuccess("B站登录成功，后续导入会优先使用这份登录态。");
+          setBiliSuccess(
+            lang === "zh"
+              ? "B站登录成功，后续导入会优先使用这份登录态。"
+              : "Bilibili logged in. Future imports will reuse this session.",
+          );
           setBiliError("");
           return;
         }
-
         if (status.status === "expired") {
           setBiliQrcode(null);
-          setBiliError("二维码已过期，请重新生成。");
+          setBiliError(lang === "zh" ? "二维码已过期，请重新生成。" : "QR code expired. Regenerate to retry.");
         }
       } catch (err) {
         if (cancelled) return;
         setBiliQrcode(null);
         setBiliQrStatus(null);
-        setBiliError(err instanceof Error ? err.message : "无法检查 B站登录状态");
+        setBiliError(err instanceof Error ? err.message : "Bilibili check failed");
       }
     };
 
     void poll();
-    const timer = window.setInterval(() => {
-      void poll();
-    }, 1500);
+    const timer = window.setInterval(() => void poll(), 1500);
 
     return () => {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [biliQrcode]);
+  }, [biliQrcode, lang]);
 
   async function loadData() {
     setLoading(true);
@@ -250,13 +280,11 @@ export default function SettingsPage() {
       setRoutes(r);
       setBiliStatus(b);
       setWhisperConfig(w);
-      // Legacy rows persisted mode="api" for any OpenAI-compatible service;
-      // pick a preset based on the stored base URL so the dropdown lands sensibly.
       const storedMode = w.mode || "groq";
       const initialPreset =
         storedMode === "api"
           ? guessLegacyPreset(w.api_base_url || "")
-          : storedMode;
+          : (storedMode as WhisperPresetId);
       setWhisperEdits({
         mode: initialPreset,
         api_base_url: w.api_base_url || "",
@@ -265,7 +293,7 @@ export default function SettingsPage() {
         local_model: w.local_model || "base",
       });
       setRouteDrafts(
-        Object.fromEntries(r.map((route) => [route.task_type, route.model_name]))
+        Object.fromEntries(r.map((route) => [route.task_type, route.model_name])),
       );
     } catch (e) {
       console.error("Failed to load settings:", e);
@@ -290,9 +318,7 @@ export default function SettingsPage() {
   }
 
   async function handleDelete(name: string) {
-    if (!window.confirm(`确定要删除模型「${name}」吗？此操作不可撤销。`)) {
-      return;
-    }
+    if (!window.confirm(lang === "zh" ? `确定要删除模型「${name}」吗？此操作不可撤销。` : `Delete model "${name}"? This cannot be undone.`)) return;
     try {
       await deleteModel(name);
       setModels((prev) => prev.filter((m) => m.name !== name));
@@ -310,15 +336,15 @@ export default function SettingsPage() {
         routes.map((route) => ({
           task_type: route.task_type,
           model_name: routeDrafts[route.task_type] || route.model_name,
-        }))
+        })),
       );
       setRoutes(updated);
       setRouteDrafts(
-        Object.fromEntries(updated.map((route) => [route.task_type, route.model_name]))
+        Object.fromEntries(updated.map((route) => [route.task_type, route.model_name])),
       );
-      setRouteSuccess("模型路由已更新");
+      setRouteSuccess(lang === "zh" ? "模型路由已更新" : "Model routes updated");
     } catch (err) {
-      setRouteError(err instanceof Error ? err.message : "更新路由失败");
+      setRouteError(err instanceof Error ? err.message : "Failed to update routes");
     } finally {
       setSavingRoutes(false);
     }
@@ -349,7 +375,7 @@ export default function SettingsPage() {
       setProviderPreset("anthropic");
       setShowAddForm(false);
     } catch (err) {
-      setAddError(err instanceof Error ? err.message : "添加失败");
+      setAddError(err instanceof Error ? err.message : "Failed to add model");
     } finally {
       setAdding(false);
     }
@@ -368,11 +394,11 @@ export default function SettingsPage() {
       });
       setWhisperConfig(result);
       setWhisperEdits((prev) => ({ ...prev, api_key: "" }));
-      setWhisperMessage({ type: "ok", text: "Whisper 配置已保存" });
+      setWhisperMessage({ type: "ok", text: lang === "zh" ? "Whisper 配置已保存" : "Whisper config saved" });
     } catch (err) {
       setWhisperMessage({
         type: "err",
-        text: err instanceof Error ? err.message : "保存 Whisper 配置失败",
+        text: err instanceof Error ? err.message : "Failed to save Whisper",
       });
     } finally {
       setWhisperSaving(false);
@@ -388,7 +414,7 @@ export default function SettingsPage() {
       setBiliQrcode(result.qrcode_base64);
       setBiliQrStatus("waiting");
     } catch (err) {
-      setBiliError(err instanceof Error ? err.message : "生成 B站二维码失败");
+      setBiliError(err instanceof Error ? err.message : "QR generation failed");
     } finally {
       setBiliLoading(false);
     }
@@ -403,29 +429,30 @@ export default function SettingsPage() {
       setBiliStatus({ logged_in: false });
       setBiliQrcode(null);
       setBiliQrStatus(null);
-      setBiliSuccess("已移除 B站登录态。");
+      setBiliSuccess(lang === "zh" ? "已移除 B站登录态。" : "Bilibili session cleared.");
     } catch (err) {
-      setBiliError(err instanceof Error ? err.message : "退出 B站登录失败");
+      setBiliError(err instanceof Error ? err.message : "Logout failed");
     } finally {
       setBiliLoading(false);
     }
   }
 
   function getRouteLabel(taskType: string): string {
-    const map: Record<string, string> = {
-      mentor_chat: "主交互",
-      content_analysis: "内容分析",
-      evaluation: "复杂推理",
-      embedding: "向量计算",
+    const map: Record<string, { zh: string; en: string }> = {
+      mentor_chat: { zh: "主交互", en: "Mentor chat" },
+      content_analysis: { zh: "内容分析", en: "Content analysis" },
+      evaluation: { zh: "复杂推理", en: "Evaluation" },
+      embedding: { zh: "向量计算", en: "Embeddings" },
     };
-    return map[taskType] || taskType;
+    const entry = map[taskType];
+    return entry ? entry[lang] : taskType;
   }
 
   function getRouteOptions(taskType: string): ModelConfigResponse[] {
     if (taskType === "embedding") {
-      return models.filter((model) => model.model_type === "embedding");
+      return models.filter((m) => m.model_type === "embedding");
     }
-    return models.filter((model) => model.model_type !== "embedding");
+    return models.filter((m) => m.model_type !== "embedding");
   }
 
   function handleModelTypeChange(modelType: ModelType) {
@@ -434,7 +461,6 @@ export default function SettingsPage() {
         ? "openai_compatible"
         : providerPreset;
     const preset = getProviderPreset(nextPreset);
-
     setProviderPreset(nextPreset);
     setNewModel((prev) => ({
       ...prev,
@@ -460,536 +486,793 @@ export default function SettingsPage() {
   }
 
   const hasRouteChanges = routes.some(
-    (route) => (routeDrafts[route.task_type] || route.model_name) !== route.model_name
+    (route) => (routeDrafts[route.task_type] || route.model_name) !== route.model_name,
   );
 
   const requiresApiKey = newModel.provider_type !== "codex";
-  const supportsBaseUrl =
-    newModel.provider_type === "openai_compatible";
+  const supportsBaseUrl = newModel.provider_type === "openai_compatible";
   const isEmbeddingOnlyOpenAI =
     newModel.model_type === "embedding" && newModel.provider_type === "anthropic";
 
-  if (loading) {
-    return (
-      <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6">
-        <h1 className="text-xl font-bold mb-6" style={{ color: "var(--text)" }}>设置</h1>
-        <div className="text-sm" style={{ color: "var(--text-secondary)" }}>加载中...</div>
-      </div>
-    );
-  }
-
   return (
-    <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6">
-      <h1 className="text-xl font-bold mb-6" style={{ color: "var(--text)" }}>设置</h1>
+    <div style={{ padding: "32px 40px 80px", maxWidth: 1100, margin: "0 auto", width: "100%" }}>
+      <PageHeader title={t("settings.title")} />
 
-      {/* Model Routes */}
-      {routes.length > 0 && (
-        <div className="bg-white rounded-xl border border-gray-200 p-6 mb-4">
-          <div className="flex items-center justify-between mb-4 gap-3">
-            <h2 className="text-sm font-semibold text-gray-900">
-              模型路由
-            </h2>
-            <button
-              onClick={handleSaveRoutes}
-              disabled={savingRoutes || !hasRouteChanges}
-              className="px-3 py-2 text-xs bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {savingRoutes ? "保存中..." : "保存路由"}
-            </button>
-          </div>
-          <div className="space-y-3">
-            {routes.map((r) => (
-              <div
-                key={r.task_type}
-                className="flex flex-col gap-2 py-2 border-b border-gray-100 last:border-0 md:flex-row md:items-center md:justify-between"
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "200px 1fr",
+          gap: 40,
+          alignItems: "flex-start",
+        }}
+      >
+        <nav
+          style={{
+            position: "sticky",
+            top: 24,
+            display: "flex",
+            flexDirection: "column",
+            gap: 2,
+          }}
+        >
+          {SECTIONS.map((section) => {
+            const active = activeSection === section.id;
+            return (
+              <button
+                key={section.id}
+                type="button"
+                onClick={() => setActiveSection(section.id)}
+                className="nav-item"
+                style={{
+                  fontSize: 13,
+                  color: active ? "var(--ink)" : "var(--ink-3)",
+                  fontWeight: active ? 500 : 400,
+                  background: active ? "var(--surface-2)" : "transparent",
+                }}
               >
-                <span className="text-sm text-gray-700">
-                  {getRouteLabel(r.task_type)}
-                </span>
-                <select
-                  value={routeDrafts[r.task_type] || r.model_name}
-                  onChange={(e) => {
-                    setRouteDrafts((prev) => ({
-                      ...prev,
-                      [r.task_type]: e.target.value,
-                    }));
-                    setRouteSuccess("");
-                  }}
-                  className="w-full md:w-72 px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                {lang === "zh" ? section.labelZh : section.labelEn}
+              </button>
+            );
+          })}
+        </nav>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--gap-xl)" }}>
+          {activeSection === "appearance" ? (
+            <section>
+              <h2
+                className="serif"
+                style={{ fontSize: 22, margin: "0 0 6px", fontWeight: 500 }}
+              >
+                {t("settings.sections.appearance")}
+              </h2>
+              <p style={{ fontSize: 13, color: "var(--ink-2)", margin: "0 0 20px", maxWidth: 560 }}>
+                {lang === "zh"
+                  ? "主题、语言、密度都会立即生效，并保存在浏览器本地。"
+                  : "Theme, language, and density apply instantly and persist in this browser."}
+              </p>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+                <SettingRow
+                  label={t("settings.themeLabel")}
+                  hint={lang === "zh" ? "系统主题会跟随操作系统设置" : "System follows your OS preference"}
                 >
-                  {getRouteOptions(r.task_type).map((model) => (
-                    <option key={model.name} value={model.name}>
-                      {model.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            ))}
-          </div>
-          {routeError && (
-            <div className="mt-4 text-xs text-red-600 whitespace-pre-wrap break-words">
-              {routeError}
-            </div>
-          )}
-          {routeSuccess && (
-            <div className="mt-4 text-xs text-green-700">
-              {routeSuccess}
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className="bg-white rounded-xl border border-gray-200 p-6 mb-4">
-        <div className="flex items-start justify-between gap-4 mb-4">
-          <div>
-            <h2 className="text-sm font-semibold text-gray-900">B站登录</h2>
-            <p className="mt-1 text-xs text-gray-500">
-              用于抓取需要登录态才能访问的 Bilibili 字幕和视频信息。
-            </p>
-          </div>
-          <div className="text-xs text-gray-500">
-            {biliStatus?.logged_in ? "已登录" : "未登录"}
-          </div>
-        </div>
-
-        {biliStatus?.logged_in ? (
-          <div className="space-y-3">
-            <div className="rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">
-              已连接 B站账号
-              {biliStatus.dedeuserid ? `（UID: ${biliStatus.dedeuserid}）` : ""}
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={handleBilibiliLogout}
-                disabled={biliLoading}
-                className="px-3 py-2 min-h-[44px] text-xs rounded-md border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50"
-              >
-                {biliLoading ? "处理中..." : "退出登录"}
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            <div className="flex flex-wrap gap-2">
-              <button
-                onClick={handleBilibiliLogin}
-                disabled={biliLoading}
-                className="px-3 py-2 min-h-[44px] text-xs rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
-              >
-                {biliLoading ? "生成中..." : biliQrStatus === "expired" ? "重新生成二维码" : "扫码登录 B站"}
-              </button>
-            </div>
-
-            {biliQrcode && (
-              <div className="rounded-lg border border-gray-200 p-4">
-                <div className="flex flex-col items-center gap-3">
-                  <img
-                    src={`data:image/png;base64,${biliQrcode}`}
-                    alt="Bilibili QR code"
-                    className="h-48 w-48 rounded-lg border border-gray-200"
+                  <SegmentedControl
+                    ariaLabel={t("settings.themeLabel")}
+                    value={themePreference}
+                    onChange={(next) => setTheme(next)}
+                    options={[
+                      { v: "light", label: t("settings.themeLight"), icon: IcSun },
+                      { v: "dark", label: t("settings.themeDark"), icon: IcMoon },
+                      { v: "system", label: t("settings.themeSystem") },
+                    ]}
                   />
-                  <div className="text-xs text-center text-gray-500">
-                    {biliQrStatus === "scanned"
-                      ? "已扫码，请在手机上确认登录。"
-                      : "请使用哔哩哔哩 App 扫码登录。"}
-                  </div>
-                </div>
+                </SettingRow>
+
+                <SettingRow label={t("settings.langLabel")}>
+                  <SegmentedControl
+                    ariaLabel={t("settings.langLabel")}
+                    value={lang}
+                    onChange={(next: Lang) => setLang(next)}
+                    options={[
+                      { v: "zh", label: "中文" },
+                      { v: "en", label: "English" },
+                    ]}
+                  />
+                </SettingRow>
+
+                <SettingRow label={t("settings.densityLabel")}>
+                  <SegmentedControl
+                    ariaLabel={t("settings.densityLabel")}
+                    value={density}
+                    onChange={(next: Density) => setDensity(next)}
+                    options={[
+                      { v: "spacious", label: t("settings.densitySpacious") },
+                      { v: "balanced", label: t("settings.densityBalanced") },
+                      { v: "dense", label: t("settings.densityDense") },
+                    ]}
+                  />
+                </SettingRow>
               </div>
-            )}
-          </div>
-        )}
+            </section>
+          ) : null}
 
-        {biliError && (
-          <div className="mt-4 text-xs text-red-600 whitespace-pre-wrap break-words">
-            {biliError}
-          </div>
-        )}
-        {biliSuccess && (
-          <div className="mt-4 text-xs text-green-700">
-            {biliSuccess}
-          </div>
-        )}
-      </div>
-
-      <div className="bg-white rounded-xl border border-gray-200 p-6 mb-4">
-        <div className="mb-4">
-          <h2 className="text-sm font-semibold text-gray-900">Whisper 语音识别</h2>
-          <p className="mt-1 text-xs text-gray-500">
-            当视频没有现成字幕时，会回退到这里配置的 ASR。
-          </p>
-        </div>
-
-        <div className="space-y-4">
-          <div>
-            <label className="block text-xs text-gray-600 mb-1">Provider</label>
-            <select
-              value={whisperEdits.mode}
-              onChange={(e) => {
-                const next = getWhisperPreset(e.target.value);
-                setWhisperEdits((prev) => {
-                  // If the current value matches any known preset's default,
-                  // it's auto-filled — overwrite with the new preset's default.
-                  // If it's something the user typed manually, preserve it.
-                  const isAutoUrl =
-                    !prev.api_base_url ||
-                    whisperPresets.some(
-                      (p) => p.defaultBaseUrl === prev.api_base_url
-                    );
-                  const isAutoModel =
-                    !prev.api_model ||
-                    whisperPresets.some(
-                      (p) => p.defaultModel === prev.api_model
-                    );
-                  return {
-                    ...prev,
-                    mode: next.id,
-                    api_base_url: isAutoUrl
-                      ? next.defaultBaseUrl ?? ""
-                      : prev.api_base_url,
-                    api_model: isAutoModel
-                      ? next.defaultModel ?? ""
-                      : prev.api_model,
-                  };
-                });
-              }}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              {whisperPresets.map((preset) => (
-                <option key={preset.id} value={preset.id}>
-                  {preset.label}
-                </option>
-              ))}
-            </select>
-            {getWhisperPreset(whisperEdits.mode).hint && (
-              <p className="mt-1 text-xs text-gray-500">
-                {getWhisperPreset(whisperEdits.mode).hint}
+          {activeSection === "llm" ? (
+            <section>
+              <h2
+                className="serif"
+                style={{ fontSize: 22, margin: "0 0 6px", fontWeight: 500 }}
+              >
+                {t("settings.sections.llm")}
+              </h2>
+              <p style={{ fontSize: 13, color: "var(--ink-2)", margin: "0 0 16px", maxWidth: 560 }}>
+                {t("settings.llmDesc")}
               </p>
-            )}
-          </div>
 
-          {getWhisperPreset(whisperEdits.mode).protocol === "local" ? (
-            <div>
-              <label className="block text-xs text-gray-600 mb-1">本地模型大小</label>
-              <select
-                value={whisperEdits.local_model}
-                onChange={(e) =>
-                  setWhisperEdits((prev) => ({
-                    ...prev,
-                    local_model: e.target.value,
-                  }))
-                }
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="tiny">tiny（最快）</option>
-                <option value="base">base</option>
-                <option value="small">small</option>
-                <option value="medium">medium</option>
-                <option value="large">large（最准）</option>
-              </select>
-            </div>
-          ) : (
-            <>
-              <div>
-                <label className="block text-xs text-gray-600 mb-1">
-                  {getWhisperPreset(whisperEdits.mode).protocol === "whispercpp"
-                    ? "Server URL（whisper.cpp 根地址，自动追加 /inference）"
-                    : "API Base URL（OpenAI 兼容根地址，自动追加 /audio/transcriptions）"}
-                </label>
-                <input
-                  type="text"
-                  value={whisperEdits.api_base_url}
-                  onChange={(e) =>
-                    setWhisperEdits((prev) => ({
-                      ...prev,
-                      api_base_url: e.target.value,
-                    }))
-                  }
-                  placeholder={
-                    getWhisperPreset(whisperEdits.mode).defaultBaseUrl ||
-                    "https://example.com/v1"
-                  }
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-              {getWhisperPreset(whisperEdits.mode).protocol === "openai_compat" && (
-                <div>
-                  <label className="block text-xs text-gray-600 mb-1">模型</label>
-                  <input
-                    type="text"
-                    value={whisperEdits.api_model}
-                    onChange={(e) =>
-                      setWhisperEdits((prev) => ({
-                        ...prev,
-                        api_model: e.target.value,
-                      }))
-                    }
-                    placeholder={
-                      getWhisperPreset(whisperEdits.mode).defaultModel ||
-                      "whisper-large-v3"
-                    }
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
+              {loading ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--ink-3)", fontSize: 13 }}>
+                  <IcLoader size={14} className="spin" />
+                  <span>{t("common.loading")}</span>
                 </div>
-              )}
-              {getWhisperPreset(whisperEdits.mode).requiresKey && (
-                <div>
-                  <label className="block text-xs text-gray-600 mb-1">API Key</label>
-                  <input
-                    type="password"
-                    value={whisperEdits.api_key}
-                    onChange={(e) =>
-                      setWhisperEdits((prev) => ({
-                        ...prev,
-                        api_key: e.target.value,
-                      }))
-                    }
-                    placeholder={whisperConfig?.api_key_masked || "输入 API Key"}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                  {whisperConfig?.api_key_masked && !whisperEdits.api_key && (
-                    <p className="mt-1 text-xs text-gray-400">
-                      当前: {whisperConfig.api_key_masked}（留空表示不修改）
-                    </p>
+              ) : (
+                <>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {models.map((model) => (
+                      <ProviderRow
+                        key={model.name}
+                        model={model}
+                        testing={testing === model.name}
+                        result={testResult[model.name]}
+                        onTest={() => handleTest(model.name)}
+                        onDelete={() => handleDelete(model.name)}
+                      />
+                    ))}
+                  </div>
+
+                  {showAddForm ? (
+                    <form
+                      onSubmit={handleAddModel}
+                      className="card"
+                      style={{
+                        marginTop: 16,
+                        padding: 18,
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 12,
+                        background: "var(--accent-soft)",
+                        borderColor: "transparent",
+                      }}
+                    >
+                      <Field label={lang === "zh" ? "名称" : "Name"}>
+                        <input
+                          className="input"
+                          value={newModel.name}
+                          onChange={(e) => setNewModel({ ...newModel, name: e.target.value })}
+                          placeholder={lang === "zh" ? "例如 my-claude-sonnet" : "e.g. my-claude-sonnet"}
+                          required
+                        />
+                      </Field>
+                      <Field label={lang === "zh" ? "模型类型" : "Model type"}>
+                        <select
+                          className="input"
+                          value={newModel.model_type}
+                          onChange={(e) => handleModelTypeChange(e.target.value as ModelType)}
+                        >
+                          <option value="chat">{lang === "zh" ? "聊天 / 推理" : "Chat / reasoning"}</option>
+                          <option value="embedding">{lang === "zh" ? "Embedding / 向量" : "Embedding"}</option>
+                        </select>
+                      </Field>
+                      <Field label={lang === "zh" ? "Provider 预设" : "Provider preset"}>
+                        <select
+                          aria-label={lang === "zh" ? "Provider 预设" : "Provider preset"}
+                          className="input"
+                          value={providerPreset}
+                          onChange={(e) =>
+                            handleProviderPresetChange(e.target.value as ProviderPreset)
+                          }
+                        >
+                          {providerPresets.map((preset) => (
+                            <option
+                              key={preset.id}
+                              value={preset.id}
+                              disabled={newModel.model_type === "embedding" && preset.chatOnly}
+                            >
+                              {preset.label}
+                            </option>
+                          ))}
+                        </select>
+                      </Field>
+                      <Field label={lang === "zh" ? "模型 ID" : "Model ID"}>
+                        <input
+                          className="input"
+                          value={newModel.model_id}
+                          onChange={(e) => setNewModel({ ...newModel, model_id: e.target.value })}
+                          placeholder={
+                            newModel.model_type === "embedding"
+                              ? "text-embedding-3-small"
+                              : providerPreset === "deepseek"
+                                ? DEEPSEEK_DEFAULT_CHAT_MODEL
+                                : "claude-sonnet-4-20250514"
+                          }
+                          required
+                        />
+                      </Field>
+                      {requiresApiKey ? (
+                        <Field label="API Key">
+                          <input
+                            className="input"
+                            type="password"
+                            value={newModel.api_key}
+                            onChange={(e) => setNewModel({ ...newModel, api_key: e.target.value })}
+                            placeholder="sk-…"
+                          />
+                        </Field>
+                      ) : null}
+                      {supportsBaseUrl ? (
+                        <Field label="Base URL">
+                          <input
+                            className="input"
+                            value={newModel.base_url}
+                            onChange={(e) => setNewModel({ ...newModel, base_url: e.target.value })}
+                            placeholder="https://api.deepseek.com/v1"
+                          />
+                        </Field>
+                      ) : null}
+                      {isEmbeddingOnlyOpenAI ? (
+                        <p style={{ fontSize: 12, color: "var(--warn)" }}>
+                          {lang === "zh"
+                            ? "embedding 需要 OpenAI 兼容 provider，已自动切换。"
+                            : "Embedding requires an OpenAI-compatible provider; switched for you."}
+                        </p>
+                      ) : null}
+                      {addError ? (
+                        <p style={{ fontSize: 12, color: "var(--error)" }}>{addError}</p>
+                      ) : null}
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button type="submit" disabled={adding} className="btn btn-accent btn-sm">
+                          {adding ? t("common.loading") : t("common.save")}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => setShowAddForm(false)}
+                        >
+                          {t("common.cancel")}
+                        </button>
+                      </div>
+                    </form>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn btn-outline btn-sm"
+                      style={{ marginTop: 16 }}
+                      onClick={() => setShowAddForm(true)}
+                    >
+                      <IcPlus size={12} />
+                      <span>{t("settings.addProvider")}</span>
+                    </button>
                   )}
-                </div>
+                </>
               )}
-            </>
-          )}
+            </section>
+          ) : null}
 
-          <div className="flex items-center gap-3">
-            <button
-              onClick={handleSaveWhisper}
-              disabled={whisperSaving}
-              className="px-3 py-2 min-h-[44px] text-xs rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
-            >
-              {whisperSaving ? "保存中..." : "保存 Whisper 配置"}
-            </button>
-            {whisperMessage && (
-              <span
-                className={`text-xs ${
-                  whisperMessage.type === "ok" ? "text-green-600" : "text-red-600"
-                }`}
+          {activeSection === "routes" ? (
+            <section>
+              <h2
+                className="serif"
+                style={{ fontSize: 22, margin: "0 0 6px", fontWeight: 500 }}
               >
-                {whisperMessage.text}
-              </span>
-            )}
-          </div>
+                {lang === "zh" ? "模型路由" : "Model routing"}
+              </h2>
+              <p style={{ fontSize: 13, color: "var(--ink-2)", margin: "0 0 16px", maxWidth: 560 }}>
+                {lang === "zh"
+                  ? "为每类任务挑一个具体模型 — 主交互/分析/复杂推理/向量。"
+                  : "Pick a model per task type — chat / analysis / reasoning / embeddings."}
+              </p>
+
+              <div className="card" style={{ padding: 18 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  {routes.map((route) => (
+                    <div
+                      key={route.task_type}
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "1fr auto",
+                        gap: 12,
+                        alignItems: "center",
+                      }}
+                    >
+                      <span style={{ fontSize: 13, color: "var(--ink-2)" }}>
+                        {getRouteLabel(route.task_type)}
+                      </span>
+                      <select
+                        className="input"
+                        style={{ width: 280 }}
+                        value={routeDrafts[route.task_type] || route.model_name}
+                        onChange={(e) => {
+                          setRouteDrafts((prev) => ({
+                            ...prev,
+                            [route.task_type]: e.target.value,
+                          }));
+                          setRouteSuccess("");
+                        }}
+                      >
+                        {getRouteOptions(route.task_type).map((m) => (
+                          <option key={m.name} value={m.name}>
+                            {m.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+                <div
+                  style={{
+                    marginTop: 16,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={handleSaveRoutes}
+                    disabled={savingRoutes || !hasRouteChanges}
+                    className="btn btn-accent btn-sm"
+                  >
+                    {savingRoutes
+                      ? lang === "zh"
+                        ? "保存中…"
+                        : "Saving…"
+                      : lang === "zh"
+                        ? "保存路由"
+                        : "Save routes"}
+                  </button>
+                  {routeError ? (
+                    <span style={{ fontSize: 12, color: "var(--error)" }}>{routeError}</span>
+                  ) : null}
+                  {routeSuccess ? (
+                    <span style={{ fontSize: 12, color: "var(--sage)" }}>{routeSuccess}</span>
+                  ) : null}
+                </div>
+              </div>
+            </section>
+          ) : null}
+
+          {activeSection === "sources" ? (
+            <section style={{ display: "flex", flexDirection: "column", gap: 28 }}>
+              <div>
+                <h2
+                  className="serif"
+                  style={{ fontSize: 22, margin: "0 0 6px", fontWeight: 500 }}
+                >
+                  {lang === "zh" ? "B站登录" : "Bilibili"}
+                </h2>
+                <p
+                  style={{
+                    fontSize: 13,
+                    color: "var(--ink-2)",
+                    margin: "0 0 16px",
+                    maxWidth: 560,
+                  }}
+                >
+                  {lang === "zh"
+                    ? "用于抓取需要登录态才能访问的 Bilibili 字幕和视频信息。"
+                    : "Used to fetch subtitles and metadata that Bilibili gates behind login."}
+                </p>
+
+                <div className="card" style={{ padding: 18 }}>
+                  {biliStatus?.logged_in ? (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                      <div
+                        className="card-quiet"
+                        style={{
+                          background: "var(--sage-soft)",
+                          color: "var(--sage-ink)",
+                          borderColor: "transparent",
+                          padding: "10px 14px",
+                          fontSize: 13,
+                        }}
+                      >
+                        {lang === "zh" ? "已连接 B站账号" : "Connected to Bilibili"}
+                        {biliStatus.dedeuserid ? `（UID: ${biliStatus.dedeuserid}）` : ""}
+                      </div>
+                      <div>
+                        <button
+                          type="button"
+                          onClick={handleBilibiliLogout}
+                          disabled={biliLoading}
+                          className="btn btn-danger btn-sm"
+                        >
+                          {biliLoading
+                            ? t("common.loading")
+                            : lang === "zh"
+                              ? "退出登录"
+                              : "Sign out"}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                      <div>
+                        <button
+                          type="button"
+                          onClick={handleBilibiliLogin}
+                          disabled={biliLoading}
+                          className="btn btn-accent btn-sm"
+                        >
+                          {biliLoading
+                            ? lang === "zh"
+                              ? "生成中…"
+                              : "Generating…"
+                            : biliQrStatus === "expired"
+                              ? lang === "zh"
+                                ? "重新生成二维码"
+                                : "Regenerate QR"
+                              : lang === "zh"
+                                ? "扫码登录 B站"
+                                : "Scan to sign in"}
+                        </button>
+                      </div>
+                      {biliQrcode ? (
+                        <div className="card-quiet" style={{ padding: 18 }}>
+                          <div
+                            style={{
+                              display: "flex",
+                              flexDirection: "column",
+                              alignItems: "center",
+                              gap: 12,
+                            }}
+                          >
+                            <img
+                              src={`data:image/png;base64,${biliQrcode}`}
+                              alt="Bilibili QR code"
+                              style={{
+                                width: 192,
+                                height: 192,
+                                borderRadius: "var(--r)",
+                                border: "1px solid var(--border)",
+                              }}
+                            />
+                            <div style={{ fontSize: 12, color: "var(--ink-3)", textAlign: "center" }}>
+                              {biliQrStatus === "scanned"
+                                ? lang === "zh"
+                                  ? "已扫码，请在手机上确认登录。"
+                                  : "Scanned. Confirm on your phone."
+                                : lang === "zh"
+                                  ? "请使用哔哩哔哩 App 扫码登录。"
+                                  : "Scan with the Bilibili app to sign in."}
+                            </div>
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  )}
+                  {biliError ? (
+                    <p style={{ marginTop: 12, fontSize: 12, color: "var(--error)" }}>
+                      {biliError}
+                    </p>
+                  ) : null}
+                  {biliSuccess ? (
+                    <p style={{ marginTop: 12, fontSize: 12, color: "var(--sage)" }}>
+                      {biliSuccess}
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+
+              <div>
+                <h2
+                  className="serif"
+                  style={{ fontSize: 22, margin: "0 0 6px", fontWeight: 500 }}
+                >
+                  Whisper
+                </h2>
+                <p
+                  style={{
+                    fontSize: 13,
+                    color: "var(--ink-2)",
+                    margin: "0 0 16px",
+                    maxWidth: 560,
+                  }}
+                >
+                  {lang === "zh"
+                    ? "当视频没有现成字幕时，会回退到这里配置的 ASR。"
+                    : "Used as the ASR fallback when a source ships no subtitles."}
+                </p>
+                <div
+                  className="card"
+                  style={{ padding: 18, display: "flex", flexDirection: "column", gap: 14 }}
+                >
+                  <Field label="Provider">
+                    <select
+                      className="input"
+                      value={whisperEdits.mode}
+                      onChange={(e) => {
+                        const next = getWhisperPreset(e.target.value);
+                        setWhisperEdits((prev) => {
+                          const isAutoUrl =
+                            !prev.api_base_url ||
+                            whisperPresets.some((p) => p.defaultBaseUrl === prev.api_base_url);
+                          const isAutoModel =
+                            !prev.api_model ||
+                            whisperPresets.some((p) => p.defaultModel === prev.api_model);
+                          return {
+                            ...prev,
+                            mode: next.id,
+                            api_base_url: isAutoUrl ? next.defaultBaseUrl ?? "" : prev.api_base_url,
+                            api_model: isAutoModel ? next.defaultModel ?? "" : prev.api_model,
+                          };
+                        });
+                      }}
+                    >
+                      {whisperPresets.map((preset) => (
+                        <option key={preset.id} value={preset.id}>
+                          {preset.label}
+                        </option>
+                      ))}
+                    </select>
+                    {getWhisperPreset(whisperEdits.mode).hint ? (
+                      <p style={{ marginTop: 6, fontSize: 11, color: "var(--ink-3)" }}>
+                        {getWhisperPreset(whisperEdits.mode).hint}
+                      </p>
+                    ) : null}
+                  </Field>
+
+                  {getWhisperPreset(whisperEdits.mode).protocol === "local" ? (
+                    <Field label={lang === "zh" ? "本地模型大小" : "Local model size"}>
+                      <select
+                        className="input"
+                        value={whisperEdits.local_model}
+                        onChange={(e) =>
+                          setWhisperEdits((prev) => ({ ...prev, local_model: e.target.value }))
+                        }
+                      >
+                        <option value="tiny">tiny</option>
+                        <option value="base">base</option>
+                        <option value="small">small</option>
+                        <option value="medium">medium</option>
+                        <option value="large">large</option>
+                      </select>
+                    </Field>
+                  ) : (
+                    <>
+                      <Field
+                        label={
+                          getWhisperPreset(whisperEdits.mode).protocol === "whispercpp"
+                            ? "Server URL"
+                            : "API Base URL"
+                        }
+                      >
+                        <input
+                          className="input"
+                          value={whisperEdits.api_base_url}
+                          onChange={(e) =>
+                            setWhisperEdits((prev) => ({
+                              ...prev,
+                              api_base_url: e.target.value,
+                            }))
+                          }
+                          placeholder={
+                            getWhisperPreset(whisperEdits.mode).defaultBaseUrl ||
+                            "https://example.com/v1"
+                          }
+                        />
+                      </Field>
+                      {getWhisperPreset(whisperEdits.mode).protocol === "openai_compat" ? (
+                        <Field label={lang === "zh" ? "模型" : "Model"}>
+                          <input
+                            className="input"
+                            value={whisperEdits.api_model}
+                            onChange={(e) =>
+                              setWhisperEdits((prev) => ({
+                                ...prev,
+                                api_model: e.target.value,
+                              }))
+                            }
+                            placeholder={
+                              getWhisperPreset(whisperEdits.mode).defaultModel || "whisper-large-v3"
+                            }
+                          />
+                        </Field>
+                      ) : null}
+                      {getWhisperPreset(whisperEdits.mode).requiresKey ? (
+                        <Field label="API Key">
+                          <input
+                            className="input"
+                            type="password"
+                            value={whisperEdits.api_key}
+                            onChange={(e) =>
+                              setWhisperEdits((prev) => ({ ...prev, api_key: e.target.value }))
+                            }
+                            placeholder={whisperConfig?.api_key_masked || "sk-…"}
+                          />
+                          {whisperConfig?.api_key_masked && !whisperEdits.api_key ? (
+                            <p
+                              style={{
+                                marginTop: 4,
+                                fontSize: 11,
+                                color: "var(--ink-4)",
+                              }}
+                            >
+                              {lang === "zh"
+                                ? `当前: ${whisperConfig.api_key_masked}（留空表示不修改）`
+                                : `Current: ${whisperConfig.api_key_masked} (leave blank to keep)`}
+                            </p>
+                          ) : null}
+                        </Field>
+                      ) : null}
+                    </>
+                  )}
+
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    <button
+                      type="button"
+                      onClick={handleSaveWhisper}
+                      disabled={whisperSaving}
+                      className="btn btn-accent btn-sm"
+                    >
+                      {whisperSaving
+                        ? t("common.loading")
+                        : lang === "zh"
+                          ? "保存 Whisper 配置"
+                          : "Save Whisper"}
+                    </button>
+                    {whisperMessage ? (
+                      <span
+                        style={{
+                          fontSize: 12,
+                          color:
+                            whisperMessage.type === "ok" ? "var(--sage)" : "var(--error)",
+                        }}
+                      >
+                        {whisperMessage.text}
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            </section>
+          ) : null}
         </div>
       </div>
+    </div>
+  );
+}
 
-      {/* Models */}
-      <div className="bg-white rounded-xl border border-gray-200 p-6">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-sm font-semibold text-gray-900">已配置模型</h2>
-          <button
-            onClick={() => setShowAddForm(!showAddForm)}
-            className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-md hover:bg-blue-700"
+function SettingRow({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "1fr auto",
+        gap: 24,
+        alignItems: "center",
+      }}
+    >
+      <div>
+        <div style={{ fontSize: 13, fontWeight: 500, color: "var(--ink)" }}>{label}</div>
+        {hint ? (
+          <div style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 2 }}>{hint}</div>
+        ) : null}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <span style={{ fontSize: 12, color: "var(--ink-2)", fontWeight: 500 }}>{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function ProviderRow({
+  model,
+  testing,
+  result,
+  onTest,
+  onDelete,
+}: {
+  model: ModelConfigResponse;
+  testing: boolean;
+  result?: { success: boolean; message: string };
+  onTest: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div
+      className="card"
+      style={{
+        padding: 14,
+        display: "grid",
+        gridTemplateColumns: "32px 1fr auto",
+        alignItems: "center",
+        gap: 14,
+      }}
+    >
+      <Avatar name={model.name.slice(0, 1)} size={32} accent="ink" />
+      <div>
+        <div style={{ fontSize: 13, fontWeight: 500 }}>{model.name}</div>
+        <div
+          style={{
+            fontSize: 11,
+            color: "var(--ink-3)",
+            display: "flex",
+            gap: 8,
+            marginTop: 2,
+            flexWrap: "wrap",
+            alignItems: "center",
+          }}
+        >
+          <span className="mono">{model.model_id}</span>
+          <span className="chip chip-mono">{model.provider_type}</span>
+          <span className="chip chip-mono">
+            {model.model_type === "embedding" ? "embed" : "chat"}
+          </span>
+          <span
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              color: model.is_active ? "var(--sage)" : "var(--ink-3)",
+            }}
           >
-            {showAddForm ? "取消" : "添加模型"}
-          </button>
+            <span
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: "50%",
+                background: model.is_active ? "var(--sage)" : "var(--ink-3)",
+              }}
+            />
+            {model.is_active ? "active" : "off"}
+          </span>
         </div>
-
-        {/* Add Model Form */}
-        {showAddForm && (
-          <form
-            onSubmit={handleAddModel}
-            className="mb-4 p-4 rounded-lg border border-blue-200 bg-blue-50 space-y-3"
+        {model.api_key_masked ? (
+          <Eyebrow>{model.api_key_masked}</Eyebrow>
+        ) : null}
+        {result ? (
+          <div
+            style={{
+              marginTop: 6,
+              fontSize: 11,
+              color: result.success ? "var(--sage)" : "var(--error)",
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+            }}
           >
-            <div>
-              <label className="block text-xs text-gray-600 mb-1">
-                名称
-              </label>
-              <input
-                type="text"
-                value={newModel.name}
-                onChange={(e) =>
-                  setNewModel({ ...newModel, name: e.target.value })
-                }
-                placeholder="例如 my-claude-sonnet"
-                required
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-gray-600 mb-1">
-                模型类型
-              </label>
-              <select
-                value={newModel.model_type}
-                onChange={(e) => handleModelTypeChange(e.target.value as ModelType)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="chat">聊天 / 推理模型</option>
-                <option value="embedding">Embedding / 向量模型</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs text-gray-600 mb-1">
-                Provider 预设
-              </label>
-              <select
-                aria-label="Provider 预设"
-                value={providerPreset}
-                onChange={(e) =>
-                  handleProviderPresetChange(e.target.value as ProviderPreset)
-                }
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                {providerPresets.map((preset) => (
-                  <option
-                    key={preset.id}
-                    value={preset.id}
-                    disabled={newModel.model_type === "embedding" && preset.chatOnly}
-                  >
-                    {preset.label}
-                  </option>
-                ))}
-              </select>
-              {newModel.provider_type === "codex" && (
-                <p className="mt-1 text-xs text-gray-400">
-                  Codex 通过 backend 容器里的官方 CLI 登录，不需要 API Key 和 Base URL。
-                </p>
-              )}
-              {providerPreset === "deepseek" && (
-                <p className="mt-1 text-xs text-gray-400">
-                  DeepSeek 使用 OpenAI 兼容接口，保存时会作为 openai_compatible provider 写入。
-                </p>
-              )}
-            </div>
-            <div>
-              <label className="block text-xs text-gray-600 mb-1">
-                模型 ID
-              </label>
-              <input
-                type="text"
-                value={newModel.model_id}
-                onChange={(e) =>
-                  setNewModel({ ...newModel, model_id: e.target.value })
-                }
-                placeholder={
-                  newModel.model_type === "embedding"
-                    ? "例如 text-embedding-3-small 或 nomic-embed-text"
-                    : newModel.provider_type === "codex"
-                    ? "例如 gpt-5-codex"
-                    : providerPreset === "deepseek"
-                    ? DEEPSEEK_DEFAULT_CHAT_MODEL
-                    : "例如 claude-sonnet-4-20250514"
-                }
-                required
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-            {requiresApiKey && (
-              <div>
-                <label className="block text-xs text-gray-600 mb-1">
-                  API Key（可选）
-                </label>
-                <input
-                  type="password"
-                  value={newModel.api_key}
-                  onChange={(e) =>
-                    setNewModel({ ...newModel, api_key: e.target.value })
-                  }
-                  placeholder="sk-..."
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-            )}
-            {supportsBaseUrl && (
-              <div>
-                <label className="block text-xs text-gray-600 mb-1">
-                  Base URL（可选，用于 OpenAI 兼容 Provider）
-                </label>
-                <input
-                  type="text"
-                  value={newModel.base_url}
-                  onChange={(e) =>
-                    setNewModel({ ...newModel, base_url: e.target.value })
-                  }
-                  placeholder="https://api.deepseek.com/v1"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-            )}
-            {isEmbeddingOnlyOpenAI && (
-              <p className="text-xs text-amber-600">
-                embedding 需要 OpenAI / OpenAI 兼容 provider，已自动切换。
-              </p>
-            )}
-            {addError && <p className="text-xs text-red-500">{addError}</p>}
-            <button
-              type="submit"
-              disabled={adding}
-              className="px-4 py-2 text-xs bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
-            >
-              {adding ? "添加中..." : "保存"}
-            </button>
-          </form>
-        )}
-
-        {models.length === 0 && !showAddForm ? (
-          <p className="text-sm text-gray-500">
-            暂无模型配置。点击「添加模型」开始配置。
-          </p>
-        ) : (
-          <div className="space-y-4">
-            {models.map((m) => (
-              <div
-                key={m.name}
-                className="p-4 rounded-lg border border-gray-200"
-              >
-                <div className="flex items-center justify-between mb-2">
-                  <div>
-                    <span className="text-sm font-medium text-gray-900">
-                      {m.name}
-                    </span>
-                    <span className="ml-2 text-xs text-gray-500">
-                      {m.provider_type}
-                    </span>
-                    <span className="ml-2 text-xs text-gray-500">
-                      {m.model_type === "embedding" ? "Embedding" : "Chat"}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`inline-block w-2 h-2 rounded-full ${m.is_active ? "bg-green-500" : "bg-gray-300"}`}
-                    />
-                    <span className="text-xs text-gray-500">
-                      {m.is_active ? "活跃" : "已禁用"}
-                    </span>
-                  </div>
-                </div>
-                <div className="text-xs text-gray-500 space-y-1">
-                  <div>模型 ID: {m.model_id}</div>
-                  {m.base_url && <div>Endpoint: {m.base_url}</div>}
-                  {m.api_key_masked && <div>API Key: {m.api_key_masked}</div>}
-                </div>
-                <div className="flex gap-2 mt-3">
-                  <button
-                    onClick={() => handleTest(m.name)}
-                    disabled={testing === m.name}
-                    className="px-3 py-2 min-h-[44px] text-xs rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-                  >
-                    {testing === m.name ? "测试中..." : "测试连通性"}
-                  </button>
-                  <button
-                    onClick={() => handleDelete(m.name)}
-                    className="px-3 py-2 min-h-[44px] text-xs rounded-md border border-red-200 text-red-600 hover:bg-red-50"
-                  >
-                    删除
-                  </button>
-                </div>
-                {testResult[m.name] && (
-                  <div
-                    className={`mt-2 text-xs px-2 py-1 rounded ${testResult[m.name].success ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}
-                  >
-                    {testResult[m.name].message}
-                  </div>
-                )}
-              </div>
-            ))}
+            {result.success ? <IcCheck size={11} /> : <IcAlert size={11} />}
+            <span>{result.message}</span>
           </div>
-        )}
+        ) : null}
+      </div>
+      <div style={{ display: "flex", gap: 6 }}>
+        <button
+          type="button"
+          onClick={onTest}
+          disabled={testing}
+          className="btn btn-outline btn-sm"
+        >
+          {testing
+            ? "…"
+            : "test"}
+        </button>
+        <button type="button" onClick={onDelete} className="btn btn-danger btn-sm">
+          ×
+        </button>
       </div>
     </div>
   );

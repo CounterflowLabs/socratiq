@@ -2,9 +2,18 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { FileText, Filter, Loader, Play, Plus, Search } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+
+import {
+  IcDoc,
+  IcFilter,
+  IcLoader,
+  IcMore,
+  IcPlus,
+  IcSearch,
+  SourceIcon,
+} from "@/components/icons";
+import { Eyebrow } from "@/components/ui/eyebrow";
+import { PageHeader } from "@/components/ui/page-header";
 import { listSources, type SourceResponse } from "@/lib/api";
 import SourceDetailDrawer from "@/components/materials/source-detail-drawer";
 import {
@@ -13,21 +22,10 @@ import {
   matchesMaterialStatusFilter,
   type MaterialStatusFilter,
 } from "@/lib/materials-state";
-
-const STATUS_LABELS: Record<MaterialStatusFilter, string> = {
-  all: "全部状态",
-  ready: "已完成",
-  processing: "处理中",
-  error: "失败",
-};
-
-function TypeIcon({ type }: { type: string }) {
-  if (type === "bilibili") return <Play className="w-5 h-5 text-blue-500" />;
-  if (type === "youtube") return <Play className="w-5 h-5 text-red-500" />;
-  return <FileText className="w-5 h-5 text-gray-400" />;
-}
+import { useT } from "@/lib/i18n";
 
 export default function SourcesPage() {
+  const { t, lang } = useT();
   const [sources, setSources] = useState<SourceResponse[]>([]);
   const [loading, setLoading] = useState(true);
   const [total, setTotal] = useState(0);
@@ -36,10 +34,7 @@ export default function SourcesPage() {
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
 
   const loadSources = useCallback(async (options?: { background?: boolean }) => {
-    if (!options?.background) {
-      setLoading(true);
-    }
-
+    if (!options?.background) setLoading(true);
     try {
       const res = await listSources();
       setSources(res.items);
@@ -47,9 +42,7 @@ export default function SourcesPage() {
     } catch (e) {
       console.error("Failed to load sources:", e);
     } finally {
-      if (!options?.background) {
-        setLoading(false);
-      }
+      if (!options?.background) setLoading(false);
     }
   }, []);
 
@@ -58,18 +51,12 @@ export default function SourcesPage() {
   }, [loadSources]);
 
   useEffect(() => {
-    const hasActiveSource = sources.some((source) => isMaterialActive(source));
-    if (!hasActiveSource) {
-      return;
-    }
-
+    const hasActive = sources.some((source) => isMaterialActive(source));
+    if (!hasActive) return;
     const interval = window.setInterval(() => {
       void loadSources({ background: true });
     }, 3000);
-
-    return () => {
-      window.clearInterval(interval);
-    };
+    return () => window.clearInterval(interval);
   }, [loadSources, sources]);
 
   useEffect(() => {
@@ -84,127 +71,279 @@ export default function SourcesPage() {
     const matchesQuery = normalizedQuery.length === 0 || title.includes(normalizedQuery);
     return matchesQuery && matchesMaterialStatusFilter(source, statusFilter);
   });
+
   const selectedSource = selectedSourceId
     ? sources.find((source) => source.id === selectedSourceId) ?? null
     : null;
 
+  const STATUS_LABELS: Record<MaterialStatusFilter, string> = {
+    all: t("sources.filterAll"),
+    ready: t("sources.filterReady"),
+    processing: t("sources.filterProcessing"),
+    error: t("sources.filterError"),
+  };
+
   return (
-    <div className="min-h-screen" style={{ background: "var(--bg)" }}>
-      <div className="mx-auto max-w-5xl px-4 pb-6 pt-14 sm:px-6 md:pt-6">
-        <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <h1 className="text-xl font-bold text-gray-900">资料</h1>
-            <p className="mt-1 text-sm text-gray-500">
-              在这里查看已导入资料的处理进度、课程生成状态和下一步入口。
-            </p>
-          </div>
-          <Link className="w-full sm:w-auto" href="/import">
-            <Button className="w-full sm:w-auto" size="sm">
-              <Plus className="w-3.5 h-3.5" /> 导入资料
-            </Button>
+    <div style={{ padding: "32px 40px 80px", maxWidth: 1100, margin: "0 auto", width: "100%" }}>
+      <PageHeader
+        eyebrow={t("nav.sources")}
+        title={t("sources.title")}
+        subtitle={t("sources.subtitle")}
+        action={
+          <Link href="/import" className="btn btn-outline">
+            <IcPlus size={14} />
+            <span>{t("common.new")}</span>
+          </Link>
+        }
+      />
+
+      {/* Filter strip */}
+      <div
+        className="card-quiet"
+        style={{
+          padding: 12,
+          marginBottom: 16,
+          display: "flex",
+          gap: 12,
+          alignItems: "center",
+          flexWrap: "wrap",
+        }}
+      >
+        <label style={{ position: "relative", flex: 1, minWidth: 220 }}>
+          <span className="sr-only">{t("common.search")}</span>
+          <IcSearch
+            size={14}
+            style={{
+              position: "absolute",
+              left: 12,
+              top: "50%",
+              transform: "translateY(-50%)",
+              color: "var(--ink-3)",
+              pointerEvents: "none",
+            }}
+          />
+          <input
+            className="input"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={lang === "zh" ? "搜索资料标题" : "Search source titles"}
+            style={{ paddingLeft: 32 }}
+          />
+        </label>
+
+        <label style={{ position: "relative", minWidth: 180 }}>
+          <span className="sr-only">状态筛选</span>
+          <IcFilter
+            size={14}
+            style={{
+              position: "absolute",
+              left: 12,
+              top: "50%",
+              transform: "translateY(-50%)",
+              color: "var(--ink-3)",
+              pointerEvents: "none",
+            }}
+          />
+          <select
+            aria-label="状态筛选"
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value as MaterialStatusFilter)}
+            className="input"
+            style={{ paddingLeft: 32, appearance: "none", cursor: "pointer" }}
+          >
+            {Object.entries(STATUS_LABELS).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <span style={{ fontSize: 12, color: "var(--ink-3)" }}>
+          {lang === "zh"
+            ? `当前显示 ${filteredSources.length} / ${total} 份资料`
+            : `Showing ${filteredSources.length} / ${total} sources`}
+        </span>
+      </div>
+
+      {loading ? (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "64px 0",
+            gap: 8,
+            color: "var(--ink-3)",
+            fontSize: 13,
+          }}
+        >
+          <IcLoader size={16} className="spin" />
+          <span>{t("common.loading")}</span>
+        </div>
+      ) : sources.length === 0 ? (
+        <div className="card" style={{ textAlign: "center", padding: 40 }}>
+          <IcDoc size={28} style={{ color: "var(--ink-4)", margin: "0 auto 12px" }} />
+          <h3 className="serif" style={{ fontSize: 17, margin: "0 0 6px" }}>
+            {t("sources.empty")}
+          </h3>
+          <p style={{ fontSize: 13, color: "var(--ink-2)", marginBottom: 18 }}>
+            {t("sources.emptyHint")}
+          </p>
+          <Link href="/import" className="btn btn-accent">
+            <IcPlus size={14} />
+            <span>{t("dashboard.importFirst")}</span>
           </Link>
         </div>
-
-        <Card className="mb-6 p-4">
-          <div className="flex flex-col gap-3 sm:flex-row">
-            <label className="relative flex-1">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-              <input
-                className="h-10 w-full rounded-lg border border-gray-200 bg-white pl-9 pr-3 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="搜索资料标题"
-                value={query}
-              />
-            </label>
-
-            <label className="relative sm:w-48">
-              <span className="sr-only">状态筛选</span>
-              <Filter className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-              <select
-                aria-label="状态筛选"
-                className="h-10 w-full appearance-none rounded-lg border border-gray-200 bg-white pl-9 pr-3 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                onChange={(event) => setStatusFilter(event.target.value as MaterialStatusFilter)}
-                value={statusFilter}
-              >
-                {Object.entries(STATUS_LABELS).map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-          <p className="mt-3 text-sm text-gray-500">
-            {`当前显示 ${filteredSources.length} / ${total} 份资料`}
+      ) : filteredSources.length === 0 ? (
+        <div className="card" style={{ textAlign: "center", padding: 40 }}>
+          <h3 className="serif" style={{ fontSize: 16 }}>{t("common.noResults")}</h3>
+          <p style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 8 }}>
+            {lang === "zh" ? "试试更换关键词，或切换状态筛选。" : "Try a different keyword or filter."}
           </p>
-        </Card>
-
-        {loading ? (
-          <div className="flex items-center justify-center py-16 text-gray-400">
-            <Loader className="w-5 h-5 animate-spin mr-2" />
-            <span className="text-sm">加载中...</span>
+        </div>
+      ) : (
+        <div
+          style={{
+            border: "1px solid var(--border)",
+            borderRadius: "var(--r-lg)",
+            overflow: "hidden",
+            background: "var(--surface)",
+          }}
+        >
+          {/* Header row */}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "36px 1fr 110px 120px 90px 40px",
+              padding: "10px 16px",
+              borderBottom: "1px solid var(--border)",
+              background: "var(--surface-2)",
+              alignItems: "center",
+              gap: 12,
+            }}
+          >
+            <span />
+            <Eyebrow>{t("sources.colName")}</Eyebrow>
+            <Eyebrow>{t("sources.colLength")}</Eyebrow>
+            <Eyebrow>{t("sources.colImported")}</Eyebrow>
+            <Eyebrow>{t("sources.colCited")}</Eyebrow>
+            <span />
           </div>
-        ) : sources.length === 0 ? (
-          <Card className="p-10 text-center">
-            <FileText className="w-10 h-10 text-gray-300 mx-auto mb-3" />
-            <h3 className="text-base font-semibold text-gray-900 mb-2">还没有导入资料</h3>
-            <p className="text-sm text-gray-500 mb-4">导入视频或 PDF 开始学习</p>
-            <Link href="/import">
-              <Button><Plus className="w-4 h-4" /> 导入第一份资料</Button>
-            </Link>
-          </Card>
-        ) : filteredSources.length === 0 ? (
-          <Card className="p-10 text-center">
-            <h3 className="text-base font-semibold text-gray-900">没有匹配的资料</h3>
-            <p className="mt-2 text-sm text-gray-500">试试更换关键词，或切换状态筛选。</p>
-          </Card>
-        ) : (
-          <div className="grid gap-3 md:grid-cols-2">
-            {filteredSources.map((source) => {
-              const presentation = deriveMaterialPresentation(source);
 
-              return (
-                <Card key={source.id} className="p-0 transition hover:border-blue-200 hover:shadow-sm">
-                  <button
-                    className="w-full bg-transparent p-4 text-left"
-                    onClick={() => setSelectedSourceId(source.id)}
-                    type="button"
+          {filteredSources.map((source, index) => {
+            const presentation = deriveMaterialPresentation(source);
+            const isLast = index === filteredSources.length - 1;
+            const meta = source.metadata_ as Record<string, unknown> | undefined;
+            const lengthText =
+              typeof meta?.duration === "string"
+                ? meta.duration
+                : typeof meta?.pages === "number"
+                  ? `${meta.pages}p`
+                  : typeof meta?.word_count === "number"
+                    ? `${Math.round((meta.word_count as number) / 1000)}k`
+                    : "—";
+            const updated = new Date(source.updated_at).toLocaleDateString(
+              lang === "zh" ? "zh-CN" : "en-US",
+              { month: "short", day: "numeric" },
+            );
+
+            return (
+              <button
+                key={source.id}
+                type="button"
+                onClick={() => setSelectedSourceId(source.id)}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "36px 1fr 110px 120px 90px 40px",
+                  padding: "14px 16px",
+                  borderBottom: isLast ? "none" : "1px solid var(--border-2)",
+                  alignItems: "center",
+                  gap: 12,
+                  cursor: "pointer",
+                  background: "transparent",
+                  border: "none",
+                  width: "100%",
+                  textAlign: "left",
+                  color: "inherit",
+                  fontFamily: "inherit",
+                  transition: "background var(--duration-fast) ease",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = "var(--surface-2)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "transparent";
+                }}
+              >
+                <SourceIcon type={source.type} size={18} />
+                <div style={{ minWidth: 0 }}>
+                  <div
+                    className="serif"
+                    style={{
+                      fontSize: 15,
+                      fontWeight: 500,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
                   >
-                    <div className="flex items-start gap-4">
-                      <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-2xl bg-gray-100">
-                        <TypeIcon type={source.type} />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-start justify-between gap-3">
-                          <h2 className="truncate text-sm font-semibold text-gray-900">
-                            {source.title || source.url || "未命名资料"}
-                          </h2>
-                          <span className="rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-600">
-                            {presentation.badge}
-                          </span>
-                        </div>
-                        <p className="mt-2 line-clamp-2 text-sm text-gray-500">
-                          {presentation.supportingText}
-                        </p>
-                        <div className="mt-3 flex items-center justify-between gap-3 text-xs text-gray-400">
-                          <span>{new Date(source.updated_at).toLocaleDateString("zh-CN")}</span>
-                          <span>{source.course_count} 门课程</span>
-                        </div>
-                      </div>
-                    </div>
-                  </button>
-                </Card>
-              );
-            })}
-          </div>
-        )}
+                    {source.title || source.url || (lang === "zh" ? "未命名资料" : "Untitled source")}
+                  </div>
+                  <div
+                    style={{
+                      marginTop: 4,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      fontSize: 11,
+                      color: "var(--ink-3)",
+                    }}
+                  >
+                    <span
+                      className={`chip chip-mono ${
+                        presentation.category === "error"
+                          ? "chip-error"
+                          : presentation.category === "processing"
+                            ? "chip-warn"
+                            : "chip-sage"
+                      }`}
+                    >
+                      {presentation.badge}
+                    </span>
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {presentation.supportingText}
+                    </span>
+                  </div>
+                </div>
+                <span className="mono num" style={{ fontSize: 12, color: "var(--ink-3)" }}>
+                  {lengthText}
+                </span>
+                <span style={{ fontSize: 12, color: "var(--ink-3)" }}>{updated}</span>
+                <span
+                  className="mono num"
+                  style={{
+                    fontSize: 12,
+                    color: source.course_count > 0 ? "var(--accent)" : "var(--ink-2)",
+                    fontWeight: source.course_count > 0 ? 500 : 400,
+                  }}
+                >
+                  {source.course_count}×
+                </span>
+                <span className="btn btn-ghost btn-icon btn-sm" aria-hidden>
+                  <IcMore size={14} />
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
 
-        <SourceDetailDrawer
-          onClose={() => setSelectedSourceId(null)}
-          open={selectedSource !== null}
-          source={selectedSource}
-        />
-      </div>
+      <SourceDetailDrawer
+        onClose={() => setSelectedSourceId(null)}
+        open={selectedSource !== null}
+        source={selectedSource}
+      />
     </div>
   );
 }

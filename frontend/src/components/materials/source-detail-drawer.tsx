@@ -2,7 +2,12 @@
 
 import Link from "next/link";
 import { useEffect } from "react";
-import { ArrowRight, FileText, Play, X } from "lucide-react";
+import {
+  IcArrowRight as ArrowRight,
+  IcDoc as FileText,
+  IcVideo as Play,
+  IcClose as X,
+} from "@/components/icons";
 import type { SourceResponse, SourceTaskSummary } from "@/lib/api";
 import { deriveMaterialPresentation } from "@/lib/materials-state";
 

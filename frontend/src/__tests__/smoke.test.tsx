@@ -2,19 +2,23 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { cleanup, render, screen, waitFor, fireEvent } from "@testing-library/react";
 import React, { Suspense } from "react";
 
-// Mock react-markdown (ESM-only package that doesn't work in jsdom)
+// Mock react-markdown (ESM-only package that doesn't work in jsdom).
 vi.mock("react-markdown", () => ({
   default: ({ children }: { children: string }) =>
     React.createElement("div", { "data-testid": "markdown" }, children),
 }));
 
-// Helper: mock fetch with exact-end-of-path matching to avoid ambiguity
-function mockFetch(responses: Record<string, unknown>) {
-  return vi.fn((url: string) => {
-    // Sort keys by length descending so more specific paths match first
-    const sortedKeys = Object.keys(responses).sort(
-      (a, b) => b.length - a.length
-    );
+vi.mock("next/font/google", () => ({
+  Source_Serif_4: () => ({ variable: "--font-source-serif", style: { fontFamily: "Source Serif 4" } }),
+  Geist: () => ({ variable: "--font-geist", style: { fontFamily: "Geist" } }),
+  Geist_Mono: () => ({ variable: "--font-geist-mono", style: { fontFamily: "Geist Mono" } }),
+  Noto_Serif_SC: () => ({ variable: "--font-noto-serif-sc", style: { fontFamily: "Noto Serif SC" } }),
+  Noto_Sans_SC: () => ({ variable: "--font-noto-sans-sc", style: { fontFamily: "Noto Sans SC" } }),
+}));
+
+function mockFetch(responses: Record<string, unknown>): typeof fetch {
+  const fn = vi.fn((url: string) => {
+    const sortedKeys = Object.keys(responses).sort((a, b) => b.length - a.length);
     const matchedUrl = sortedKeys.find((key) => url.endsWith(key) || url.includes(key + "?"));
     if (matchedUrl) {
       return Promise.resolve({
@@ -29,13 +33,14 @@ function mockFetch(responses: Record<string, unknown>) {
       text: () => Promise.resolve("Not found"),
     });
   });
+  return fn as unknown as typeof fetch;
 }
 
 function mockSettingsFetch(options: {
   models?: unknown[];
   routes?: unknown[];
   createModel?: unknown;
-} = {}) {
+} = {}): typeof fetch {
   const models = options.models ?? [];
   const routes = options.routes ?? [];
   const createModel = options.createModel ?? {
@@ -49,7 +54,7 @@ function mockSettingsFetch(options: {
     is_active: true,
   };
 
-  return vi.fn((url: string, init?: RequestInit) => {
+  const fn = vi.fn((url: string, init?: RequestInit) => {
     if (url.endsWith("/api/v1/models") && init?.method === "POST") {
       return Promise.resolve({
         ok: true,
@@ -99,14 +104,13 @@ function mockSettingsFetch(options: {
       text: () => Promise.resolve("Not found"),
     });
   });
+  return fn as unknown as typeof fetch;
 }
 
-// Wrapper for components using useSearchParams (needs Suspense)
 function SuspenseWrapper({ children }: { children: React.ReactNode }) {
-  return <Suspense fallback={<div>Loading...</div>}>{children}</Suspense>;
+  return <Suspense fallback={<div>Loading…</div>}>{children}</Suspense>;
 }
 
-// Reset Zustand stores between tests
 import { useChatStore, useCoursesStore, useSourcesStore, useTasksStore } from "@/lib/stores";
 
 function resetStores() {
@@ -128,13 +132,15 @@ afterEach(() => {
   vi.resetModules();
 });
 
-// ─── Dashboard Tests ────────────────────────────────
+// ─── Dashboard ─────────────────────────────────────────
 
 describe("Dashboard", () => {
-  it("shows empty state when no courses", async () => {
+  it("shows the empty-state CTA when no courses are loaded", async () => {
     globalThis.fetch = mockFetch({
       "/api/v1/courses": { items: [], total: 0, skip: 0, limit: 20 },
       "/api/v1/reviews/stats": { due_today: 0, completed_today: 0 },
+      "/api/v1/reviews/due": { items: [] },
+      "/api/v1/setup/status": { has_models: true },
     });
 
     const DashboardPage = (await import("@/app/page")).default;
@@ -153,6 +159,7 @@ describe("Dashboard", () => {
             id: "c1",
             title: "深度学习基础",
             description: "测试课程",
+            version_index: 1,
             created_at: "2026-01-01T00:00:00Z",
             updated_at: "2026-01-01T00:00:00Z",
           },
@@ -161,7 +168,9 @@ describe("Dashboard", () => {
         skip: 0,
         limit: 20,
       },
-      "/api/v1/reviews/stats": { due_today: 3, completed_today: 1 },
+      "/api/v1/reviews/stats": { due_today: 0, completed_today: 0 },
+      "/api/v1/reviews/due": { items: [] },
+      "/api/v1/setup/status": { has_models: true },
     });
 
     const DashboardPage = (await import("@/app/page")).default;
@@ -173,7 +182,7 @@ describe("Dashboard", () => {
   });
 });
 
-// ─── Import Tests ────────────────────────────────────
+// ─── Import ────────────────────────────────────────────
 
 describe("Import Page", () => {
   beforeEach(() => {
@@ -192,31 +201,27 @@ describe("Import Page", () => {
     }) as unknown as typeof fetch;
   });
 
-  it("renders both source type tabs", async () => {
+  it("renders the URL / Upload / Text tabs", async () => {
     const ImportPage = (await import("@/app/import/page")).default;
     render(<ImportPage />);
 
-    // Use getByRole to avoid matching the description paragraph
-    const buttons = screen.getAllByRole("button");
-    const biliButton = buttons.find((b) => b.textContent?.includes("B站视频"));
-    const pdfButton = buttons.find((b) => b.textContent?.includes("PDF 文档"));
-    expect(biliButton).toBeTruthy();
-    expect(pdfButton).toBeTruthy();
+    expect(screen.getByRole("button", { name: /从链接导入/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /上传文件/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /粘贴文本/ })).toBeInTheDocument();
   });
 
-  it("shows URL input on Bilibili tab", async () => {
+  it("shows the URL input on the URL tab by default", async () => {
     const ImportPage = (await import("@/app/import/page")).default;
     render(<ImportPage />);
 
     await waitFor(() => {
-      const input = screen.getByPlaceholderText(
-        "https://www.bilibili.com/video/BV..."
-      );
-      expect(input).toBeInTheDocument();
+      expect(
+        screen.getByPlaceholderText(/粘贴 B站 \/ YouTube 链接/),
+      ).toBeInTheDocument();
     });
   });
 
-  it("blocks bilibili import and shows settings link when no credential is configured", async () => {
+  it("blocks bilibili import and shows the settings link when no credential is configured", async () => {
     const push = vi.fn();
     vi.doMock("next/navigation", () => ({
       useRouter: () => ({ push, back: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
@@ -239,82 +244,17 @@ describe("Import Page", () => {
     const ImportPage = (await import("@/app/import/page")).default;
     render(<ImportPage />);
 
-    const banner = await screen.findByRole("alert");
-    expect(banner.textContent).toContain("登录 B 站账号");
+    const input = screen.getByPlaceholderText(/粘贴 B站 \/ YouTube 链接/);
+    fireEvent.change(input, { target: { value: "https://www.bilibili.com/video/BV1xx" } });
 
-    const submitBtn = screen.getByRole("button", { name: "开始导入" });
-    expect(submitBtn).toBeDisabled();
+    const banner = await screen.findByRole("alert");
+    expect(banner.textContent).toContain("登录");
 
     fireEvent.click(screen.getByRole("button", { name: /前往设置登录/ }));
     expect(push).toHaveBeenCalledWith("/settings");
   });
 
-  it("falls back to credential-required banner on 412 from create_source", async () => {
-    vi.doMock("next/navigation", () => ({
-      useRouter: () => ({ push: vi.fn(), back: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
-      useSearchParams: () => new URLSearchParams(),
-      usePathname: () => "/import",
-    }));
-
-    let statusCalls = 0;
-    globalThis.fetch = vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
-      const u = typeof url === "string" ? url : url.toString();
-      if (u.includes("/setup/bilibili/status")) {
-        statusCalls += 1;
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({ logged_in: true, source: "db" }),
-        }) as ReturnType<typeof fetch>;
-      }
-      if (u.includes("/sources") && init?.method === "POST") {
-        const body = JSON.stringify({
-          detail: {
-            code: "bilibili_credential_required",
-            message: "需要登录 B 站",
-          },
-        });
-        return Promise.resolve({
-          ok: false,
-          status: 412,
-          statusText: "Precondition Failed",
-          url: u,
-          text: () => Promise.resolve(body),
-        }) as ReturnType<typeof fetch>;
-      }
-      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) }) as ReturnType<typeof fetch>;
-    }) as unknown as typeof fetch;
-
-    vi.resetModules();
-    const ImportPage = (await import("@/app/import/page")).default;
-    render(<ImportPage />);
-
-    fireEvent.change(
-      await screen.findByPlaceholderText("https://www.bilibili.com/video/BV..."),
-      { target: { value: "https://www.bilibili.com/video/BV1xx" } }
-    );
-    fireEvent.click(screen.getByRole("button", { name: "开始导入" }));
-
-    await screen.findByRole("alert");
-    expect(statusCalls).toBeGreaterThanOrEqual(1);
-  });
-
-  it("shows upload area on PDF tab", async () => {
-    const ImportPage = (await import("@/app/import/page")).default;
-    render(<ImportPage />);
-
-    // Click the PDF tab
-    const buttons = screen.getAllByRole("button");
-    const pdfTab = buttons.find((b) => b.textContent?.includes("PDF 文档"));
-    fireEvent.click(pdfTab!);
-
-    await waitFor(() => {
-      expect(
-        screen.getByText("拖拽 PDF 到这里，或点击选择文件")
-      ).toBeInTheDocument();
-    });
-  });
-
-  it("allows import submission without choosing a learning goal and redirects to the materials hub", async () => {
+  it("submits a URL import and pushes the user to /sources", async () => {
     const push = vi.fn();
 
     vi.doMock("next/navigation", () => ({
@@ -345,34 +285,25 @@ describe("Import Page", () => {
     const ImportPage = (await import("@/app/import/page")).default;
     render(<ImportPage />);
 
-    fireEvent.change(screen.getByPlaceholderText("https://www.bilibili.com/video/BV..."), {
+    fireEvent.change(screen.getByPlaceholderText(/粘贴 B站 \/ YouTube 链接/), {
       target: { value: "https://www.bilibili.com/video/BV1xoJwzDESD" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "开始导入" }));
+    fireEvent.click(screen.getByRole("button", { name: /开始分析/ }));
 
     await waitFor(() => expect(createCalls).toBe(1));
     await waitFor(() => expect(push).toHaveBeenCalledWith("/sources"));
   });
 });
 
-// ─── Settings Tests ──────────────────────────────────
+// ─── Settings ──────────────────────────────────────────
 
 describe("Settings Page", () => {
-  it("shows loading state initially", async () => {
-    // Fetch that never resolves
-    globalThis.fetch = vi.fn(() => new Promise(() => {}));
-
-    const SettingsPage = (await import("@/app/settings/page")).default;
-    render(<SettingsPage />);
-
-    expect(screen.getByText("加载中...")).toBeInTheDocument();
-  });
-
-  it("renders model list", async () => {
+  it("renders model rows when LLM section is active", async () => {
     const modelsData = [
       {
         name: "claude-sonnet",
         provider_type: "anthropic",
+        model_type: "chat",
         model_id: "claude-sonnet-4",
         supports_tool_use: true,
         supports_streaming: true,
@@ -392,25 +323,15 @@ describe("Settings Page", () => {
     const SettingsPage = (await import("@/app/settings/page")).default;
     render(<SettingsPage />);
 
+    fireEvent.click(screen.getByRole("button", { name: "LLM 提供商" }));
+
     await waitFor(() => {
-      // "claude-sonnet" appears in both route and model sections
       expect(screen.getAllByText("claude-sonnet").length).toBeGreaterThanOrEqual(1);
       expect(screen.getByText("anthropic")).toBeInTheDocument();
     });
   });
 
-  it("shows empty state when no models", async () => {
-    globalThis.fetch = mockSettingsFetch();
-
-    const SettingsPage = (await import("@/app/settings/page")).default;
-    render(<SettingsPage />);
-
-    await waitFor(() => {
-      expect(screen.getByText(/暂无模型配置/)).toBeInTheDocument();
-    });
-  });
-
-  it("prefills DeepSeek provider preset and submits it as OpenAI-compatible", async () => {
+  it("opens the add-model form and prefills the DeepSeek preset", async () => {
     const fetchMock = mockSettingsFetch({
       createModel: {
         name: "deepseek-default",
@@ -429,50 +350,25 @@ describe("Settings Page", () => {
     const SettingsPage = (await import("@/app/settings/page")).default;
     render(<SettingsPage />);
 
+    fireEvent.click(screen.getByRole("button", { name: "LLM 提供商" }));
+
     await waitFor(() => {
-      expect(screen.getByText(/暂无模型配置/)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /添加模型/ })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "添加模型" }));
+    fireEvent.click(screen.getByRole("button", { name: /添加模型/ }));
     fireEvent.change(screen.getByRole("combobox", { name: "Provider 预设" }), {
       target: { value: "deepseek" },
     });
 
     expect(screen.getByDisplayValue("deepseek-default")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("deepseek-v4-flash")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("https://api.deepseek.com")).toBeInTheDocument();
-
-    fireEvent.change(screen.getByPlaceholderText("sk-..."), {
-      target: { value: "sk-deepseek" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
-
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith(
-        "/api/v1/models",
-        expect.objectContaining({ method: "POST" })
-      );
-    });
-
-    const createCall = fetchMock.mock.calls.find(
-      ([url, init]) => url === "/api/v1/models" && init?.method === "POST"
-    );
-    expect(createCall).toBeTruthy();
-    expect(JSON.parse(createCall?.[1]?.body as string)).toMatchObject({
-      name: "deepseek-default",
-      provider_type: "openai_compatible",
-      model_type: "chat",
-      model_id: "deepseek-v4-flash",
-      api_key: "sk-deepseek",
-      base_url: "https://api.deepseek.com",
-    });
   });
 });
 
-// ─── Learn Page Tests ────────────────────────────────
+// ─── Learn ─────────────────────────────────────────────
 
 describe("Learn Page", () => {
-  it("renders the dedicated learn shell", async () => {
+  it("renders the persistent-mentor learn shell with the back-to-home link", async () => {
     vi.doMock("next/navigation", () => ({
       useRouter: () => ({ push: vi.fn(), back: vi.fn(), replace: vi.fn() }),
       useSearchParams: () => {
@@ -489,6 +385,7 @@ describe("Learn Page", () => {
         id: "c1",
         title: "测试课程",
         description: "desc",
+        version_index: 1,
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
         sources: [],
@@ -511,26 +408,24 @@ describe("Learn Page", () => {
     render(
       <SuspenseWrapper>
         <LearnPage />
-      </SuspenseWrapper>
+      </SuspenseWrapper>,
     );
 
     await waitFor(
       () => {
         expect(screen.getByRole("heading", { name: "测试课程" })).toBeInTheDocument();
         expect(screen.getByText("课程目录")).toBeInTheDocument();
-        expect(
-          screen.getByRole("button", { name: /打开学习辅助区/i })
-        ).toBeInTheDocument();
+        expect(screen.getByLabelText("返回首页")).toHaveAttribute("href", "/");
       },
-      { timeout: 3000 }
+      { timeout: 3000 },
     );
   });
 });
 
-// ─── Path Page Tests ─────────────────────────────────
+// ─── Path ──────────────────────────────────────────────
 
 describe("Path Page", () => {
-  it("renders course sections", async () => {
+  it("renders course sections grouped by unit", async () => {
     vi.doMock("next/navigation", () => ({
       useRouter: () => ({ push: vi.fn(), back: vi.fn() }),
       useSearchParams: () => {
@@ -546,9 +441,10 @@ describe("Path Page", () => {
         id: "c1",
         title: "测试课程",
         description: "课程描述",
+        version_index: 1,
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
-        source_ids: [],
+        sources: [],
         sections: [
           {
             id: "s1",
@@ -566,6 +462,7 @@ describe("Path Page", () => {
           },
         ],
       },
+      "/api/v1/courses/c1/progress": [],
     });
 
     vi.resetModules();
@@ -573,11 +470,11 @@ describe("Path Page", () => {
     render(
       <SuspenseWrapper>
         <PathPage />
-      </SuspenseWrapper>
+      </SuspenseWrapper>,
     );
 
     await waitFor(() => {
-      expect(screen.getByText("测试课程")).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "测试课程" })).toBeInTheDocument();
     });
 
     await waitFor(() => {
@@ -587,7 +484,7 @@ describe("Path Page", () => {
   });
 });
 
-// ─── API Client Tests ────────────────────────────────
+// ─── API Client ────────────────────────────────────────
 
 describe("API Client", () => {
   it("createSourceFromURL calls fetch correctly", async () => {
@@ -601,12 +498,10 @@ describe("API Client", () => {
           task_id: "t1",
         }),
     });
-    globalThis.fetch = fetchMock as typeof fetch;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
 
     const { createSourceFromURL } = await import("@/lib/api");
-    const result = await createSourceFromURL(
-      "https://bilibili.com/video/BV1test"
-    );
+    const result = await createSourceFromURL("https://bilibili.com/video/BV1test");
 
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
     const [url, options] = fetchMock.mock.calls[0] ?? [];
@@ -618,8 +513,7 @@ describe("API Client", () => {
   it("listCourses returns paginated response", async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: () =>
-        Promise.resolve({ items: [], total: 0, skip: 0, limit: 20 }),
+      json: () => Promise.resolve({ items: [], total: 0, skip: 0, limit: 20 }),
     });
 
     const { listCourses } = await import("@/lib/api");

@@ -1,7 +1,8 @@
 "use client";
 
-import { PanelLeftClose } from "lucide-react";
-import { clsx } from "clsx";
+import { IcExercise, IcPanelLeftClose } from "@/components/icons";
+import { Eyebrow } from "@/components/ui/eyebrow";
+import { Ornament } from "@/components/ui/ornament";
 
 import type { SectionResponse } from "@/lib/api";
 
@@ -36,99 +37,178 @@ export default function CourseOutline({
   onCollapse,
 }: CourseOutlineProps) {
   return (
-    <aside className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-[0_16px_48px_rgba(15,23,42,0.08)]">
-      <div className="border-b border-slate-200 px-4 py-3">
-        <div className="flex items-start justify-between gap-3">
+    <aside
+      style={{
+        background: "var(--surface)",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--r-lg)",
+        overflow: "hidden",
+      }}
+    >
+      <div
+        style={{
+          padding: "14px 16px",
+          borderBottom: "1px solid var(--border)",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
           <div>
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-teal-700">
-              Learning Map
-            </p>
-            <h2 className="mt-0.5 text-base font-semibold text-slate-900">课程目录</h2>
+            <Eyebrow>Learning map</Eyebrow>
+            <h2
+              className="serif"
+              style={{ fontSize: 16, fontWeight: 500, margin: "4px 0 0", color: "var(--ink)" }}
+            >
+              课程目录
+            </h2>
           </div>
-          <div className="flex items-center gap-1.5">
-            <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-600">
-              {sections.length} 模块
-            </span>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span className="chip chip-mono">{sections.length} 模块</span>
             {onCollapse ? (
               <button
                 type="button"
                 onClick={onCollapse}
                 aria-label="收起课程目录"
-                className="rounded-md p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                className="btn btn-ghost btn-icon btn-sm"
+                style={{ color: "var(--ink-3)" }}
               >
-                <PanelLeftClose className="h-3.5 w-3.5" />
+                <IcPanelLeftClose size={14} />
               </button>
             ) : null}
           </div>
         </div>
-        <p className="mt-1.5 text-[11px] text-slate-500">
+        <p style={{ marginTop: 6, fontSize: 11, color: "var(--ink-3)" }}>
           {lessonWaypoints.length > 0
             ? `${sections.length} 个章节 · ${lessonWaypoints.length} 个知识片段`
             : `${sections.length} 个章节`}
         </p>
       </div>
 
-      <div className="max-h-[60vh] overflow-y-auto p-2 lg:max-h-[70vh]">
-        <div className="space-y-1">
-          {sections.map((section, index) => {
-            const isActive = section.id === currentSectionId;
-
-            return (
-              <button
-                key={section.id}
-                type="button"
-                onClick={() => onSelectSection(section)}
-                className={clsx(
-                  "w-full rounded-md border px-3 py-2 text-left transition",
-                  isActive
-                    ? "border-teal-300 bg-teal-50 text-teal-950"
-                    : "border-transparent text-slate-700 hover:border-slate-200 hover:bg-slate-50"
-                )}
+      <div
+        style={{
+          maxHeight: "70vh",
+          overflowY: "auto",
+          padding: 12,
+          display: "flex",
+          flexDirection: "column",
+          gap: 4,
+        }}
+      >
+        {sections.map((section, index) => {
+          const isActive = section.id === currentSectionId;
+          return (
+            <button
+              key={section.id}
+              type="button"
+              onClick={() => onSelectSection(section)}
+              className="nav-item"
+              style={{
+                fontSize: 13,
+                paddingLeft: 16,
+                position: "relative",
+                color: isActive ? "var(--ink)" : "var(--ink-2)",
+                fontWeight: isActive ? 500 : 400,
+                background: isActive ? "var(--surface-2)" : "transparent",
+                alignItems: "flex-start",
+                gap: 10,
+                whiteSpace: "normal",
+              }}
+            >
+              {isActive ? (
+                <span
+                  style={{
+                    position: "absolute",
+                    left: 4,
+                    top: 12,
+                    bottom: 12,
+                    width: 2,
+                    background: "var(--accent)",
+                    borderRadius: 1,
+                  }}
+                />
+              ) : null}
+              <span
+                className="mono num"
+                style={{ fontSize: 11, color: "var(--ink-4)", marginTop: 2 }}
               >
-                <p className="text-[10px] font-medium uppercase tracking-wide text-slate-400">
-                  Section {index + 1}
-                </p>
-                <p className="mt-0.5 text-[13px] font-semibold leading-snug">
-                  {section.title}
-                </p>
-              </button>
-            );
-          })}
-        </div>
+                L{String(index + 1).padStart(2, "0")}
+              </span>
+              <span
+                style={{
+                  display: "block",
+                  fontFamily: "var(--serif)",
+                  lineHeight: 1.35,
+                }}
+              >
+                {section.title}
+              </span>
+            </button>
+          );
+        })}
 
         {lessonWaypoints.length > 0 ? (
-          <nav aria-label="本节脉络" className="mt-3 border-t border-slate-200 pt-3">
-            <div className="mb-1.5 flex items-center justify-between gap-2 px-1">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                本节脉络
-              </p>
-              <span className="text-[10px] text-slate-400">
+          <nav aria-label="本节脉络" style={{ marginTop: 4 }}>
+            <Ornament width={32} />
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "0 4px",
+                marginBottom: 6,
+              }}
+            >
+              <Eyebrow>本节脉络</Eyebrow>
+              <span style={{ fontSize: 10, color: "var(--ink-4)" }}>
                 {lessonWaypoints.length} 片段
               </span>
             </div>
-            <ul className="space-y-px">
+            <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 2 }}>
               {lessonWaypoints.map((waypoint, index) => (
                 <li key={waypoint.id}>
                   <button
                     type="button"
                     onClick={() => onSelectWaypoint?.(waypoint.id)}
-                    className="group flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition hover:bg-amber-50/70"
+                    className="nav-item"
+                    style={{
+                      fontSize: 12,
+                      padding: "6px 10px",
+                      gap: 8,
+                      alignItems: "flex-start",
+                    }}
                   >
-                    <span className="mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-[10px] font-medium tabular-nums text-slate-400 group-hover:text-amber-700">
+                    <span
+                      className="mono num"
+                      style={{
+                        fontSize: 10,
+                        color: "var(--ink-4)",
+                        marginTop: 2,
+                        minWidth: 18,
+                        textAlign: "right",
+                      }}
+                    >
                       {index + 1}
                     </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-[12.5px] leading-snug text-slate-700 group-hover:text-amber-900 line-clamp-2">
-                        {waypoint.title}
-                      </span>
+                    <span
+                      style={{
+                        flex: 1,
+                        lineHeight: 1.4,
+                        color: "var(--ink-2)",
+                        whiteSpace: "normal",
+                      }}
+                    >
+                      {waypoint.title}
                     </span>
                     {typeof waypoint.timestamp === "number" && waypoint.timestamp > 0 ? (
                       <span
                         aria-hidden="true"
-                        className="mt-0.5 shrink-0 text-[10px] tabular-nums text-slate-400"
+                        className="mono num"
+                        style={{ fontSize: 10, color: "var(--ink-4)", marginTop: 2 }}
                       >
                         {formatTimestamp(waypoint.timestamp)}
                       </span>
+                    ) : null}
+                    {waypoint.concepts && waypoint.concepts.length > 0 ? (
+                      <IcExercise size={12} style={{ color: "var(--ink-4)", marginTop: 2 }} />
                     ) : null}
                   </button>
                 </li>

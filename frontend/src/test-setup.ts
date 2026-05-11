@@ -27,3 +27,21 @@ vi.mock("next/link", () => ({
   default: ({ children, href, ...props }: MockLinkProps) =>
     React.createElement("a", { href, ...props }, children),
 }));
+
+// next/font/google ships transformed font metadata at build time. In jsdom
+// the real module isn't usable — return inert variable / style descriptors so
+// importing layout.tsx in tests doesn't blow up.
+vi.mock("next/font/google", () => {
+  const fakeFont = (config: { variable?: string }) => ({
+    variable: config?.variable ?? "--font-test",
+    style: { fontFamily: "Test" },
+    className: "test-font",
+  });
+  return {
+    Source_Serif_4: fakeFont,
+    Geist: fakeFont,
+    Geist_Mono: fakeFont,
+    Noto_Serif_SC: fakeFont,
+    Noto_Sans_SC: fakeFont,
+  };
+});

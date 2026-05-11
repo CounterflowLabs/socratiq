@@ -2,8 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ClipboardList, Loader2, Sparkles } from "lucide-react";
 
+import { IcExercise, IcLoader, IcSparkle } from "@/components/icons";
 import { generateSectionExercises, getSectionExercises } from "@/lib/api";
 
 interface ExerciseTriggerCardProps {
@@ -139,7 +139,7 @@ export function ExerciseTriggerCard({
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
           <div className="inline-flex items-center gap-2 rounded-md bg-white px-3 py-1 text-xs font-semibold uppercase text-sky-700">
-            <ClipboardList className="h-3.5 w-3.5" />
+            <IcExercise size={14} />
             Exercise
           </div>
           <h3 className="mt-3 text-base font-semibold text-slate-900">{title}</h3>
@@ -170,17 +170,17 @@ export function ExerciseTriggerCard({
               onClick={handleGenerate}
               className="inline-flex items-center gap-1.5 rounded-md bg-sky-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-sky-700"
             >
-              <Sparkles className="h-4 w-4" />
+              <IcSparkle size={14} />
               生成练习
             </button>
           ) : status === "generating" ? (
             <span className="inline-flex items-center gap-1.5 rounded-md border border-sky-200 bg-white px-4 py-2 text-sm text-slate-600">
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <IcLoader size={14} className="spin" />
               生成中…
             </span>
           ) : status === "checking" ? (
             <span className="inline-flex items-center gap-1.5 rounded-md border border-sky-200 bg-white px-4 py-2 text-sm text-slate-500">
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <IcLoader size={14} className="spin" />
               加载中…
             </span>
           ) : status === "error" ? (

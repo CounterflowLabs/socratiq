@@ -2,15 +2,17 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import Link from "next/link";
-import { BookOpen, ChevronLeft, ChevronRight, Languages, Loader2 } from "lucide-react";
-import { clsx } from "clsx";
 
+import {
+  IcArrowLeft,
+  IcArrowRight,
+  IcLesson,
+  IcLoader,
+} from "@/components/icons";
 import CourseOutline, { type LessonWaypoint } from "@/components/learn/course-outline";
 import LearnShell from "@/components/learn/learn-shell";
 import StudyAside, { type AsidePanelId } from "@/components/learn/study-aside";
 import LessonRenderer from "@/components/lesson/lesson-renderer";
-import TutorDrawer from "@/components/tutor-drawer";
 import {
   clearCourseRegeneration,
   estimateTranslation,
@@ -183,17 +185,25 @@ function LearnPageInner() {
 
   const [course, setCourse] = useState<CourseDetailResponse | null>(null);
   const [section, setSection] = useState<SectionResponse | null>(null);
-  const [tutorOpen, setTutorOpen] = useState(false);
-  const [asideOpen, setAsideOpen] = useState(false);
+  // Mentor + materials sit on the right by default, matching the redesigned
+  // 3-column shell. Reading + dialogue is one continuous study surface.
+  const [asideOpen, setAsideOpen] = useState(true);
   const [outlineOpen, setOutlineOpenState] = useState<boolean>(() => {
     if (typeof window === "undefined") return true;
-    const stored = window.localStorage.getItem("learn:outlineOpen");
-    return stored === null ? true : stored === "1";
+    try {
+      const stored = window.localStorage?.getItem("learn:outlineOpen");
+      return stored === null || stored === undefined ? true : stored === "1";
+    } catch {
+      return true;
+    }
   });
   const setOutlineOpen = useCallback((next: boolean) => {
     setOutlineOpenState(next);
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem("learn:outlineOpen", next ? "1" : "0");
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage?.setItem("learn:outlineOpen", next ? "1" : "0");
+    } catch {
+      // localStorage may be blocked
     }
   }, []);
   const [regenTaskId, setRegenTaskId] = useState<string | null>(null);
@@ -403,19 +413,20 @@ function LearnPageInner() {
     [orderedSources, pdfSource?.id, videoSource?.id]
   );
   const availableAsidePanels = useMemo(() => {
-    const panels: AsidePanelId[] = [];
-
+    // Mentor leads. Source-material panels follow only when materials exist.
+    const panels: AsidePanelId[] = ["tutor"];
     if (videoEmbed) panels.push("video");
     if (pdfSource) panels.push("pdf");
     if (referenceSources.length > 0) panels.push("references");
-    panels.push("tutor");
-
     return panels;
   }, [pdfSource, referenceSources, videoEmbed]);
-  const defaultAsidePanel = availableAsidePanels[0] ?? "tutor";
+  const defaultAsidePanel: AsidePanelId = "tutor";
   const handleTimestampClick = useCallback(() => {
     if (!videoEmbed) return;
     setAsideOpen(true);
+    // Persist the choice so the panel-reset effect doesn't bounce back to
+    // the mentor on the next section load.
+    asidePanelPreference.current = "video";
     setActiveAsidePanel("video");
   }, [videoEmbed]);
   const handleSelectWaypoint = useCallback((waypointId: string) => {
@@ -441,85 +452,134 @@ function LearnPageInner() {
   }, [activeAsidePanel, availableAsidePanels, defaultAsidePanel]);
 
   const lessonStage = (
-    <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-[0_16px_48px_rgba(15,23,42,0.08)]">
-      <div className="border-b border-slate-200 bg-white px-5 py-4">
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="min-w-0 flex-1">
-            <p className="text-xs font-medium uppercase text-slate-400">
-              当前章节
-            </p>
-            <h2 className="truncate text-xl font-semibold text-slate-900">
-              {section?.title ?? "加载章节中..."}
-            </h2>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <span className="rounded-md border border-teal-200 bg-teal-50 px-2.5 py-1 text-xs font-medium text-teal-800">
-                {lessonWaypoints.length} 个知识片段
-              </span>
-              <span className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-800">
-                {videoEmbed ? "视频素材" : "无视频"}
-              </span>
-              <span className="rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600">
-                {availableAsidePanels.length} 个辅助面板
-              </span>
-            </div>
-          </div>
-          {/* TODO: 翻译功能暂时隐藏，后续修复后恢复 */}
-        </div>
-      </div>
-
-      <div className="bg-slate-50">
-        {/* TODO: 翻译相关 UI 暂时隐藏 */}
-
-        <div
-          ref={lessonScrollRef}
-          onScroll={handleLessonScroll}
-          className="max-h-[75vh] overflow-y-auto"
+    <section
+      className="card"
+      style={{
+        padding: 0,
+        overflow: "hidden",
+      }}
+    >
+      <div
+        style={{
+          padding: "16px 20px",
+          borderBottom: "1px solid var(--border)",
+          background: "var(--surface)",
+        }}
+      >
+        <p className="eyebrow">当前章节</p>
+        <h2
+          className="serif"
+          style={{
+            margin: "4px 0 0",
+            fontSize: 22,
+            fontWeight: 500,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            color: "var(--ink)",
+          }}
         >
-          {hasLesson ? (
-            <LessonRenderer
-              lesson={lessonData}
-              onTimestampClick={videoEmbed ? handleTimestampClick : undefined}
-              sectionId={section?.id ?? null}
-              courseId={courseId ?? null}
-              labMode={lessonLabMode}
-              graphCard={lessonGraphCard}
-            />
-          ) : rawSectionContent ? (
-            <div className="px-5 py-5 whitespace-pre-wrap text-sm leading-7 text-slate-700">
-              {typeof rawSectionContent === "string"
-                ? rawSectionContent
-                : JSON.stringify(rawSectionContent, null, 2)}
-            </div>
-          ) : (
-            <div className="flex min-h-72 items-center justify-center">
-              <div className="text-center">
-                <BookOpen className="mx-auto h-8 w-8 text-slate-300" />
-                <p className="mt-2 text-sm text-slate-400">此章节暂无课文内容</p>
-              </div>
-            </div>
-          )}
+          {section?.title ?? "加载章节中…"}
+        </h2>
+        <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 6 }}>
+          <span className="chip chip-mono">
+            {lessonWaypoints.length} 个知识片段
+          </span>
+          <span className="chip">{videoEmbed ? "视频素材" : "无视频"}</span>
+          <span className="chip chip-accent">
+            {availableAsidePanels.length} 个辅助面板
+          </span>
         </div>
       </div>
 
-      <div className="flex items-center justify-between border-t border-slate-200 px-5 py-4">
+      <div
+        ref={lessonScrollRef}
+        onScroll={handleLessonScroll}
+        style={{
+          maxHeight: "75vh",
+          overflowY: "auto",
+          background: "var(--bg)",
+        }}
+      >
+        {hasLesson ? (
+          <LessonRenderer
+            lesson={lessonData}
+            onTimestampClick={videoEmbed ? handleTimestampClick : undefined}
+            sectionId={section?.id ?? null}
+            courseId={courseId ?? null}
+            labMode={lessonLabMode}
+            graphCard={lessonGraphCard}
+          />
+        ) : rawSectionContent ? (
+          <div
+            className="prose"
+            style={{ padding: "24px 28px", whiteSpace: "pre-wrap" }}
+          >
+            {typeof rawSectionContent === "string"
+              ? rawSectionContent
+              : JSON.stringify(rawSectionContent, null, 2)}
+          </div>
+        ) : (
+          <div
+            style={{
+              minHeight: 280,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: "var(--ink-3)",
+              fontSize: 13,
+              gap: 8,
+              flexDirection: "column",
+            }}
+          >
+            <IcLesson size={28} />
+            <p style={{ margin: 0 }}>此章节暂无课文内容</p>
+          </div>
+        )}
+      </div>
+
+      <div
+        style={{
+          padding: "14px 20px",
+          borderTop: "1px solid var(--border)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 12,
+          background: "var(--surface)",
+        }}
+      >
         <button
           type="button"
           onClick={() => prevSection && navigateToSection(prevSection)}
           disabled={!prevSection}
-          className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+          className="btn btn-outline btn-sm"
         >
-          <ChevronLeft className="h-4 w-4" />
-          上一节
+          <IcArrowLeft size={12} />
+          <span>上一节</span>
         </button>
-        <span className="truncate px-4 text-sm text-slate-500">{section?.title ?? ""}</span>
+        <span
+          style={{
+            flex: 1,
+            textAlign: "center",
+            color: "var(--ink-3)",
+            fontSize: 12,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            padding: "0 12px",
+          }}
+        >
+          {section?.title ?? ""}
+        </span>
         <button
           type="button"
           onClick={() => nextSection && navigateToSection(nextSection)}
           disabled={!nextSection}
-          className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+          className="btn btn-accent btn-sm"
         >
-          下一节
-          <ChevronRight className="h-4 w-4" />
+          <span>下一节</span>
+          <IcArrowRight size={12} />
         </button>
       </div>
     </section>
@@ -527,14 +587,38 @@ function LearnPageInner() {
 
   if (courseError) {
     return (
-      <div className="flex min-h-screen items-center justify-center" style={{ background: "var(--bg)" }}>
-        <div className="card max-w-md w-full text-center p-8">
-          <BookOpen className="mx-auto h-10 w-10 mb-3" style={{ color: "var(--error)" }} />
-          <h2 className="text-lg font-bold mb-2" style={{ color: "var(--text)" }}>课程加载失败</h2>
-          <p className="text-sm mb-4" style={{ color: "var(--text-secondary)" }}>{courseError}</p>
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: "var(--bg)",
+        }}
+      >
+        <div className="card" style={{ maxWidth: 420, width: "100%", textAlign: "center", padding: 32 }}>
+          <IcLesson size={28} style={{ color: "var(--error)", margin: "0 auto 12px" }} />
+          <h2 className="serif" style={{ fontSize: 18, margin: "0 0 8px", color: "var(--ink)" }}>
+            课程加载失败
+          </h2>
+          <p style={{ fontSize: 13, color: "var(--ink-2)", marginBottom: 16 }}>{courseError}</p>
           <button
-            className="btn-primary"
-            onClick={() => { setCourseError(null); if (courseId) getCourse(courseId).then((data) => { setCourse(data); setCourseError(null); setSection(data.sections[0] ?? null); }).catch((err) => setCourseError(err instanceof Error ? err.message : "课程加载失败")); }}
+            type="button"
+            className="btn btn-primary"
+            onClick={() => {
+              setCourseError(null);
+              if (courseId) {
+                getCourse(courseId)
+                  .then((data) => {
+                    setCourse(data);
+                    setCourseError(null);
+                    setSection(data.sections[0] ?? null);
+                  })
+                  .catch((err) =>
+                    setCourseError(err instanceof Error ? err.message : "课程加载失败"),
+                  );
+              }
+            }}
           >
             重试
           </button>
@@ -546,12 +630,12 @@ function LearnPageInner() {
   return (
     <>
       <LearnShell
-        courseTitle={course?.title ?? "加载中..."}
+        courseTitle={course?.title ?? "加载中…"}
         progressLabel={progressLabel}
         asideOpen={asideOpen}
         onOpenAside={() => setAsideOpen(true)}
         onCloseAside={() => setAsideOpen(false)}
-        backHref={courseId ? `/path?courseId=${courseId}` : "/path"}
+        backHref="/"
         versionIndex={course?.version_index ?? 1}
         parentCourseHref={
           course?.parent_id ? `/path?courseId=${course.parent_id}` : null
@@ -612,11 +696,8 @@ function LearnPageInner() {
         lessonStage={lessonStage}
         aside={
           <StudyAside
-            courseTitle={course?.title ?? "课程加载中"}
-            currentSectionTitle={section?.title ?? "等待章节"}
-            progressLabel={progressLabel}
-            onOpenTutor={() => setTutorOpen(true)}
-            onClose={() => setAsideOpen(false)}
+            courseId={courseId}
+            sectionId={section?.id ?? null}
             videoEmbed={videoEmbed}
             pdfSource={pdfSource}
             referenceSources={referenceSources}
@@ -624,13 +705,6 @@ function LearnPageInner() {
             onPanelChange={(panel) => { asidePanelPreference.current = panel; setActiveAsidePanel(panel); }}
           />
         }
-      />
-
-      <TutorDrawer
-        open={tutorOpen}
-        onClose={() => setTutorOpen(false)}
-        courseId={courseId}
-        sectionId={section?.id ?? null}
       />
     </>
   );
@@ -640,8 +714,20 @@ export default function LearnPage() {
   return (
     <Suspense
       fallback={
-        <div className="flex min-h-screen items-center justify-center bg-slate-50">
-          <div className="text-sm text-slate-500">加载中...</div>
+        <div
+          style={{
+            minHeight: "100vh",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: "var(--bg)",
+            color: "var(--ink-3)",
+            gap: 8,
+            fontSize: 13,
+          }}
+        >
+          <IcLoader size={16} className="spin" />
+          <span>加载中…</span>
         </div>
       }
     >

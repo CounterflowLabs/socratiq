@@ -2,7 +2,11 @@
 
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { Loader, CheckCircle, XCircle } from "lucide-react";
+import {
+  IcLoader as Loader,
+  IcCheckCircle as CheckCircle,
+  IcAlert as XCircle,
+} from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {

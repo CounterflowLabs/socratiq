@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown, ChevronRight, Play, FileText } from "lucide-react";
+import { IcChevronDown, IcChevronRight, IcDoc, IcVideo } from "@/components/icons";
 import type { Citation } from "@/lib/api";
 
 function formatTimestamp(seconds: number): string {
@@ -20,21 +20,19 @@ export default function CitationCards({ citations }: CitationCardsProps) {
   if (citations.length === 0) return null;
 
   return (
-    <div className="mt-2">
+    <div style={{ marginTop: 8 }}>
       <button
+        type="button"
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 transition-colors bg-transparent px-0 py-0.5"
+        className="btn btn-ghost btn-sm"
+        style={{ paddingLeft: 0, color: "var(--ink-3)" }}
       >
-        {expanded ? (
-          <ChevronDown className="w-3 h-3" />
-        ) : (
-          <ChevronRight className="w-3 h-3" />
-        )}
+        {expanded ? <IcChevronDown size={12} /> : <IcChevronRight size={12} />}
         <span>{citations.length} 个来源引用</span>
       </button>
 
-      {expanded && (
-        <div className="mt-1.5 space-y-1.5">
+      {expanded ? (
+        <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 6 }}>
           {citations.map((cite, i) => {
             const isVideo =
               cite.source_type === "youtube" ||
@@ -44,35 +42,57 @@ export default function CitationCards({ citations }: CitationCardsProps) {
             return (
               <div
                 key={cite.chunk_id}
-                className="flex items-start gap-2 rounded-lg bg-white border border-gray-200 px-2.5 py-2 text-xs"
+                className="card-quiet"
+                style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: 8,
+                  padding: "8px 10px",
+                  fontSize: 12,
+                }}
               >
-                <span className="font-medium text-blue-600 flex-shrink-0">
+                <span
+                  className="mono"
+                  style={{ color: "var(--accent)", fontWeight: 500, flexShrink: 0 }}
+                >
                   [{i + 1}]
                 </span>
-                <div className="flex-shrink-0 mt-0.5">
-                  {isVideo ? (
-                    <Play className="w-3.5 h-3.5 text-gray-400" />
-                  ) : (
-                    <FileText className="w-3.5 h-3.5 text-gray-400" />
-                  )}
+                <div style={{ flexShrink: 0, marginTop: 2, color: "var(--ink-3)" }}>
+                  {isVideo ? <IcVideo size={14} /> : <IcDoc size={14} />}
                 </div>
-                <div className="min-w-0 flex-1">
-                  {cite.source_title && (
-                    <div className="font-medium text-gray-700 truncate">
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  {cite.source_title ? (
+                    <div
+                      style={{
+                        fontWeight: 500,
+                        color: "var(--ink-2)",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
                       {cite.source_title}
                     </div>
-                  )}
-                  {isVideo && cite.start_time != null && (
-                    <div className="text-gray-400">
+                  ) : null}
+                  {isVideo && cite.start_time != null ? (
+                    <div className="mono" style={{ color: "var(--ink-4)" }}>
                       {formatTimestamp(cite.start_time)}
-                      {cite.end_time != null &&
-                        ` - ${formatTimestamp(cite.end_time)}`}
+                      {cite.end_time != null && ` – ${formatTimestamp(cite.end_time)}`}
                     </div>
-                  )}
-                  {!isVideo && cite.page_start != null && (
-                    <div className="text-gray-400">第 {cite.page_start} 页</div>
-                  )}
-                  <div className="text-gray-500 line-clamp-2 mt-0.5">
+                  ) : null}
+                  {!isVideo && cite.page_start != null ? (
+                    <div style={{ color: "var(--ink-4)" }}>第 {cite.page_start} 页</div>
+                  ) : null}
+                  <div
+                    style={{
+                      color: "var(--ink-3)",
+                      marginTop: 2,
+                      display: "-webkit-box",
+                      WebkitLineClamp: 2,
+                      WebkitBoxOrient: "vertical",
+                      overflow: "hidden",
+                    }}
+                  >
                     {cite.text}
                   </div>
                 </div>
@@ -80,7 +100,7 @@ export default function CitationCards({ citations }: CitationCardsProps) {
             );
           })}
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

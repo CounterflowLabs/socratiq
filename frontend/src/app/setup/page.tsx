@@ -2,7 +2,17 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Brain, Server, Key, ChevronDown, ChevronUp, Loader, CheckCircle, ExternalLink, AlertCircle } from "lucide-react";
+import {
+  SocratiqMark as Brain,
+  IcSources as Server,
+  IcSettings as Key,
+  IcChevronDown as ChevronDown,
+  IcChevronUp as ChevronUp,
+  IcLoader as Loader,
+  IcCheckCircle as CheckCircle,
+  IcExternal as ExternalLink,
+  IcAlert as AlertCircle,
+} from "@/components/icons";
 import {
   getSetupStatus,
   createModel,

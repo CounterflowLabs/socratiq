@@ -3,20 +3,26 @@
 import { ButtonHTMLAttributes, forwardRef } from "react";
 import { clsx } from "clsx";
 
+/**
+ * Button — wraps the global `.btn` token classes.
+ * The variants map to the CSS classes defined in globals.css so theme
+ * changes only need to happen in one place.
+ */
+
 const variants = {
-  primary:
-    "bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800 shadow-sm",
-  secondary:
-    "bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 active:bg-gray-100",
-  ghost: "text-gray-600 hover:bg-gray-100 active:bg-gray-200",
-  accent:
-    "bg-violet-600 text-white hover:bg-violet-700 active:bg-violet-800 shadow-sm",
+  primary: "btn btn-primary",
+  accent: "btn btn-accent",
+  outline: "btn btn-outline",
+  ghost: "btn btn-ghost",
+  danger: "btn btn-danger",
+  /** Legacy alias — was `bg-white border border-gray-300`. Maps onto the new outline. */
+  secondary: "btn btn-outline",
 };
 
 const sizes = {
-  sm: "text-sm px-3 py-1.5 gap-1.5",
-  md: "text-sm px-4 py-2 gap-2",
-  lg: "text-base px-6 py-2.5 gap-2",
+  sm: "btn-sm",
+  md: "",
+  lg: "btn-lg",
 };
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -25,17 +31,11 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ variant = "primary", size = "md", className, children, ...props }, ref) => (
+  ({ variant = "primary", size = "md", className, children, type, ...props }, ref) => (
     <button
       ref={ref}
-      className={clsx(
-        "inline-flex items-center justify-center font-medium transition-all duration-150 rounded-lg",
-        "focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500",
-        "disabled:opacity-50 disabled:cursor-not-allowed",
-        variants[variant],
-        sizes[size],
-        className
-      )}
+      type={type ?? "button"}
+      className={clsx(variants[variant], sizes[size], className)}
       {...props}
     >
       {children}

@@ -1,10 +1,24 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Brain, Sparkles, FileText, Upload, Loader, Play, X, AlertCircle } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { clsx } from "clsx";
+
+import {
+  IcAlert,
+  IcArrowRight,
+  IcCheck,
+  IcDoc,
+  IcEdit,
+  IcImport,
+  IcLink,
+  IcLoader,
+  IcTV,
+  IcVideo,
+  SourceIcon,
+} from "@/components/icons";
+import { Eyebrow } from "@/components/ui/eyebrow";
+import { Ornament } from "@/components/ui/ornament";
+import { PageHeader } from "@/components/ui/page-header";
 import {
   ApiError,
   createSourceFromURL,
@@ -12,277 +26,597 @@ import {
   getBilibiliStatus,
 } from "@/lib/api";
 import { useSourcesStore, useTasksStore } from "@/lib/stores";
+import { useT } from "@/lib/i18n";
+
+type Tab = "url" | "file" | "text";
+
+const SAMPLES: Array<{
+  type: "youtube" | "bilibili" | "pdf";
+  title: { zh: string; en: string };
+  url: string;
+  meta: string;
+}> = [
+  {
+    type: "youtube",
+    title: {
+      zh: "Karpathy — Let's build GPT from scratch",
+      en: "Karpathy — Let's build GPT from scratch",
+    },
+    url: "https://www.youtube.com/watch?v=kCc8FmEb1nY",
+    meta: "1h 56m",
+  },
+  {
+    type: "bilibili",
+    title: {
+      zh: "3Blue1Brown · 深度学习之数学原理",
+      en: "3Blue1Brown · The math behind deep learning",
+    },
+    url: "https://www.bilibili.com/video/BV1gZ4y1F7hS",
+    meta: "26m",
+  },
+  {
+    type: "pdf",
+    title: {
+      zh: "Google SRE Book — 监控分布式系统",
+      en: "Google SRE Book — Monitoring distributed systems",
+    },
+    url: "https://sre.google/sre-book/monitoring-distributed-systems/",
+    meta: "24p",
+  },
+];
 
 export default function ImportPage() {
   const router = useRouter();
+  const { t, lang } = useT();
   const addSource = useSourcesStore((s) => s.addSource);
   const addTask = useTasksStore((s) => s.addTask);
+
+  const [tab, setTab] = useState<Tab>("url");
   const [url, setUrl] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [sourceType, setSourceType] = useState<"bilibili" | "youtube" | "pdf">("bilibili");
-  const [dragOver, setDragOver] = useState(false);
+  const [textContent, setTextContent] = useState("");
   const [pdfName, setPdfName] = useState("");
   const [pdfFile, setPdfFile] = useState<File | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+
+  const [loading, setLoading] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [stage, setStage] = useState(0);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [biliLoggedIn, setBiliLoggedIn] = useState<boolean | null>(null);
+
   const fileRef = useRef<HTMLInputElement>(null);
-  const canSubmit = Boolean(sourceType === "bilibili" || sourceType === "youtube" ? url.trim() : pdfName);
-  const bilibiliBlocked = sourceType === "bilibili" && biliLoggedIn === false;
+
+  const stages = [
+    { label: t("import.pipeline.s1"), tag: "fetch_transcript" },
+    { label: t("import.pipeline.s2"), tag: "analyze_content" },
+    { label: t("import.pipeline.s3"), tag: "plan_path" },
+    { label: t("import.pipeline.s4"), tag: "assemble_course" },
+  ];
+
+  const isBilibiliUrl = url.toLowerCase().includes("bilibili.com");
+  const bilibiliBlocked = tab === "url" && isBilibiliUrl && biliLoggedIn === false;
 
   useEffect(() => {
-    if (sourceType !== "bilibili") return;
+    if (tab !== "url" || !isBilibiliUrl) return;
     let cancelled = false;
     getBilibiliStatus()
       .then((status) => {
         if (!cancelled) setBiliLoggedIn(status.logged_in);
       })
       .catch(() => {
-        // 状态接口失败时不卡住用户，由后端 412 兜底
         if (!cancelled) setBiliLoggedIn(true);
       });
     return () => {
       cancelled = true;
     };
-  }, [sourceType]);
+  }, [tab, isBilibiliUrl]);
 
-  const handleImport = async () => {
-    if (!canSubmit) return;
+  const canSubmit =
+    tab === "url"
+      ? Boolean(url.trim())
+      : tab === "file"
+        ? Boolean(pdfFile)
+        : Boolean(textContent.trim());
+
+  // Fake-progress through pipeline stages while the backend works.
+  useEffect(() => {
+    if (!analyzing || stage >= stages.length) return;
+    const handle = setTimeout(() => setStage((s) => s + 1), 1100);
+    return () => clearTimeout(handle);
+  }, [analyzing, stage, stages.length]);
+
+  function handleFileSelect(file: File | undefined) {
+    if (!file) return;
+    if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
+      setPdfFile(file);
+      setPdfName(file.name);
+    }
+  }
+
+  async function handleImport() {
+    if (!canSubmit || bilibiliBlocked) return;
     setLoading(true);
     setErrorMsg(null);
+    setStage(0);
+    setAnalyzing(true);
 
     try {
       let source;
-      if (sourceType === "bilibili" || sourceType === "youtube") {
+      if (tab === "url") {
         source = await createSourceFromURL(url.trim());
-      } else if (pdfFile) {
+      } else if (tab === "file" && pdfFile) {
         source = await createSourceFromFile(pdfFile);
       } else {
-        setErrorMsg("请选择文件");
+        // Pasted text isn't yet supported by the backend — surface a helpful
+        // hint so the user knows it's a near-term feature, not a silent fail.
+        setErrorMsg(
+          lang === "zh"
+            ? "粘贴文本暂未启用，请先用链接或上传 PDF。"
+            : "Pasting raw text is not yet supported. Please use a URL or upload a PDF.",
+        );
         setLoading(false);
+        setAnalyzing(false);
         return;
       }
 
       addSource(source);
 
       if (source.task_id) {
-        // Add to task store and redirect to the materials hub for progress tracking.
         addTask({
           taskId: source.task_id,
           sourceId: source.id,
-          title: source.title || url.trim() || pdfName || "导入中...",
-          sourceType,
+          title: source.title || url.trim() || pdfName || (lang === "zh" ? "导入中…" : "Importing…"),
+          sourceType: source.type,
           state: "PENDING",
         });
-        router.push("/sources");
-      } else {
-        // Source ready immediately, return to the materials hub.
-        router.push("/sources");
       }
+
+      // Brief delay so the user sees the final pipeline tick.
+      setTimeout(() => router.push("/sources"), 600);
     } catch (err) {
-      if (
-        err instanceof ApiError &&
-        err.status === 412 &&
-        err.code === "bilibili_credential_required"
-      ) {
+      if (err instanceof ApiError && err.status === 412 && err.code === "bilibili_credential_required") {
         setBiliLoggedIn(false);
         setErrorMsg(null);
       } else {
-        setErrorMsg(err instanceof Error ? err.message : "导入失败，请检查链接或文件后重试");
+        setErrorMsg(
+          err instanceof Error
+            ? err.message
+            : lang === "zh"
+              ? "导入失败，请检查链接或文件后重试"
+              : "Import failed. Check the URL or file and try again.",
+        );
       }
       setLoading(false);
+      setAnalyzing(false);
     }
-  };
-
-  const handleFileSelect = (file: File | undefined) => {
-    if (file && file.type === "application/pdf") {
-      setPdfName(file.name);
-      setPdfFile(file);
-    }
-  };
+  }
 
   return (
-    <div className="min-h-screen flex flex-col" style={{ background: "var(--bg)" }}>
-      <header className="flex items-center justify-between px-4 sm:px-6 h-14 border-b" style={{ borderColor: "var(--border)", background: "var(--surface)" }}>
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: "var(--primary)" }}>
-            <Brain className="w-4 h-4 text-white" />
+    <div style={{ padding: "32px 40px 80px", maxWidth: 720, margin: "0 auto", width: "100%" }}>
+      <PageHeader eyebrow="01" title={t("import.title")} subtitle={t("import.subtitle")} />
+
+      {bilibiliBlocked ? (
+        <div
+          role="alert"
+          className="card-quiet"
+          style={{
+            display: "flex",
+            gap: 10,
+            padding: 14,
+            marginBottom: 20,
+            borderColor: "rgba(179, 66, 47, 0.3)",
+            background: "var(--error-soft)",
+            color: "var(--error)",
+          }}
+        >
+          <IcAlert size={16} style={{ flexShrink: 0, marginTop: 2 }} />
+          <div style={{ flex: 1, fontSize: 13, lineHeight: 1.6 }}>
+            <div>{t("import.bilibiliBlocked")}</div>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              style={{ marginTop: 8, color: "var(--error)" }}
+              onClick={() => router.push("/settings")}
+            >
+              {t("import.bilibiliConfigure")}
+            </button>
           </div>
-          <span className="font-semibold" style={{ color: "var(--text)" }}>Socratiq</span>
         </div>
-      </header>
+      ) : null}
 
-      <div className="flex-1 flex items-center justify-center px-4 sm:px-6">
-        <div className="w-full max-w-xl">
-          <h1 className="text-2xl font-bold mb-2" style={{ color: "var(--text)" }}>导入学习资料</h1>
-          <p className="text-sm mb-8" style={{ color: "var(--text-secondary)" }}>粘贴 B站或 YouTube 链接，或上传 PDF，导入后我们会为你准备课程素材。</p>
+      {errorMsg ? (
+        <div
+          role="alert"
+          className="card-quiet"
+          style={{
+            display: "flex",
+            gap: 10,
+            padding: 12,
+            marginBottom: 20,
+            borderColor: "rgba(179, 66, 47, 0.3)",
+            background: "var(--error-soft)",
+            color: "var(--error)",
+            fontSize: 13,
+          }}
+        >
+          <IcAlert size={14} style={{ flexShrink: 0, marginTop: 2 }} />
+          <span>{errorMsg}</span>
+        </div>
+      ) : null}
 
-          {/* Error message */}
-          {errorMsg && (
-            <div className="mb-6 flex items-start gap-2 p-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">
-              <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-              <span>{errorMsg}</span>
-            </div>
-          )}
-
-          {/* Bilibili credential gate */}
-          {bilibiliBlocked && (
-            <div
-              role="alert"
-              className="mb-6 flex items-start gap-2 p-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700"
-            >
-              <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-              <div className="flex-1">
-                <div>导入 B 站视频需要先登录 B 站账号才能抓取字幕。</div>
-                <button
-                  type="button"
-                  onClick={() => router.push("/settings")}
-                  className="mt-2 text-xs font-medium text-red-700 underline hover:no-underline bg-transparent border-none cursor-pointer p-0"
-                >
-                  前往设置登录 →
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Source type tabs */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-6">
-            <button
-              onClick={() => setSourceType("bilibili")}
-              className={clsx(
-                "flex items-center justify-center gap-2 py-2.5 min-h-[44px] rounded-lg border text-sm font-medium transition-all bg-white",
-                sourceType === "bilibili" ? "border-blue-500 bg-blue-50 text-blue-700" : "border-gray-200 text-gray-500 hover:border-gray-300"
-              )}
-            >
-              <Play className="w-4 h-4" /> B站视频
-            </button>
-            <button
-              onClick={() => setSourceType("youtube")}
-              className={clsx(
-                "flex items-center justify-center gap-2 py-2.5 min-h-[44px] rounded-lg border text-sm font-medium transition-all bg-white",
-                sourceType === "youtube" ? "border-blue-500 bg-blue-50 text-blue-700" : "border-gray-200 text-gray-500 hover:border-gray-300"
-              )}
-            >
-              <Play className="w-4 h-4" /> YouTube
-            </button>
-            <button
-              onClick={() => setSourceType("pdf")}
-              className={clsx(
-                "flex items-center justify-center gap-2 py-2.5 min-h-[44px] rounded-lg border text-sm font-medium transition-all bg-white",
-                sourceType === "pdf" ? "border-blue-500 bg-blue-50 text-blue-700" : "border-gray-200 text-gray-500 hover:border-gray-300"
-              )}
-            >
-              <FileText className="w-4 h-4" /> PDF 文档
-            </button>
-          </div>
-
-          {/* Bilibili URL input */}
-          {sourceType === "bilibili" && (
-            <div className="mb-6">
-              <label className="block text-sm font-medium text-gray-700 mb-2">视频链接</label>
-              <div className="flex gap-2">
-                <div className="flex-1 relative">
-                  <Play className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                  <input
-                    type="text"
-                    value={url}
-                    onChange={(e) => setUrl(e.target.value)}
-                    placeholder="https://www.bilibili.com/video/BV..."
-                    className="w-full pl-10 pr-4 py-2.5 rounded-lg border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  />
-                </div>
-              </div>
-              <button
-                onClick={() => setUrl("https://www.bilibili.com/video/BV1gZ4y1F7hS")}
-                className="mt-2 text-xs text-blue-600 hover:text-blue-700 bg-transparent border-none cursor-pointer"
-              >
-                试试看：3Blue1Brown - 深度学习之数学原理
-              </button>
-            </div>
-          )}
-
-          {/* YouTube URL input */}
-          {sourceType === "youtube" && (
-            <div className="mb-6">
-              <label className="block text-sm font-medium text-gray-700 mb-2">视频链接</label>
-              <div className="flex gap-2">
-                <div className="flex-1 relative">
-                  <Play className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                  <input
-                    type="text"
-                    value={url}
-                    onChange={(e) => setUrl(e.target.value)}
-                    placeholder="https://www.youtube.com/watch?v=..."
-                    className="w-full pl-10 pr-4 py-2.5 rounded-lg border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  />
-                </div>
-              </div>
-              <button
-                onClick={() => setUrl("https://www.youtube.com/watch?v=kCc8FmEb1nY")}
-                className="mt-2 text-xs text-blue-600 hover:text-blue-700 bg-transparent border-none cursor-pointer"
-              >
-                试试看：Karpathy - Let&apos;s build GPT from scratch
-              </button>
-            </div>
-          )}
-
-          {/* PDF upload area */}
-          {sourceType === "pdf" && (
-            <div className="mb-6">
-              <label className="block text-sm font-medium text-gray-700 mb-2">上传 PDF</label>
-              <div
-                onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-                onDragLeave={() => setDragOver(false)}
-                onDrop={(e) => { e.preventDefault(); setDragOver(false); handleFileSelect(e.dataTransfer.files[0]); }}
-                onClick={() => fileRef.current?.click()}
-                className={clsx(
-                  "border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all",
-                  dragOver ? "border-blue-400 bg-blue-50" : pdfName ? "border-green-400 bg-green-50" : "border-gray-300 hover:border-gray-400 hover:bg-gray-50"
-                )}
-              >
-                {pdfName ? (
-                  <div className="flex items-center justify-center gap-2">
-                    <FileText className="w-5 h-5 text-green-600" />
-                    <span className="text-sm font-medium text-green-700">{pdfName}</span>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); setPdfName(""); setPdfFile(null); }}
-                      className="text-gray-400 hover:text-gray-600 bg-transparent border-none cursor-pointer"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                ) : (
-                  <>
-                    <Upload className={clsx("w-8 h-8 mx-auto mb-2", dragOver ? "text-blue-500" : "text-gray-400")} />
-                    <p className="text-sm text-gray-600 mb-1">拖拽 PDF 到这里，或点击选择文件</p>
-                    <p className="text-xs text-gray-400">支持论文、教材、技术文档等</p>
-                  </>
-                )}
-              </div>
-              <input
-                ref={fileRef}
-                type="file"
-                accept=".pdf"
-                onChange={(e) => handleFileSelect(e.target.files?.[0])}
-                className="hidden"
-              />
-            </div>
-          )}
-
-          <Button
-            size="lg"
-            className="w-full"
-            onClick={handleImport}
-            disabled={!canSubmit || loading || bilibiliBlocked}
+      {!analyzing ? (
+        <>
+          {/* Tabs */}
+          <div
+            style={{
+              display: "flex",
+              gap: 4,
+              marginBottom: "var(--gap-md)",
+              borderBottom: "1px solid var(--border)",
+            }}
           >
-            {loading ? (
-              <Loader className="w-4 h-4 animate-spin" />
-            ) : (
-              <Sparkles className="w-4 h-4" />
-            )}{" "}
-            开始导入
-          </Button>
+            {(
+              [
+                { key: "url" as const, label: t("import.pasteUrl"), Icon: IcLink },
+                { key: "file" as const, label: t("import.uploadFile"), Icon: IcDoc },
+                { key: "text" as const, label: t("import.writeText"), Icon: IcEdit },
+              ]
+            ).map(({ key, label, Icon }) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setTab(key)}
+                className="btn btn-ghost"
+                style={{
+                  height: 36,
+                  borderRadius: 0,
+                  borderBottom: `2px solid ${tab === key ? "var(--ink)" : "transparent"}`,
+                  color: tab === key ? "var(--ink)" : "var(--ink-3)",
+                  fontWeight: tab === key ? 500 : 400,
+                  marginBottom: -1,
+                }}
+              >
+                <Icon size={14} />
+                <span>{label}</span>
+              </button>
+            ))}
+          </div>
+
+          <div style={{ marginBottom: "var(--gap-lg)" }}>
+            {tab === "url" ? (
+              <div>
+                <div style={{ position: "relative" }}>
+                  <input
+                    className="input input-lg"
+                    placeholder={t("import.placeholder")}
+                    value={url}
+                    onChange={(e) => setUrl(e.target.value)}
+                    style={{
+                      paddingRight: 110,
+                      fontFamily: "var(--mono)",
+                      fontSize: 13,
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleImport}
+                    disabled={!canSubmit || loading || bilibiliBlocked}
+                    className="btn btn-accent"
+                    style={{ position: "absolute", right: 6, top: 6, height: 32 }}
+                  >
+                    <span>{t("import.analyze")}</span>
+                    <IcArrowRight size={12} />
+                  </button>
+                </div>
+                <div
+                  style={{
+                    marginTop: 10,
+                    display: "flex",
+                    gap: 6,
+                    alignItems: "center",
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <span className="eyebrow">{t("import.supports")}</span>
+                  {[
+                    { Icon: IcVideo, label: "YouTube" },
+                    { Icon: IcTV, label: "Bilibili" },
+                    { Icon: IcDoc, label: "PDF" },
+                    { Icon: IcDoc, label: "Markdown" },
+                  ].map(({ Icon, label }) => (
+                    <span key={label} className="chip">
+                      <Icon size={11} />
+                      {label}
+                    </span>
+                  ))}
+                </div>
+
+                <div style={{ marginTop: 28 }}>
+                  <Eyebrow>{t("import.sample")}</Eyebrow>
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 6,
+                      marginTop: 10,
+                    }}
+                  >
+                    {SAMPLES.map((sample) => (
+                      <button
+                        key={sample.url}
+                        type="button"
+                        onClick={() => setUrl(sample.url)}
+                        className="card-quiet"
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 12,
+                          cursor: "pointer",
+                          textAlign: "left",
+                          padding: 12,
+                          background: "transparent",
+                          font: "inherit",
+                          color: "var(--ink)",
+                          width: "100%",
+                          border: "1px solid var(--border)",
+                        }}
+                      >
+                        <SourceIcon type={sample.type} size={16} />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div className="serif" style={{ fontSize: 15, fontWeight: 500 }}>
+                            {sample.title[lang]}
+                          </div>
+                          <div
+                            style={{
+                              fontSize: 11,
+                              color: "var(--ink-3)",
+                              fontFamily: "var(--mono)",
+                              marginTop: 2,
+                            }}
+                          >
+                            {sample.url} · {sample.meta}
+                          </div>
+                        </div>
+                        <IcArrowRight size={14} style={{ color: "var(--ink-3)" }} />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {tab === "file" ? (
+              <div>
+                <div
+                  className="hatched"
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setDragOver(true);
+                  }}
+                  onDragLeave={() => setDragOver(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setDragOver(false);
+                    handleFileSelect(e.dataTransfer.files[0]);
+                  }}
+                  onClick={() => fileRef.current?.click()}
+                  style={{
+                    border: `1.5px dashed ${dragOver ? "var(--accent)" : "var(--border-strong)"}`,
+                    borderRadius: "var(--r-lg)",
+                    padding: "64px 24px",
+                    textAlign: "center",
+                    color: "var(--ink-3)",
+                    cursor: "pointer",
+                  }}
+                >
+                  {pdfName ? (
+                    <div
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 8,
+                        color: "var(--sage)",
+                      }}
+                    >
+                      <IcCheck size={16} />
+                      <span className="serif" style={{ fontSize: 16 }}>
+                        {pdfName}
+                      </span>
+                    </div>
+                  ) : (
+                    <>
+                      <IcImport size={28} />
+                      <div
+                        className="serif"
+                        style={{ fontSize: 18, color: "var(--ink)", margin: "12px 0 4px" }}
+                      >
+                        {t("import.dropHere")}
+                      </div>
+                      <div style={{ fontSize: 12 }}>{t("import.dropHint")}</div>
+                    </>
+                  )}
+                </div>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept=".pdf,.md,.txt,.markdown"
+                  onChange={(e) => handleFileSelect(e.target.files?.[0] ?? undefined)}
+                  style={{ display: "none" }}
+                />
+                <div style={{ marginTop: 12, textAlign: "right" }}>
+                  <button
+                    type="button"
+                    onClick={handleImport}
+                    disabled={!canSubmit || loading}
+                    className="btn btn-accent"
+                  >
+                    <span>{t("import.analyze")}</span>
+                    <IcArrowRight size={12} />
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            {tab === "text" ? (
+              <div>
+                <textarea
+                  className="input"
+                  value={textContent}
+                  onChange={(e) => setTextContent(e.target.value)}
+                  placeholder={t("import.textPlaceholder")}
+                  style={{
+                    height: 220,
+                    padding: 12,
+                    resize: "vertical",
+                    fontFamily: "var(--mono)",
+                    fontSize: 13,
+                  }}
+                />
+                <div style={{ marginTop: 12, textAlign: "right" }}>
+                  <button
+                    type="button"
+                    onClick={handleImport}
+                    disabled={!canSubmit || loading}
+                    className="btn btn-accent"
+                  >
+                    <span>{t("import.analyze")}</span>
+                    <IcArrowRight size={12} />
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          {/* Tips */}
+          <Ornament />
+          <div style={{ marginTop: 20 }}>
+            <Eyebrow>{t("import.tips")}</Eyebrow>
+            <ul
+              style={{
+                marginTop: 12,
+                padding: 0,
+                listStyle: "none",
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
+              }}
+            >
+              {[t("import.tip1"), t("import.tip2"), t("import.tip3")].map((tip, i) => (
+                <li
+                  key={i}
+                  style={{
+                    display: "flex",
+                    gap: 10,
+                    fontSize: 13,
+                    color: "var(--ink-2)",
+                    lineHeight: 1.6,
+                  }}
+                >
+                  <span className="mono num" style={{ color: "var(--ink-4)", flexShrink: 0 }}>
+                    {String(i + 1).padStart(2, "0")}
+                  </span>
+                  <span>{tip}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </>
+      ) : (
+        <div className="card" style={{ padding: 32 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 8 }}>
+            <SourceIcon type={tab === "url" ? "youtube" : "pdf"} size={20} />
+            <div
+              className="mono"
+              style={{
+                fontSize: 13,
+                color: "var(--ink-2)",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                flex: 1,
+              }}
+            >
+              {tab === "url" ? url : pdfName}
+            </div>
+            <span className="chip chip-accent">{lang === "zh" ? "处理中" : "processing"}</span>
+          </div>
+          <h2
+            className="display"
+            style={{ fontSize: 22, margin: "12px 0 4px", fontWeight: 400 }}
+          >
+            {lang === "zh" ? "已开始解析" : "Pipeline started"}
+          </h2>
+          <div style={{ fontSize: 12, color: "var(--ink-3)", marginBottom: 32 }}>
+            {lang === "zh"
+              ? "你可以离开这个页面，处理状态会出现在资料库。"
+              : "You can leave this page — progress shows up in the Library."}
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            {stages.map((s, i) => {
+              const active = i === stage;
+              const done = i < stage;
+              return (
+                <div
+                  key={s.tag}
+                  style={{ display: "flex", alignItems: "center", gap: 14 }}
+                >
+                  <div
+                    style={{
+                      width: 22,
+                      height: 22,
+                      borderRadius: "50%",
+                      border: `1.5px solid ${
+                        done
+                          ? "var(--sage)"
+                          : active
+                            ? "var(--accent)"
+                            : "var(--border-strong)"
+                      }`,
+                      background: done
+                        ? "var(--sage)"
+                        : active
+                          ? "var(--accent-soft)"
+                          : "transparent",
+                      color: done ? "#fff" : "var(--accent)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      flexShrink: 0,
+                    }}
+                  >
+                    {done ? (
+                      <IcCheck size={12} />
+                    ) : active ? (
+                      <IcLoader size={12} className="spin" />
+                    ) : (
+                      <span
+                        className="mono num"
+                        style={{ fontSize: 11, color: "var(--ink-3)" }}
+                      >
+                        {i + 1}
+                      </span>
+                    )}
+                  </div>
+                  <div
+                    style={{
+                      flex: 1,
+                      fontSize: 14,
+                      color: done ? "var(--ink-3)" : "var(--ink)",
+                      fontWeight: active ? 500 : 400,
+                    }}
+                  >
+                    {s.label}
+                  </div>
+                  <span className="mono" style={{ fontSize: 11, color: "var(--ink-4)" }}>
+                    {s.tag}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

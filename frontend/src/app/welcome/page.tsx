@@ -1,7 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { Brain, Sparkles, ArrowRight, Zap, Target } from "lucide-react";
+import {
+  SocratiqMark as Brain,
+  IcSparkle as Sparkles,
+  IcArrowRight as ArrowRight,
+  IcSpark as Zap,
+  IcDiagnostic as Target,
+} from "@/components/icons";
 import { Button } from "@/components/ui/button";
 
 export default function WelcomePage() {

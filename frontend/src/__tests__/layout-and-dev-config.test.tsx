@@ -11,6 +11,8 @@ const { mockPathname } = vi.hoisted(() => ({
 
 vi.mock("next/navigation", () => ({
   usePathname: () => mockPathname(),
+  useRouter: () => ({ push: vi.fn(), back: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
+  useSearchParams: () => new URLSearchParams(),
 }));
 
 function installMatchMedia(width: number) {
@@ -33,13 +35,18 @@ describe("frontend dev config", () => {
     );
   });
 
-  it("bridges common light Tailwind utilities to theme variables in dark mode", () => {
+  it("ships the warm-paper design tokens and a dark-mode palette", () => {
+    // The legacy Tailwind-utility bridge has been replaced with first-class
+    // tokens. This test now verifies that the redesign's identity primitives
+    // (terracotta accent, sage, paper bg, dark scholarly variant) are present.
     const css = readFileSync("src/app/globals.css", "utf8");
 
-    expect(css).toContain(':root[data-theme="dark"] :where(.bg-white');
-    expect(css).toContain(':root:not([data-theme="light"]) :where(.bg-white');
-    expect(css).toContain(".text-gray-900");
-    expect(css).toContain(".border-gray-200");
+    expect(css).toContain("--bg: #f3ede1");
+    expect(css).toContain("--accent: #c96442");
+    expect(css).toContain("--sage: #6b7d5b");
+    expect(css).toContain(':root[data-theme="dark"]');
+    expect(css).toContain(':root[data-density="dense"]');
+    expect(css).toContain(':root[data-density="spacious"]');
   });
 });
 

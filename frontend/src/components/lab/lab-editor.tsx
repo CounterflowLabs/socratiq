@@ -2,7 +2,16 @@
 
 import { useState, useMemo, useEffect } from "react";
 import dynamic from "next/dynamic";
-import { Check, ChevronDown, Download, FileCode, FileText, FlaskConical, Loader2, RotateCcw } from "lucide-react";
+import {
+  IcCheck as Check,
+  IcChevronDown as ChevronDown,
+  IcImport as Download,
+  IcLab as FlaskConical,
+  IcLoader as Loader2,
+  IcDoc as FileText,
+  IcDoc as FileCode,
+  IcRegen as RotateCcw,
+} from "@/components/icons";
 import { clsx } from "clsx";
 import { recordProgress, type LabResponse } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";

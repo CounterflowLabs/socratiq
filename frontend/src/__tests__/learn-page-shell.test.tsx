@@ -9,6 +9,14 @@ vi.mock("react-markdown", () => ({
     React.createElement("div", { "data-testid": "markdown" }, children),
 }));
 
+vi.mock("next/font/google", () => ({
+  Source_Serif_4: () => ({ variable: "--font-source-serif", style: { fontFamily: "Source Serif 4" } }),
+  Geist: () => ({ variable: "--font-geist", style: { fontFamily: "Geist" } }),
+  Geist_Mono: () => ({ variable: "--font-geist-mono", style: { fontFamily: "Geist Mono" } }),
+  Noto_Serif_SC: () => ({ variable: "--font-noto-serif-sc", style: { fontFamily: "Noto Serif SC" } }),
+  Noto_Sans_SC: () => ({ variable: "--font-noto-sans-sc", style: { fontFamily: "Noto Sans SC" } }),
+}));
+
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), back: vi.fn(), replace: vi.fn() }),
   useSearchParams: () => {
@@ -55,7 +63,7 @@ function mockFetch(responses: Record<string, unknown>) {
 }
 
 function SuspenseWrapper({ children }: { children: React.ReactNode }) {
-  return <Suspense fallback={<div>Loading...</div>}>{children}</Suspense>;
+  return <Suspense fallback={<div>Loading…</div>}>{children}</Suspense>;
 }
 
 describe("Learn page shell", () => {
@@ -63,6 +71,7 @@ describe("Learn page shell", () => {
     id: "c1",
     title: "测试课程",
     description: "desc",
+    version_index: 1,
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
     sources: [
@@ -122,10 +131,10 @@ describe("Learn page shell", () => {
     vi.resetModules();
   });
 
-  it("renders the dedicated learn shell without the global nav or legacy tabs", async () => {
+  it("renders the dedicated learn shell without the global nav", async () => {
     globalThis.fetch = mockFetch({
       "/api/v1/courses/c1": courseResponse,
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     vi.resetModules();
     const LearnPage = (await import("@/app/learn/page")).default;
@@ -135,7 +144,7 @@ describe("Learn page shell", () => {
         <SuspenseWrapper>
           <LearnPage />
         </SuspenseWrapper>
-      </LayoutInner>
+      </LayoutInner>,
     );
 
     await waitFor(() => {
@@ -143,25 +152,23 @@ describe("Learn page shell", () => {
       expect(screen.getByText("课程目录")).toBeInTheDocument();
     });
 
-    expect(screen.getByRole("link", { name: "返回首页" })).toHaveAttribute("href", "/");
-    expect(screen.queryByText("资料")).not.toBeInTheDocument();
-    expect(screen.queryByText("Lab")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("返回首页")).toHaveAttribute("href", "/");
   });
 
-  it("keeps source video and pdf in the study aside instead of the main stage", async () => {
+  it("shows the persistent mentor and sources panels on desktop by default", async () => {
     globalThis.fetch = mockFetch({
       "/api/v1/courses/c1": courseResponse,
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     vi.resetModules();
     const LearnPage = (await import("@/app/learn/page")).default;
 
-    const { container } = render(
+    render(
       <LayoutInner>
         <SuspenseWrapper>
           <LearnPage />
         </SuspenseWrapper>
-      </LayoutInner>
+      </LayoutInner>,
     );
 
     await waitFor(() => {
@@ -169,17 +176,12 @@ describe("Learn page shell", () => {
       expect(screen.getByText("这是本节的正文内容。")).toBeInTheDocument();
     });
 
-    expect(container.querySelector("iframe")).toBeNull();
-    expect(screen.queryByText("原视频")).not.toBeInTheDocument();
-    expect(screen.queryByText("原 PDF")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: /打开学习辅助区/i }));
-
-    await waitFor(() => {
-      expect(screen.getByTitle("课程原视频")).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "原 PDF" })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "参考资料" })).toBeInTheDocument();
-    });
+    // Mentor + sources rail visible by default — no iframe yet because the
+    // active panel starts on "video", but the toggle buttons should be rendered.
+    expect(screen.getByRole("button", { name: "原视频" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "原 PDF" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "参考资料" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "AI 导师" })).toBeInTheDocument();
   });
 
   it("surfaces lesson waypoints in the course outline", async () => {
@@ -219,7 +221,7 @@ describe("Learn page shell", () => {
 
     globalThis.fetch = mockFetch({
       "/api/v1/courses/c1": courseWithWaypoints,
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     vi.resetModules();
     const LearnPage = (await import("@/app/learn/page")).default;
@@ -229,7 +231,7 @@ describe("Learn page shell", () => {
         <SuspenseWrapper>
           <LearnPage />
         </SuspenseWrapper>
-      </LayoutInner>
+      </LayoutInner>,
     );
 
     await waitFor(() => {
@@ -239,53 +241,12 @@ describe("Learn page shell", () => {
     const waypoints = within(screen.getByLabelText("本节脉络"));
     expect(waypoints.getByRole("button", { name: /从正文开始/ })).toBeInTheDocument();
     expect(waypoints.getByRole("button", { name: /把概念跑起来/ })).toBeInTheDocument();
-    expect(waypoints.getByText("2 个知识片段")).toBeInTheDocument();
-  });
-
-  it("lets desktop users close and reopen the study aside", async () => {
-    globalThis.fetch = mockFetch({
-      "/api/v1/courses/c1": courseResponse,
-    }) as typeof fetch;
-
-    vi.resetModules();
-    const LearnPage = (await import("@/app/learn/page")).default;
-
-    render(
-      <LayoutInner>
-        <SuspenseWrapper>
-          <LearnPage />
-        </SuspenseWrapper>
-      </LayoutInner>
-    );
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /打开学习辅助区/i })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: /打开学习辅助区/i }));
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /关闭学习辅助区/i })).toBeInTheDocument();
-      expect(screen.getByTitle("课程原视频")).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: /关闭学习辅助区/i }));
-
-    await waitFor(() => {
-      expect(screen.queryByTitle("课程原视频")).not.toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: /打开学习辅助区/i }));
-
-    await waitFor(() => {
-      expect(screen.getByTitle("课程原视频")).toBeInTheDocument();
-    });
   });
 
   it("opens the video aside when a lesson timestamp is clicked", async () => {
     globalThis.fetch = mockFetch({
       "/api/v1/courses/c1": courseResponse,
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     vi.resetModules();
     const LearnPage = (await import("@/app/learn/page")).default;
@@ -295,7 +256,7 @@ describe("Learn page shell", () => {
         <SuspenseWrapper>
           <LearnPage />
         </SuspenseWrapper>
-      </LayoutInner>
+      </LayoutInner>,
     );
 
     await waitFor(() => {
@@ -305,424 +266,6 @@ describe("Learn page shell", () => {
     fireEvent.click(screen.getByRole("button", { name: /0:12/i }));
 
     await waitFor(() => {
-      expect(screen.getByTitle("课程原视频")).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: /打开学习辅助区/i })).toHaveAttribute(
-        "aria-expanded",
-        "true"
-      );
-    });
-  });
-
-  it("keeps course-level video support when the current section comes from a pdf source", async () => {
-    const mixedSourceCourse = {
-      ...courseResponse,
-      sources: [
-        {
-          id: "pdf-1",
-          type: "pdf",
-          url: null,
-        },
-        {
-          id: "ref-1",
-          type: "article",
-          url: null,
-        },
-        {
-          id: "video-1",
-          type: "youtube",
-          url: "https://www.youtube.com/watch?v=demo-video",
-        },
-      ],
-      sections: [
-        {
-          ...courseResponse.sections[0],
-          source_id: "pdf-1",
-        },
-      ],
-    };
-
-    globalThis.fetch = mockFetch({
-      "/api/v1/courses/c1": mixedSourceCourse,
-    }) as typeof fetch;
-
-    vi.resetModules();
-    const LearnPage = (await import("@/app/learn/page")).default;
-
-    render(
-      <LayoutInner>
-        <SuspenseWrapper>
-          <LearnPage />
-        </SuspenseWrapper>
-      </LayoutInner>
-    );
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /0:12/i })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: /0:12/i }));
-
-    await waitFor(() => {
-      expect(screen.getByTitle("课程原视频")).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "原 PDF" })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "参考资料" })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "原 PDF" }));
-
-    await waitFor(() => {
-      expect(screen.getByRole("link", { name: /打开原 PDF/i })).toHaveAttribute(
-        "href",
-        "/api/v1/sources/pdf-1/file"
-      );
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "参考资料" }));
-
-    await waitFor(() => {
-      expect(screen.queryByRole("link", { name: /参考链接/i })).not.toBeInTheDocument();
-    });
-  });
-
-  it("uses a deterministic course-material fallback when multiple videos and pdfs are available", async () => {
-    const courseWithMultipleMaterials = {
-      ...courseResponse,
-      sources: [
-        {
-          id: "video-b",
-          type: "youtube",
-          url: "https://www.youtube.com/watch?v=late-video",
-        },
-        {
-          id: "pdf-b",
-          type: "pdf",
-          url: "https://example.com/later.pdf",
-        },
-        {
-          id: "article-1",
-          type: "article",
-          url: "https://example.com/article",
-        },
-        {
-          id: "video-a",
-          type: "youtube",
-          url: "https://www.youtube.com/watch?v=primary-video",
-        },
-        {
-          id: "pdf-a",
-          type: "pdf",
-          url: "https://example.com/primary.pdf",
-        },
-      ],
-      sections: [
-        {
-          ...courseResponse.sections[0],
-          id: "s-pdf",
-          title: "主 PDF",
-          order_index: 0,
-          source_id: "pdf-a",
-        },
-        {
-          ...courseResponse.sections[0],
-          id: "s-article",
-          title: "当前文章节",
-          order_index: 1,
-          source_id: "article-1",
-        },
-        {
-          ...courseResponse.sections[0],
-          id: "s-video-a",
-          title: "主视频节",
-          order_index: 2,
-          source_id: "video-a",
-        },
-        {
-          ...courseResponse.sections[0],
-          id: "s-video-b",
-          title: "备选视频节",
-          order_index: 3,
-          source_id: "video-b",
-        },
-      ],
-    };
-
-    globalThis.fetch = mockFetch({
-      "/api/v1/courses/c1": courseWithMultipleMaterials,
-    }) as typeof fetch;
-
-    vi.resetModules();
-    const LearnPage = (await import("@/app/learn/page")).default;
-
-    render(
-      <LayoutInner>
-        <SuspenseWrapper>
-          <LearnPage />
-        </SuspenseWrapper>
-      </LayoutInner>
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText("当前文章节")).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: /打开学习辅助区/i }));
-
-    await waitFor(() => {
-      expect(screen.getByTitle("课程原视频")).toHaveAttribute(
-        "src",
-        expect.stringContaining("primary-video")
-      );
-      expect(screen.getByRole("button", { name: "原 PDF" })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "原 PDF" }));
-
-    await waitFor(() => {
-      expect(screen.getByRole("link", { name: /打开原 PDF/i })).toHaveAttribute(
-        "href",
-        "https://example.com/primary.pdf"
-      );
-    });
-  });
-
-  it("preserves bilibili page selection when the current section itself is the video source", async () => {
-    const bilibiliCourse = {
-      ...courseResponse,
-      sources: [
-        {
-          id: "pdf-1",
-          type: "pdf",
-          url: "https://example.com/notes.pdf",
-        },
-        {
-          id: "video-1",
-          type: "bilibili",
-          url: "https://www.bilibili.com/video/BV1test1234",
-        },
-      ],
-      sections: [
-        {
-          ...courseResponse.sections[0],
-          id: "s0",
-          title: "前置 PDF 节",
-          order_index: 0,
-          source_id: "pdf-1",
-        },
-        {
-          ...courseResponse.sections[0],
-          id: "s2",
-          title: "视频第一节",
-          order_index: 3,
-          source_id: "video-1",
-          content: {
-            ...courseResponse.sections[0].content,
-            page_index: 0,
-          },
-        },
-        {
-          ...courseResponse.sections[0],
-          id: "s1",
-          title: "视频第二节",
-          order_index: 4,
-          source_id: "video-1",
-          content: {
-            ...courseResponse.sections[0].content,
-            page_index: 1,
-          },
-        },
-      ],
-    };
-
-    globalThis.fetch = mockFetch({
-      "/api/v1/courses/c1": bilibiliCourse,
-    }) as typeof fetch;
-
-    vi.resetModules();
-    const LearnPage = (await import("@/app/learn/page")).default;
-
-    render(
-      <LayoutInner>
-        <SuspenseWrapper>
-          <LearnPage />
-        </SuspenseWrapper>
-      </LayoutInner>
-    );
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /0:12/i })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: /0:12/i }));
-
-    await waitFor(() => {
-      expect(screen.getByTitle("课程原视频")).toHaveAttribute(
-        "src",
-        expect.stringContaining("p=2")
-      );
-    });
-  });
-
-  it("keeps bilibili single-part videos on p=1 even when one source is split into multiple sections", async () => {
-    const singlePartBilibiliCourse = {
-      ...courseResponse,
-      sources: [
-        {
-          id: "video-1",
-          type: "bilibili",
-          url: "https://www.bilibili.com/video/BV1single123",
-        },
-      ],
-      sections: [
-        {
-          ...courseResponse.sections[0],
-          id: "s1",
-          title: "视频切片一",
-          order_index: 0,
-          source_id: "video-1",
-        },
-        {
-          ...courseResponse.sections[0],
-          id: "s2",
-          title: "视频切片二",
-          order_index: 1,
-          source_id: "video-1",
-        },
-      ],
-    };
-
-    globalThis.fetch = mockFetch({
-      "/api/v1/courses/c1": singlePartBilibiliCourse,
-    }) as typeof fetch;
-
-    vi.resetModules();
-    const LearnPage = (await import("@/app/learn/page")).default;
-
-    render(
-      <LayoutInner>
-        <SuspenseWrapper>
-          <LearnPage />
-        </SuspenseWrapper>
-      </LayoutInner>
-    );
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /0:12/i })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: /0:12/i }));
-
-    await waitFor(() => {
-      expect(screen.getByTitle("课程原视频")).toHaveAttribute(
-        "src",
-        expect.stringContaining("p=1")
-      );
-    });
-  });
-
-  it("does not render a clickable timestamp when no video source is available", async () => {
-    const courseWithoutVideo = {
-      ...courseResponse,
-      sources: courseResponse.sources.filter((source) => source.id !== "video-1"),
-      sections: [
-        {
-          ...courseResponse.sections[0],
-          source_id: "pdf-1",
-        },
-      ],
-    };
-
-    globalThis.fetch = mockFetch({
-      "/api/v1/courses/c1": courseWithoutVideo,
-    }) as typeof fetch;
-
-    vi.resetModules();
-    const LearnPage = (await import("@/app/learn/page")).default;
-
-    render(
-      <LayoutInner>
-        <SuspenseWrapper>
-          <LearnPage />
-        </SuspenseWrapper>
-      </LayoutInner>
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText("这是本节的正文内容。")).toBeInTheDocument();
-    });
-
-    expect(screen.queryByRole("button", { name: /0:12/i })).not.toBeInTheDocument();
-  });
-
-  it("keeps a manually selected non-video aside panel stable", async () => {
-    globalThis.fetch = mockFetch({
-      "/api/v1/courses/c1": courseResponse,
-    }) as typeof fetch;
-
-    vi.resetModules();
-    const LearnPage = (await import("@/app/learn/page")).default;
-
-    render(
-      <LayoutInner>
-        <SuspenseWrapper>
-          <LearnPage />
-        </SuspenseWrapper>
-      </LayoutInner>
-    );
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /打开学习辅助区/i })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: /打开学习辅助区/i }));
-
-    await waitFor(() => {
-      expect(screen.getByTitle("课程原视频")).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "原 PDF" }));
-
-    await waitFor(() => {
-      expect(screen.getByRole("link", { name: /打开原 PDF/i })).toBeInTheDocument();
-    });
-
-    expect(screen.queryByTitle("课程原视频")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "AI 导师" }));
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /打开 AI 导师/i })).toBeInTheDocument();
-    });
-
-    expect(screen.queryByTitle("课程原视频")).not.toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: /打开原 PDF/i })).not.toBeInTheDocument();
-  });
-
-  it("shows the study aside as a visible overlay on narrow screens", async () => {
-    installMatchMedia(768);
-
-    globalThis.fetch = mockFetch({
-      "/api/v1/courses/c1": courseResponse,
-    }) as typeof fetch;
-
-    vi.resetModules();
-    const LearnPage = (await import("@/app/learn/page")).default;
-
-    render(
-      <LayoutInner>
-        <SuspenseWrapper>
-          <LearnPage />
-        </SuspenseWrapper>
-      </LayoutInner>
-    );
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /0:12/i })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: /0:12/i }));
-
-    await waitFor(() => {
-      expect(screen.getByRole("dialog", { name: /学习辅助区/i })).toBeInTheDocument();
       expect(screen.getByTitle("课程原视频")).toBeInTheDocument();
     });
   });

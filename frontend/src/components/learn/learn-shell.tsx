@@ -2,9 +2,14 @@
 
 import { useCallback, useSyncExternalStore } from "react";
 import Link from "next/link";
-import { ArrowLeft, CheckCircle2, Loader2, PanelLeftOpen, Sparkles } from "lucide-react";
-import { clsx } from "clsx";
 
+import {
+  IcArrowLeft,
+  IcCheckCircle,
+  IcLoader,
+  IcPanelLeftOpen,
+  IcSparkle,
+} from "@/components/icons";
 import { SIDEBAR_DESKTOP_QUERY } from "@/app/layout";
 
 interface RegenerationBanner {
@@ -68,9 +73,7 @@ const STAGE_LABELS_ZH: Record<string, string> = {
 function useMediaQuery(query: string): boolean {
   const subscribe = useCallback(
     (cb: () => void) => {
-      if (typeof window.matchMedia !== "function") {
-        return () => {};
-      }
+      if (typeof window.matchMedia !== "function") return () => {};
       const mq = window.matchMedia(query);
       mq.addEventListener("change", cb);
       return () => mq.removeEventListener("change", cb);
@@ -78,9 +81,7 @@ function useMediaQuery(query: string): boolean {
     [query],
   );
   const getSnapshot = useCallback(() => {
-    if (typeof window.matchMedia !== "function") {
-      return false;
-    }
+    if (typeof window.matchMedia !== "function") return false;
     return window.matchMedia(query).matches;
   }, [query]);
   const getServerSnapshot = useCallback(() => false, []);
@@ -96,7 +97,7 @@ export default function LearnShell({
   outline,
   lessonStage,
   aside,
-  backHref = "/path",
+  backHref = "/",
   outlineOpen = true,
   onOpenOutline,
   versionIndex,
@@ -107,67 +108,82 @@ export default function LearnShell({
   const isDesktop = useMediaQuery(SIDEBAR_DESKTOP_QUERY);
 
   return (
-    <div className="min-h-screen" style={{ background: "var(--bg)" }}>
+    <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
       <header
-        className="sticky top-0 z-30 border-b backdrop-blur"
-        style={{ borderColor: "var(--border)", background: "color-mix(in srgb, var(--surface) 95%, transparent)" }}
+        style={{
+          position: "sticky",
+          top: 0,
+          zIndex: 30,
+          background: "var(--surface)",
+          borderBottom: "1px solid var(--border)",
+        }}
       >
-        <div className="mx-auto flex max-w-[1760px] items-center justify-between gap-3 px-4 py-3 sm:px-6">
-          <div className="flex min-w-0 items-center gap-3">
+        <div
+          style={{
+            maxWidth: 1760,
+            margin: "0 auto",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            padding: "10px 24px",
+          }}
+        >
+          <div style={{ display: "flex", minWidth: 0, alignItems: "center", gap: 12 }}>
             <Link
               href={backHref}
-              aria-label="返回课程路径"
-              className="inline-flex shrink-0 items-center justify-center rounded-md border p-2 transition hover:opacity-80"
-              style={{ borderColor: "var(--border-medium)", color: "var(--text-secondary)" }}
+              aria-label="返回首页"
+              className="btn btn-ghost btn-icon btn-sm"
             >
-              <ArrowLeft className="h-4 w-4" />
+              <IcArrowLeft size={14} />
             </Link>
             {!outlineOpen && onOpenOutline ? (
               <button
                 type="button"
                 onClick={onOpenOutline}
                 aria-label="展开课程目录"
-                className="inline-flex shrink-0 items-center justify-center rounded-md border p-2 transition hover:bg-slate-50"
-                style={{ borderColor: "var(--border-medium)", color: "var(--text-secondary)" }}
+                className="btn btn-ghost btn-icon btn-sm"
               >
-                <PanelLeftOpen className="h-4 w-4" />
+                <IcPanelLeftOpen size={14} />
               </button>
             ) : null}
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <p className="text-xs font-medium uppercase" style={{ color: "var(--text-tertiary)" }}>
-                  Learn
-                </p>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span className="eyebrow">Learn</span>
                 {versionIndex && versionIndex > 1 ? (
-                  <span
-                    className="rounded-full bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-700"
-                    title="该课程是从先前版本重新生成的"
-                  >
+                  <span className="chip chip-accent" title="该课程是从先前版本重新生成的">
                     第 {versionIndex} 版
                     {parentCourseHref ? (
                       <>
                         {" · "}
                         <Link
                           href={parentCourseHref}
-                          className="underline-offset-2 hover:underline"
+                          style={{ textDecoration: "underline", color: "inherit" }}
                         >
-                          查看上一版
+                          上一版
                         </Link>
                       </>
                     ) : null}
                   </span>
                 ) : null}
               </div>
-              <h1 className="truncate text-xl font-semibold" style={{ color: "var(--text)" }}>
+              <h1
+                className="serif"
+                style={{
+                  fontSize: 20,
+                  fontWeight: 500,
+                  margin: "2px 0 0",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
                 {courseTitle}
               </h1>
             </div>
           </div>
-          <div className="flex items-center gap-3">
-            <span
-              className="hidden rounded-md border px-3 py-1.5 text-sm font-medium sm:inline-flex"
-              style={{ borderColor: "var(--border)", background: "var(--surface-alt)", color: "var(--text-secondary)" }}
-            >
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <span className="chip chip-mono" style={{ display: isDesktop ? "inline-flex" : "none" }}>
               {progressLabel}
             </span>
             {onRegenerate ? (
@@ -175,19 +191,17 @@ export default function LearnShell({
                 type="button"
                 onClick={onRegenerate}
                 disabled={regenerationBanner?.state === "running"}
-                className="inline-flex items-center gap-1.5 rounded-md border px-3 py-2 text-sm font-medium transition hover:bg-violet-50 disabled:opacity-60"
-                style={{ borderColor: "var(--border-medium)", color: "var(--text-secondary)" }}
+                className="btn btn-outline btn-sm"
               >
-                <Sparkles className="h-4 w-4 text-violet-500" />
-                重新生成
+                <IcSparkle size={12} />
+                <span>重新生成</span>
               </button>
             ) : null}
             <button
               type="button"
               onClick={onOpenAside}
               aria-expanded={asideOpen}
-              className="inline-flex items-center rounded-md px-4 py-2 text-sm font-medium transition hover:opacity-90"
-              style={{ background: "var(--text)", color: "var(--bg)" }}
+              className="btn btn-primary btn-sm"
             >
               打开学习辅助区
             </button>
@@ -197,69 +211,112 @@ export default function LearnShell({
 
       {regenerationBanner ? (
         <div
-          className={clsx(
-            "border-b px-4 py-3 text-sm sm:px-6",
-            regenerationBanner.state === "running" && "bg-violet-50 text-violet-800 border-violet-200",
-            regenerationBanner.state === "ready" && "bg-emerald-50 text-emerald-800 border-emerald-200",
-            regenerationBanner.state === "failed" && "bg-red-50 text-red-800 border-red-200"
-          )}
+          className="card-quiet"
+          style={{
+            margin: 0,
+            borderRadius: 0,
+            borderLeft: 0,
+            borderRight: 0,
+            padding: "10px 24px",
+            background:
+              regenerationBanner.state === "running"
+                ? "var(--accent-soft)"
+                : regenerationBanner.state === "ready"
+                  ? "var(--sage-soft)"
+                  : "var(--error-soft)",
+            color:
+              regenerationBanner.state === "running"
+                ? "var(--accent-ink)"
+                : regenerationBanner.state === "ready"
+                  ? "var(--sage-ink)"
+                  : "var(--error)",
+            borderTop: "none",
+            fontSize: 13,
+          }}
         >
-          <div className="mx-auto flex max-w-[1760px] flex-col gap-2">
-            <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              {regenerationBanner.state === "running" ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : regenerationBanner.state === "ready" ? (
-                <CheckCircle2 className="h-4 w-4" />
-              ) : null}
-              <span>
+          <div
+            style={{
+              maxWidth: 1760,
+              margin: "0 auto",
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 {regenerationBanner.state === "running" ? (
-                  <>
-                    重新生成中 ·{" "}
-                    {STAGE_LABELS_ZH[regenerationBanner.stage ?? ""] ??
-                      regenerationBanner.stage ??
-                      "进行中"}
-                    {typeof regenerationBanner.current === "number" &&
-                    typeof regenerationBanner.total === "number" &&
-                    regenerationBanner.total > 1
-                      ? ` (${regenerationBanner.current}/${regenerationBanner.total})`
-                      : ""}
-                    {" · "}
-                    {computeRegenPercent(regenerationBanner)}%
-                  </>
+                  <IcLoader size={14} className="spin" />
                 ) : regenerationBanner.state === "ready" ? (
-                  "新版本已生成完毕。"
-                ) : (
-                  regenerationBanner.message ?? "重新生成失败。"
-                )}
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              {regenerationBanner.state === "ready" && regenerationBanner.onOpenNewCourse ? (
-                <button
-                  type="button"
-                  onClick={regenerationBanner.onOpenNewCourse}
-                  className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-emerald-700"
-                >
-                  打开新版本
-                </button>
-              ) : null}
-              {regenerationBanner.state !== "running" && regenerationBanner.onDismiss ? (
-                <button
-                  type="button"
-                  onClick={regenerationBanner.onDismiss}
-                  className="rounded-md px-2 py-1 text-xs font-medium opacity-70 transition hover:opacity-100"
-                >
-                  关闭
-                </button>
-              ) : null}
-            </div>
+                  <IcCheckCircle size={14} />
+                ) : null}
+                <span>
+                  {regenerationBanner.state === "running" ? (
+                    <>
+                      重新生成中 ·{" "}
+                      {STAGE_LABELS_ZH[regenerationBanner.stage ?? ""] ??
+                        regenerationBanner.stage ??
+                        "进行中"}
+                      {typeof regenerationBanner.current === "number" &&
+                      typeof regenerationBanner.total === "number" &&
+                      regenerationBanner.total > 1
+                        ? ` (${regenerationBanner.current}/${regenerationBanner.total})`
+                        : ""}
+                      {" · "}
+                      {computeRegenPercent(regenerationBanner)}%
+                    </>
+                  ) : regenerationBanner.state === "ready" ? (
+                    "新版本已生成完毕。"
+                  ) : (
+                    regenerationBanner.message ?? "重新生成失败。"
+                  )}
+                </span>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                {regenerationBanner.state === "ready" && regenerationBanner.onOpenNewCourse ? (
+                  <button
+                    type="button"
+                    onClick={regenerationBanner.onOpenNewCourse}
+                    className="btn btn-accent btn-sm"
+                  >
+                    打开新版本
+                  </button>
+                ) : null}
+                {regenerationBanner.state !== "running" && regenerationBanner.onDismiss ? (
+                  <button
+                    type="button"
+                    onClick={regenerationBanner.onDismiss}
+                    className="btn btn-ghost btn-sm"
+                  >
+                    关闭
+                  </button>
+                ) : null}
+              </div>
             </div>
             {regenerationBanner.state === "running" ? (
-              <div className="h-1.5 w-full overflow-hidden rounded-full bg-violet-100">
+              <div
+                style={{
+                  height: 4,
+                  borderRadius: 100,
+                  background: "rgba(201, 100, 66, 0.18)",
+                  overflow: "hidden",
+                }}
+              >
                 <div
-                  className="h-full rounded-full bg-violet-500 transition-all duration-500 ease-out"
-                  style={{ width: `${computeRegenPercent(regenerationBanner)}%` }}
+                  style={{
+                    height: "100%",
+                    width: `${computeRegenPercent(regenerationBanner)}%`,
+                    background: "var(--accent)",
+                    borderRadius: 100,
+                    transition: "width 0.4s ease",
+                  }}
                 />
               </div>
             ) : null}
@@ -268,53 +325,77 @@ export default function LearnShell({
       ) : null}
 
       <div
-        className={clsx(
-          "mx-auto flex max-w-[1760px] flex-col gap-4 px-4 py-4 transition-all duration-300 ease-out sm:px-6 lg:grid lg:items-start",
-          outlineOpen && isDesktop
-            ? asideOpen
-              ? "lg:grid-cols-[280px_minmax(0,1fr)_360px]"
-              : "lg:grid-cols-[280px_minmax(0,1fr)]"
-            : asideOpen && isDesktop
-              ? "lg:grid-cols-[minmax(0,1fr)_360px]"
-              : "lg:grid-cols-[minmax(0,1fr)]"
-        )}
+        style={{
+          maxWidth: 1760,
+          margin: "0 auto",
+          padding: "16px 24px 80px",
+          display: isDesktop ? "grid" : "flex",
+          flexDirection: isDesktop ? undefined : "column",
+          gridTemplateColumns: isDesktop
+            ? outlineOpen && asideOpen
+              ? "260px minmax(0,1fr) 380px"
+              : outlineOpen
+                ? "260px minmax(0,1fr)"
+                : asideOpen
+                  ? "minmax(0,1fr) 380px"
+                  : "minmax(0,1fr)"
+            : undefined,
+          gap: 20,
+          alignItems: "flex-start",
+        }}
       >
         {outlineOpen ? (
-          <div className="lg:sticky lg:top-4">{outline}</div>
+          <div style={{ position: isDesktop ? "sticky" : "static", top: 76 }}>{outline}</div>
         ) : null}
-        <div className="min-w-0">{lessonStage}</div>
+        <div style={{ minWidth: 0 }}>{lessonStage}</div>
         {asideOpen && isDesktop ? (
-          <div className="min-w-0 lg:sticky lg:top-4">
-            {aside}
-          </div>
+          <div style={{ minWidth: 0, position: "sticky", top: 76 }}>{aside}</div>
         ) : null}
       </div>
 
       {asideOpen && !isDesktop ? (
         <div
-          className="fixed inset-0 z-50 flex items-end bg-slate-950/40"
           role="dialog"
           aria-modal="true"
           aria-label="学习辅助区"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 50,
+            display: "flex",
+            alignItems: "flex-end",
+            background: "rgba(26, 22, 17, 0.45)",
+          }}
         >
           <button
             type="button"
             aria-label="关闭学习辅助区遮罩"
-            className="absolute inset-0 bg-transparent"
             onClick={onCloseAside}
+            style={{
+              position: "absolute",
+              inset: 0,
+              background: "transparent",
+              border: "none",
+            }}
           />
           <div
-            className="relative z-10 max-h-[88vh] w-full overflow-y-auto rounded-t-lg p-4 shadow-2xl animate-[slideUp_0.3s_ease-out]"
-            style={{ background: "var(--surface)" }}
+            style={{
+              position: "relative",
+              zIndex: 10,
+              maxHeight: "88vh",
+              width: "100%",
+              overflowY: "auto",
+              padding: 16,
+              borderTopLeftRadius: 12,
+              borderTopRightRadius: 12,
+              background: "var(--surface)",
+              boxShadow: "var(--shadow-lg)",
+              animation: "slideUp 0.3s ease-out",
+            }}
           >
             {aside}
           </div>
-          <style>{`
-            @keyframes slideUp {
-              from { transform: translateY(100%); }
-              to { transform: translateY(0); }
-            }
-          `}</style>
+          <style>{`@keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }`}</style>
         </div>
       ) : null}
     </div>

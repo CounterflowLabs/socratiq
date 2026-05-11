@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { Check, Copy } from "lucide-react";
+
+import { IcCheck, IcDoc } from "@/components/icons";
 
 export default function CodeBlock({ language, code, context }: { language: string; code: string; context?: string }) {
   const [copied, setCopied] = useState(false);
@@ -29,7 +30,7 @@ export default function CodeBlock({ language, code, context }: { language: strin
             style={{ background: "rgba(255,255,255,0.1)", color: "var(--text-tertiary)" }}
             aria-label="复制代码"
           >
-            {copied ? <Check className="w-3.5 h-3.5" style={{ color: "var(--success)" }} /> : <Copy className="w-3.5 h-3.5" />}
+            {copied ? <IcCheck size={14} style={{ color: "var(--sage)" }} /> : <IcDoc size={14} />}
           </button>
         </div>
         <pre

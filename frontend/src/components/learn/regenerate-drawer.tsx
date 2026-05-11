@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Loader2, Sparkles, X } from "lucide-react";
+
+import { IcClose, IcLoader, IcSparkle } from "@/components/icons";
 
 interface RegenerateDrawerProps {
   open: boolean;
@@ -73,7 +74,7 @@ export default function RegenerateDrawer({
           style={{ borderColor: "var(--border)", background: "var(--surface)" }}
         >
           <div className="flex items-center gap-2">
-            <Sparkles className="h-5 w-5 text-violet-500" />
+            <IcSparkle size={18} style={{ color: "var(--accent)" }} />
             <h2 className="text-lg font-semibold">重新生成课程</h2>
           </div>
           <button
@@ -83,7 +84,7 @@ export default function RegenerateDrawer({
             className="rounded-md p-1.5 transition hover:bg-gray-100 disabled:opacity-50"
             aria-label="关闭"
           >
-            <X className="h-4 w-4" />
+            <IcClose size={14} />
           </button>
         </div>
 
@@ -155,12 +156,12 @@ export default function RegenerateDrawer({
           >
             {pending ? (
               <>
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <IcLoader size={14} className="spin" />
                 启动中…
               </>
             ) : (
               <>
-                <Sparkles className="h-4 w-4" />
+                <IcSparkle size={14} />
                 开始重生成
               </>
             )}

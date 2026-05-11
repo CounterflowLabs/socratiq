@@ -1,15 +1,16 @@
 "use client";
 
 import { useMemo, useState } from "react";
+
 import {
-  AlertCircle,
-  Ban,
-  Check,
-  CircleDashed,
-  Loader2,
-  RefreshCcw,
-  X,
-} from "lucide-react";
+  IcAlert as AlertCircle,
+  IcClose as Ban,
+  IcCheck as Check,
+  IcLoader as CircleDashed,
+  IcLoader as Loader2,
+  IcRegen as RefreshCcw,
+  IcClose as X,
+} from "@/components/icons";
 import type { SourceProgressResponse, SourceTaskProgress } from "@/lib/api";
 
 const STAGE_ORDER: Record<string, string[]> = {

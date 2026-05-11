@@ -8,7 +8,11 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   reactCompiler: true,
-  allowedDevOrigins: ["127.0.0.1", "localhost", "192.168.31.197"],
+  // Whitelist the entire 192.168.x.x LAN range so phones / iPads / other
+  // laptops on the same WiFi can hit the dev server. Next 16 rejects any
+  // browser origin not in this list when it does HMR / Server Actions
+  // round-trips, which surfaces as silent fetch failures in the app.
+  allowedDevOrigins: ["127.0.0.1", "localhost", "192.168.31.*", "192.168.*.*"],
 };
 
 export default nextConfig;

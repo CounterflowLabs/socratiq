@@ -3,7 +3,21 @@
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Brain, Plus, ChevronRight, BookOpen, Loader, AlertCircle, CheckCircle } from "lucide-react";
+
+import {
+  IcAlert,
+  IcArrowRight,
+  IcCheck,
+  IcClose,
+  IcFilter,
+  IcLoader,
+  IcPlus,
+  SourceIcon,
+} from "@/components/icons";
+import { Eyebrow } from "@/components/ui/eyebrow";
+import { PageHeader } from "@/components/ui/page-header";
+import { SectionTitle } from "@/components/ui/section-title";
+import { Progress } from "@/components/ui/progress-bar";
 import {
   listCourses,
   getSetupStatus,
@@ -18,26 +32,9 @@ import {
   type SourceProgressResponse,
 } from "@/lib/api";
 import { useCoursesStore, useTasksStore } from "@/lib/stores";
+import { useT } from "@/lib/i18n";
 import ReviewCard from "@/components/review-card";
 import SourcePipelineView from "@/components/materials/source-pipeline-view";
-
-function taskStateLabel(state: string): string {
-  const labels: Record<string, string> = {
-    PENDING: "排队中...",
-    cloning: "复用已有字幕与转写...",
-    extracting: "提取字幕...",
-    analyzing: "分析内容...",
-    generating_lessons: "生成课文...",
-    generating_labs: "生成 Lab...",
-    storing: "存储数据...",
-    embedding: "计算向量...",
-    assembling_course: "组装课程...",
-    generating_course: "生成课程...",
-    SUCCESS: "处理完成",
-    FAILURE: "处理失败",
-  };
-  return labels[state] || state;
-}
 
 interface DerivedTaskState {
   state: string;
@@ -48,10 +45,10 @@ interface DerivedTaskState {
 
 function deriveStateFromProgress(
   progress: SourceProgressResponse,
-  currentTaskId: string
+  currentTaskId: string,
 ): DerivedTaskState {
   const byType: Record<string, SourceProgressResponse["tasks"][number]> = {};
-  for (const t of progress.tasks) byType[t.task_type] = t;
+  for (const task of progress.tasks) byType[task.task_type] = task;
   const proc = byType.source_processing;
   const gen = byType.course_generation;
 
@@ -88,8 +85,42 @@ interface CourseProgress {
   total: number;
 }
 
+function taskStateLabel(state: string, lang: "zh" | "en"): string {
+  const labelsZh: Record<string, string> = {
+    PENDING: "排队中…",
+    cloning: "复用已有字幕与转写…",
+    extracting: "提取字幕…",
+    analyzing: "分析内容…",
+    generating_lessons: "生成课文…",
+    generating_labs: "生成 Lab…",
+    storing: "存储数据…",
+    embedding: "计算向量…",
+    assembling_course: "组装课程…",
+    generating_course: "生成课程…",
+    SUCCESS: "处理完成",
+    FAILURE: "处理失败",
+  };
+  const labelsEn: Record<string, string> = {
+    PENDING: "Queued…",
+    cloning: "Reusing existing subtitles…",
+    extracting: "Fetching transcript…",
+    analyzing: "Analyzing content…",
+    generating_lessons: "Generating lessons…",
+    generating_labs: "Generating labs…",
+    storing: "Persisting…",
+    embedding: "Computing embeddings…",
+    assembling_course: "Assembling course…",
+    generating_course: "Generating course…",
+    SUCCESS: "Done",
+    FAILURE: "Failed",
+  };
+  const map = lang === "en" ? labelsEn : labelsZh;
+  return map[state] || state;
+}
+
 export default function DashboardPage() {
   const router = useRouter();
+  const { t, lang } = useT();
   const { courses, setCourses, loading, setLoading } = useCoursesStore();
   const { tasks, updateTask, removeTask } = useTasksStore();
 
@@ -101,34 +132,49 @@ export default function DashboardPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
+    const refreshCourses = () =>
+      listCourses()
+        .then((res) => {
+          if (cancelled) return;
+          setCourses(res.items);
+          setLoadError(null);
+        })
+        .catch((err) => {
+          if (cancelled) return;
+          setLoadError(err instanceof Error ? err.message : t("dashboard.loadFailed"));
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+
     getSetupStatus()
       .then((status) => {
+        if (cancelled) return;
         if (!status.has_models) {
           router.replace("/setup");
           return;
         }
         setLoading(true);
-        listCourses()
-          .then((res) => { setCourses(res.items); setLoadError(null); })
-          .catch((err) => setLoadError(err instanceof Error ? err.message : "课程加载失败"))
-          .finally(() => setLoading(false));
+        void refreshCourses();
         getDueReviews()
-          .then((res) => setDueReviews(res.items))
+          .then((res) => !cancelled && setDueReviews(res.items))
           .catch(() => {});
       })
       .catch(() => {
+        // Setup endpoint may be unavailable in dev; don't block the dashboard.
         setLoading(true);
-        listCourses()
-          .then((res) => { setCourses(res.items); setLoadError(null); })
-          .catch((err) => setLoadError(err instanceof Error ? err.message : "课程加载失败"))
-          .finally(() => setLoading(false));
+        void refreshCourses();
         getDueReviews()
-          .then((res) => setDueReviews(res.items))
+          .then((res) => !cancelled && setDueReviews(res.items))
           .catch(() => {});
       });
-  }, [router, setCourses, setLoading]);
 
-  // Fetch progress for each course once courses are loaded
+    return () => {
+      cancelled = true;
+    };
+  }, [router, setCourses, setLoading, t]);
+
   useEffect(() => {
     if (courses.length === 0) return;
     courses.forEach((course) => {
@@ -136,39 +182,41 @@ export default function DashboardPage() {
         .then((items) => {
           const total = items.length;
           const completed = items.filter(
-            (item) => item.lesson_read || item.exercise_best_score !== null || item.lab_completed
+            (item) => item.lesson_read || item.exercise_best_score !== null || item.lab_completed,
           ).length;
-          setCourseProgressMap((prev) => ({ ...prev, [course.id]: { completed, total } }));
+          setCourseProgressMap((prev) => ({
+            ...prev,
+            [course.id]: { completed, total },
+          }));
         })
         .catch(() => {});
     });
   }, [courses]);
 
-  const handleRate = useCallback(
-    async (reviewId: string, quality: number) => {
-      setRatingIds((prev) => new Set(prev).add(reviewId));
-      try {
-        await completeReview(reviewId, quality);
-      } catch {
-        // silently ignore
-      }
-      setDueReviews((prev) => {
-        const next = prev.filter((r) => r.id !== reviewId);
-        if (next.length === 0) setAllReviewsDone(true);
-        return next;
-      });
-      setRatingIds((prev) => {
-        const s = new Set(prev);
-        s.delete(reviewId);
-        return s;
-      });
-    },
-    []
-  );
+  const handleRate = useCallback(async (reviewId: string, quality: number) => {
+    setRatingIds((prev) => new Set(prev).add(reviewId));
+    try {
+      await completeReview(reviewId, quality);
+    } catch {
+      // silently swallow — the user can re-rate later.
+    }
+    setDueReviews((prev) => {
+      const next = prev.filter((r) => r.id !== reviewId);
+      if (next.length === 0) setAllReviewsDone(true);
+      return next;
+    });
+    setRatingIds((prev) => {
+      const next = new Set(prev);
+      next.delete(reviewId);
+      return next;
+    });
+  }, []);
 
-  // Poll active tasks (DB-authoritative via /sources/{id}/progress)
+  // Poll active tasks via /sources/{id}/progress (DB-authoritative).
   useEffect(() => {
-    const activeTasks = tasks.filter((t) => t.state !== "SUCCESS" && t.state !== "FAILURE" && !t.courseId);
+    const activeTasks = tasks.filter(
+      (task) => task.state !== "SUCCESS" && task.state !== "FAILURE" && !task.courseId,
+    );
     if (activeTasks.length === 0) return;
 
     const interval = setInterval(async () => {
@@ -197,12 +245,13 @@ export default function DashboardPage() {
           });
 
           if (derived.courseId) {
-            listCourses().then((res) => setCourses(res.items)).catch(() => {});
+            listCourses()
+              .then((res) => setCourses(res.items))
+              .catch(() => {});
             setTimeout(() => removeTask(task.taskId), 8000);
-            continue;
           }
         } catch {
-          // silently retry on next interval
+          // retry on next interval
         }
       }
     }, 3000);
@@ -210,251 +259,607 @@ export default function DashboardPage() {
     return () => clearInterval(interval);
   }, [tasks, updateTask, removeTask, setCourses]);
 
-  const showReviewSection = dueReviews.length > 0 || allReviewsDone;
+  const dueCount = dueReviews.length;
+  const showReviewSection = dueCount > 0 || allReviewsDone;
+
+  // Hero = the most recently touched course. The backend already orders
+  // /courses by updated_at desc, so first item is right.
+  const heroCourse = courses[0] ?? null;
+  const heroProgress = heroCourse ? courseProgressMap[heroCourse.id] : null;
+  const heroPct =
+    heroProgress && heroProgress.total > 0
+      ? Math.round((heroProgress.completed / heroProgress.total) * 100)
+      : 0;
+  const todayLabel = new Date().toLocaleDateString(
+    lang === "zh" ? "zh-CN" : "en-US",
+    { weekday: "long", month: "long", day: "numeric" },
+  );
+
+  function relativeTime(iso: string): string {
+    const now = Date.now();
+    const then = new Date(iso).getTime();
+    const diffMs = now - then;
+    const minutes = Math.round(diffMs / 60_000);
+    if (minutes < 1) return lang === "zh" ? "刚刚" : "just now";
+    if (minutes < 60) return lang === "zh" ? `${minutes} 分钟前` : `${minutes}m ago`;
+    const hours = Math.round(minutes / 60);
+    if (hours < 24) return lang === "zh" ? `${hours} 小时前` : `${hours}h ago`;
+    const days = Math.round(hours / 24);
+    if (days === 1) return t("common.yesterday");
+    if (days < 7) return lang === "zh" ? `${days} 天前` : `${days}d ago`;
+    if (days < 30) return lang === "zh" ? `${Math.round(days / 7)} 周前` : `${Math.round(days / 7)}w ago`;
+    return new Date(iso).toLocaleDateString(lang === "zh" ? "zh-CN" : "en-US", {
+      month: "short",
+      day: "numeric",
+    });
+  }
 
   return (
-    <div className="min-h-screen" style={{ background: "var(--bg)" }}>
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 pt-14 md:pt-8 pb-10">
-
-        {/* Header */}
-        <div className="flex items-center justify-between mb-8">
-          <div>
-            <h1 className="text-2xl font-bold" style={{ color: "var(--text)" }}>Socratiq</h1>
-            <p className="text-sm mt-0.5" style={{ color: "var(--text-secondary)" }}>AI 驱动的个性化学习平台</p>
-          </div>
-          <Link href="/import">
-            <button className="btn-primary flex items-center gap-2 text-sm">
-              <Plus className="w-4 h-4" />
-              导入新资料
-            </button>
+    <div className="page-shell" style={{ padding: "32px 40px 80px", maxWidth: 1100, margin: "0 auto", width: "100%" }}>
+      <PageHeader
+        eyebrow={todayLabel}
+        title={t("dashboard.title")}
+        subtitle={t("dashboard.subtitle")}
+        action={
+          <Link href="/import" className="btn btn-outline">
+            <IcPlus size={14} />
+            <span>{t("common.new")}</span>
           </Link>
-        </div>
+        }
+      />
 
-        {/* Review section */}
-        {showReviewSection && (
-          <section className="mb-8">
-            <div className="flex items-center gap-3 mb-4">
-              <h2 className="text-base font-semibold" style={{ color: "var(--text)" }}>今日复习</h2>
-              {dueReviews.length > 0 && (
-                <span className="badge text-white text-xs" style={{ background: "var(--primary)" }}>
-                  {dueReviews.length}
-                </span>
-              )}
+      {/* Pickup hero — rendered even when courses are still loading, so the
+          shell doesn't pop in. */}
+      {heroCourse ? (
+        <div
+          // The hero is conceptually a card-link but it contains nested
+          // buttons (Continue, Mentor), so it has to be a div + role=link
+          // rather than a native <button> — buttons can't nest buttons.
+          role="link"
+          tabIndex={0}
+          onClick={(e) => {
+            if (e.target instanceof HTMLElement && e.target.closest("button, a")) return;
+            router.push(`/learn?courseId=${heroCourse.id}`);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              router.push(`/learn?courseId=${heroCourse.id}`);
+            }
+          }}
+          className="card"
+          style={{
+            marginBottom: "var(--gap-xl)",
+            padding: 0,
+            overflow: "hidden",
+            display: "grid",
+            gridTemplateColumns: "1.4fr 1fr",
+            cursor: "pointer",
+            border: "1px solid var(--border)",
+            background: "var(--surface)",
+            color: "var(--ink)",
+            textAlign: "left",
+            fontFamily: "inherit",
+            width: "100%",
+          }}
+        >
+          <div style={{ padding: 28 }}>
+            <Eyebrow>{t("dashboard.pickup")}</Eyebrow>
+            <h2
+              className="display"
+              style={{ fontSize: 28, margin: "8px 0 6px", fontWeight: 400 }}
+            >
+              {heroCourse.title}
+            </h2>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                color: "var(--ink-3)",
+                fontSize: 12,
+                marginBottom: 20,
+                lineHeight: 1.5,
+              }}
+            >
+              <SourceIcon size={14} />
+              <span
+                style={{
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  maxWidth: 280,
+                }}
+              >
+                {heroCourse.description || (lang === "zh" ? "学习路径" : "Learning path")}
+              </span>
+              <span>·</span>
+              <span>{relativeTime(heroCourse.updated_at)}</span>
             </div>
 
-            {allReviewsDone ? (
-              <div
-                className="card-flat flex items-center justify-center gap-2 py-8"
-                style={{ color: "var(--success)" }}
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
+              <span
+                className="mono num"
+                style={{ fontSize: 12, color: "var(--ink-2)" }}
               >
-                <CheckCircle className="w-5 h-5" />
-                <span className="font-medium">今日复习完成 ✓</span>
-              </div>
-            ) : (
-              <div
-                className="flex gap-4 overflow-x-auto pb-2"
-                style={{ scrollbarWidth: "thin" }}
+                {String(heroProgress?.completed ?? 0).padStart(2, "0")} /{" "}
+                {String(heroProgress?.total ?? 0).padStart(2, "0")}
+              </span>
+              <span className="eyebrow" style={{ flex: 1 }}>
+                {t("common.progress")}
+              </span>
+              <span
+                className="mono num"
+                style={{ fontSize: 12, color: "var(--accent)", fontWeight: 500 }}
               >
-                {dueReviews.map((item) => (
-                  <ReviewCard
-                    key={item.id}
-                    conceptName={item.concept_name}
-                    question={item.review_question}
-                    answer={item.review_answer}
-                    onRate={(quality) => handleRate(item.id, quality)}
-                    disabled={ratingIds.has(item.id)}
-                  />
-                ))}
-              </div>
-            )}
-          </section>
-        )}
-
-        {/* Active tasks */}
-        {tasks.length > 0 && (
-          <section className="mb-8">
-            <h2 className="text-base font-semibold mb-4" style={{ color: "var(--text)" }}>处理中的任务</h2>
-            <div className="space-y-3">
-              {tasks.map((task) => {
-                const progress = progressMap[task.sourceId] ?? null;
-                return (
-                  <div key={task.taskId} className="space-y-2">
-                    <div className="card">
-                      <div className="flex items-center gap-4">
-                        <div
-                          className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
-                          style={{
-                            background: task.state === "FAILURE"
-                              ? "var(--error-light)"
-                              : task.courseId
-                              ? "var(--success-light)"
-                              : "var(--primary-light)",
-                          }}
-                        >
-                          {task.state === "FAILURE" ? (
-                            <AlertCircle className="w-5 h-5" style={{ color: "var(--error)" }} />
-                          ) : task.courseId ? (
-                            <CheckCircle className="w-5 h-5" style={{ color: "var(--success)" }} />
-                          ) : (
-                            <Loader className="w-5 h-5 animate-spin" style={{ color: "var(--primary)" }} />
-                          )}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <h3 className="text-sm font-medium truncate" style={{ color: "var(--text)" }}>{task.title}</h3>
-                          <p className="text-xs mt-0.5 whitespace-pre-wrap break-words" style={{ color: "var(--text-secondary)" }}>
-                            {task.error || taskStateLabel(task.state)}
-                          </p>
-                        </div>
-                        {task.courseId && (
-                          <button
-                            onClick={() => { router.push(`/path?courseId=${task.courseId}`); removeTask(task.taskId); }}
-                            className="btn-primary text-xs px-3 py-1.5 flex-shrink-0"
-                          >
-                            进入课程
-                          </button>
-                        )}
-                        {task.state === "FAILURE" && (
-                          <button
-                            onClick={() => removeTask(task.taskId)}
-                            className="btn-ghost text-xs flex-shrink-0"
-                          >
-                            关闭
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                    {progress && !task.courseId && (
-                      <SourcePipelineView
-                        progress={progress}
-                        title={task.title}
-                        onCancel={async () => {
-                          await cancelSource(task.sourceId);
-                          // Force a refresh on next tick
-                          const fresh = await getSourceProgress(task.sourceId).catch(() => null);
-                          if (fresh) {
-                            setProgressMap((prev) => ({ ...prev, [task.sourceId]: fresh }));
-                          }
-                        }}
-                        onRetry={async () => {
-                          const res = await retrySource(task.sourceId);
-                          updateTask(task.taskId, { taskId: res.task_id, state: "PENDING", error: undefined });
-                          const fresh = await getSourceProgress(task.sourceId).catch(() => null);
-                          if (fresh) {
-                            setProgressMap((prev) => ({ ...prev, [task.sourceId]: fresh }));
-                          }
-                        }}
-                      />
-                    )}
-                  </div>
-                );
-              })}
+                {heroPct}%
+              </span>
             </div>
-          </section>
-        )}
+            <Progress value={heroPct} color="var(--accent)" height={3} />
 
-        {/* Course grid */}
-        <section>
-          <h2 className="text-base font-semibold mb-4" style={{ color: "var(--text)" }}>我的课程</h2>
-
-          {loadError ? (
-            <div className="card text-center py-10">
-              <AlertCircle className="w-10 h-10 mx-auto mb-3" style={{ color: "var(--error)" }} />
-              <h3 className="text-base font-semibold mb-2" style={{ color: "var(--text)" }}>加载失败</h3>
-              <p className="text-sm mb-4" style={{ color: "var(--text-secondary)" }}>{loadError}</p>
-              <button className="btn-primary" onClick={() => { setLoadError(null); setLoading(true); listCourses().then((res) => { setCourses(res.items); setLoadError(null); }).catch((err) => setLoadError(err instanceof Error ? err.message : "课程加载失败")).finally(() => setLoading(false)); }}>
-                重试
+            <div style={{ marginTop: 24, display: "flex", gap: 8 }}>
+              <span className="btn btn-primary">
+                <IcArrowRight size={14} />
+                <span>{t("common.continue")}</span>
+              </span>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  router.push(`/learn?courseId=${heroCourse.id}&panel=tutor`);
+                }}
+              >
+                {t("common.mentor")}
               </button>
             </div>
-          ) : loading ? (
-            <div className="flex items-center justify-center py-16" style={{ color: "var(--text-tertiary)" }}>
-              <Loader className="w-5 h-5 animate-spin mr-2" />
-              <span className="text-sm">加载中...</span>
+          </div>
+
+          <div
+            className="hatched"
+            style={{
+              position: "relative",
+              minHeight: 200,
+              borderLeft: "1px solid var(--border)",
+            }}
+          >
+            <svg
+              viewBox="0 0 200 200"
+              style={{ width: "100%", height: "100%", display: "block" }}
+            >
+              <line x1="100" y1="100" x2="60" y2="50" stroke="var(--ink-4)" strokeWidth="1" />
+              <line x1="100" y1="100" x2="150" y2="60" stroke="var(--ink-4)" strokeWidth="1" />
+              <line x1="100" y1="100" x2="55" y2="150" stroke="var(--ink-4)" strokeWidth="1" />
+              <line x1="100" y1="100" x2="155" y2="145" stroke="var(--ink-4)" strokeWidth="1" />
+              <circle cx="60" cy="50" r="5" fill="var(--sage)" />
+              <circle cx="150" cy="60" r="5" fill="var(--sage)" />
+              <circle cx="55" cy="150" r="5" fill="var(--ink-3)" />
+              <circle cx="155" cy="145" r="5" fill="var(--accent)" />
+              <circle cx="100" cy="100" r="11" fill="var(--surface)" stroke="var(--ink)" strokeWidth="1.5" />
+              <circle cx="100" cy="100" r="4" fill="var(--accent)" />
+            </svg>
+            <div
+              style={{
+                position: "absolute",
+                bottom: 16,
+                left: 16,
+                right: 16,
+                fontSize: 11,
+                color: "var(--ink-3)",
+                display: "flex",
+                justifyContent: "space-between",
+              }}
+            >
+              <span className="eyebrow">{t("dashboard.conceptNeighborhood")}</span>
             </div>
-          ) : courses.length === 0 ? (
-            <div className="card text-center py-10">
-              <div
-                className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-4"
-                style={{ background: "var(--primary-light)" }}
-              >
-                <Brain className="w-7 h-7" style={{ color: "var(--primary)" }} />
-              </div>
-              <h3 className="text-base font-semibold mb-2" style={{ color: "var(--text)" }}>还没有课程</h3>
-              <p className="text-sm mb-6 max-w-sm mx-auto" style={{ color: "var(--text-secondary)" }}>
-                导入一个 B站视频或 PDF 文档，Socratiq 会自动分析内容并为你生成个性化学习路径。
-              </p>
-              <Link href="/import">
-                <button className="btn-primary flex items-center gap-2 mx-auto">
-                  <Plus className="w-4 h-4" />
-                  导入第一份资料
-                </button>
-              </Link>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Review */}
+      {showReviewSection ? (
+        <section style={{ marginBottom: "var(--gap-xl)" }}>
+          <SectionTitle
+            count={dueCount}
+            action={
+              <span className="mono" style={{ fontSize: 11, color: "var(--ink-3)" }}>
+                SM-2
+              </span>
+            }
+          >
+            {t("common.review")}
+          </SectionTitle>
+
+          {allReviewsDone ? (
+            <div
+              className="card-quiet"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 8,
+                padding: "32px 16px",
+                color: "var(--sage)",
+                fontWeight: 500,
+              }}
+            >
+              <IcCheck size={16} />
+              <span>{t("common.allDone")}</span>
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {courses.map((course: CourseResponse) => {
-                const progress = courseProgressMap[course.id];
-                const pct = progress && progress.total > 0
-                  ? Math.round((progress.completed / progress.total) * 100)
-                  : 0;
-
-                return (
-                  <button
-                    key={course.id}
-                    onClick={() => router.push(`/path?courseId=${course.id}`)}
-                    className="text-left w-full"
-                  >
-                    <div className="card h-full">
-                      <div className="flex items-start gap-3 mb-4">
-                        <div
-                          className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
-                          style={{ background: "var(--primary-light)" }}
-                        >
-                          <BookOpen className="w-5 h-5" style={{ color: "var(--primary)" }} />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <h3 className="text-sm font-semibold leading-snug" style={{ color: "var(--text)" }}>
-                            {course.title}
-                          </h3>
-                          {course.description && (
-                            <p className="text-xs mt-1 line-clamp-2" style={{ color: "var(--text-secondary)" }}>
-                              {course.description}
-                            </p>
-                          )}
-                        </div>
-                        <ChevronRight className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: "var(--text-tertiary)" }} />
-                      </div>
-
-                      {/* Progress bar */}
-                      <div>
-                        <div className="flex justify-between items-center mb-1.5">
-                          <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>
-                            {progress ? `${progress.completed} / ${progress.total} 节` : "加载中..."}
-                          </span>
-                          <span className="text-xs font-medium" style={{ color: "var(--primary)" }}>
-                            {progress ? `${pct}%` : ""}
-                          </span>
-                        </div>
-                        <div
-                          className="w-full h-1.5 rounded-full overflow-hidden"
-                          style={{ background: "var(--surface-alt)" }}
-                        >
-                          <div
-                            className="h-full rounded-full transition-all duration-500"
-                            style={{
-                              width: `${pct}%`,
-                              background: "var(--primary)",
-                            }}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  </button>
-                );
-              })}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+                gap: "var(--gap-md)",
+              }}
+            >
+              {dueReviews.map((item) => (
+                <ReviewCard
+                  key={item.id}
+                  conceptName={item.concept_name}
+                  question={item.review_question}
+                  answer={item.review_answer}
+                  onRate={(quality) => handleRate(item.id, quality)}
+                  disabled={ratingIds.has(item.id)}
+                />
+              ))}
             </div>
           )}
         </section>
-      </div>
+      ) : null}
+
+      {/* Active processing tasks — inline, no card-with-loader */}
+      {tasks.length > 0 ? (
+        <section style={{ marginBottom: "var(--gap-xl)" }}>
+          <SectionTitle>{t("common.processing")}</SectionTitle>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {tasks.map((task) => {
+              const progress = progressMap[task.sourceId] ?? null;
+              return (
+                <div key={task.taskId} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  <div
+                    className="card"
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 16,
+                      padding: 16,
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: 36,
+                        height: 36,
+                        borderRadius: 8,
+                        background:
+                          task.state === "FAILURE"
+                            ? "var(--error-soft)"
+                            : task.courseId
+                              ? "var(--sage-soft)"
+                              : "var(--accent-soft)",
+                        color:
+                          task.state === "FAILURE"
+                            ? "var(--error)"
+                            : task.courseId
+                              ? "var(--sage)"
+                              : "var(--accent)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        flexShrink: 0,
+                      }}
+                    >
+                      {task.state === "FAILURE" ? (
+                        <IcAlert size={16} />
+                      ) : task.courseId ? (
+                        <IcCheck size={16} />
+                      ) : (
+                        <IcLoader size={16} className="spin" />
+                      )}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 2 }}>{task.title}</div>
+                      <div
+                        style={{
+                          fontSize: 11,
+                          color: "var(--ink-3)",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                        }}
+                      >
+                        <span className="mono">{task.error || taskStateLabel(task.state, lang)}</span>
+                      </div>
+                    </div>
+                    {task.courseId ? (
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        onClick={() => {
+                          router.push(`/path?courseId=${task.courseId}`);
+                          removeTask(task.taskId);
+                        }}
+                      >
+                        <span>{t("common.enterCourse")}</span>
+                      </button>
+                    ) : null}
+                    {task.state === "FAILURE" ? (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm btn-icon"
+                        onClick={() => removeTask(task.taskId)}
+                        aria-label={t("common.close")}
+                      >
+                        <IcClose size={12} />
+                      </button>
+                    ) : null}
+                  </div>
+                  {progress && !task.courseId ? (
+                    <SourcePipelineView
+                      progress={progress}
+                      title={task.title}
+                      onCancel={async () => {
+                        await cancelSource(task.sourceId);
+                        const fresh = await getSourceProgress(task.sourceId).catch(() => null);
+                        if (fresh) {
+                          setProgressMap((prev) => ({ ...prev, [task.sourceId]: fresh }));
+                        }
+                      }}
+                      onRetry={async () => {
+                        const res = await retrySource(task.sourceId);
+                        updateTask(task.taskId, {
+                          taskId: res.task_id,
+                          state: "PENDING",
+                          error: undefined,
+                        });
+                        const fresh = await getSourceProgress(task.sourceId).catch(() => null);
+                        if (fresh) {
+                          setProgressMap((prev) => ({ ...prev, [task.sourceId]: fresh }));
+                        }
+                      }}
+                    />
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
+
+      {/* Course grid */}
+      <section>
+        <SectionTitle
+          count={courses.length}
+          action={
+            <button type="button" className="btn btn-ghost btn-sm">
+              <IcFilter size={12} />
+              <span>{t("common.filter")}</span>
+            </button>
+          }
+        >
+          {t("common.myCourses")}
+        </SectionTitle>
+
+        {loadError ? (
+          <div className="card" style={{ textAlign: "center", padding: 32 }}>
+            <IcAlert size={28} style={{ color: "var(--error)", margin: "0 auto 12px" }} />
+            <h3 className="serif" style={{ fontSize: 17, margin: "0 0 6px" }}>
+              {t("dashboard.loadFailed")}
+            </h3>
+            <p style={{ fontSize: 13, color: "var(--ink-2)", marginBottom: 18 }}>{loadError}</p>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => {
+                setLoadError(null);
+                setLoading(true);
+                listCourses()
+                  .then((res) => {
+                    setCourses(res.items);
+                    setLoadError(null);
+                  })
+                  .catch((err) =>
+                    setLoadError(err instanceof Error ? err.message : t("dashboard.loadFailed")),
+                  )
+                  .finally(() => setLoading(false));
+              }}
+            >
+              {t("common.retry")}
+            </button>
+          </div>
+        ) : loading ? (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: "64px 0",
+              color: "var(--ink-3)",
+              gap: 8,
+              fontSize: 13,
+            }}
+          >
+            <IcLoader size={16} className="spin" />
+            <span>{t("common.loading")}</span>
+          </div>
+        ) : courses.length === 0 ? (
+          <div className="card" style={{ textAlign: "center", padding: 40 }}>
+            <h3 className="serif" style={{ fontSize: 18, margin: "0 0 8px" }}>
+              {t("dashboard.empty")}
+            </h3>
+            <p
+              style={{
+                fontSize: 13,
+                color: "var(--ink-2)",
+                marginBottom: 24,
+                maxWidth: 440,
+                marginInline: "auto",
+                lineHeight: 1.6,
+              }}
+            >
+              {t("dashboard.emptyHint")}
+            </p>
+            <Link href="/import" className="btn btn-accent">
+              <IcPlus size={14} />
+              <span>{t("dashboard.importFirst")}</span>
+            </Link>
+          </div>
+        ) : (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
+              gap: "var(--gap-md)",
+            }}
+          >
+            {courses.map((course, idx) => {
+              const progress = courseProgressMap[course.id];
+              return (
+                <CourseCard
+                  key={course.id}
+                  course={course}
+                  index={idx}
+                  progress={progress}
+                  onOpen={() => router.push(`/path?courseId=${course.id}`)}
+                  lessonsLabel={t("common.lessons")}
+                  lastTouched={relativeTime(course.updated_at)}
+                />
+              );
+            })}
+          </div>
+        )}
+      </section>
     </div>
+  );
+}
+
+function CourseCard({
+  course,
+  index,
+  progress,
+  onOpen,
+  lessonsLabel,
+  lastTouched,
+}: {
+  course: CourseResponse;
+  index: number;
+  progress: { completed: number; total: number } | undefined;
+  onOpen: () => void;
+  lessonsLabel: string;
+  lastTouched: string;
+}) {
+  const accentColor =
+    index % 3 === 0 ? "var(--accent)" : index % 3 === 1 ? "var(--sage)" : "var(--ink)";
+  const pct =
+    progress && progress.total > 0
+      ? Math.round((progress.completed / progress.total) * 100)
+      : 0;
+  const isDone = progress && progress.completed >= progress.total && progress.total > 0;
+
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="card"
+      style={{
+        textAlign: "left",
+        cursor: "pointer",
+        display: "flex",
+        flexDirection: "column",
+        gap: 16,
+        padding: 18,
+        position: "relative",
+        overflow: "hidden",
+        background: "var(--surface)",
+        border: "1px solid var(--border)",
+        color: "var(--ink)",
+        transition: "border-color var(--duration-fast) ease",
+      }}
+    >
+      <span
+        style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          width: 3,
+          height: 24,
+          background: accentColor,
+        }}
+      />
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+        <div
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: 6,
+            background: "var(--surface-2)",
+            color: "var(--ink-2)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: 0,
+            border: "1px solid var(--border)",
+          }}
+        >
+          <SourceIcon size={16} />
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <h3
+            className="serif"
+            style={{
+              fontSize: 17,
+              fontWeight: 500,
+              margin: 0,
+              lineHeight: 1.3,
+              color: "var(--ink)",
+            }}
+          >
+            {course.title}
+          </h3>
+          {course.description ? (
+            <div
+              style={{
+                fontSize: 11,
+                color: "var(--ink-3)",
+                marginTop: 4,
+                overflow: "hidden",
+                display: "-webkit-box",
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: "vertical",
+              }}
+            >
+              {course.description}
+            </div>
+          ) : null}
+        </div>
+        {isDone ? <IcCheck size={14} style={{ color: "var(--sage)", flexShrink: 0 }} /> : null}
+      </div>
+
+      <div style={{ display: "flex", gap: 16, fontSize: 11, color: "var(--ink-3)" }}>
+        <span>
+          <span className="mono num" style={{ color: "var(--ink-2)" }}>
+            {progress ? progress.total : "—"}
+          </span>{" "}
+          {lessonsLabel}
+        </span>
+        <span style={{ marginLeft: "auto" }}>{lastTouched}</span>
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <Progress value={pct} color={accentColor} height={2} />
+        <span
+          className="mono num"
+          style={{
+            fontSize: 11,
+            color: "var(--ink-2)",
+            minWidth: 32,
+            textAlign: "right",
+          }}
+        >
+          {pct}%
+        </span>
+      </div>
+    </button>
   );
 }

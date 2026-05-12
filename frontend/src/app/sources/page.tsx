@@ -257,12 +257,14 @@ export default function SourcesPage() {
                   display: "grid",
                   gridTemplateColumns: "36px 1fr 110px 120px 90px 40px",
                   padding: "14px 16px",
+                  borderTop: "none",
+                  borderLeft: "none",
+                  borderRight: "none",
                   borderBottom: isLast ? "none" : "1px solid var(--border-2)",
                   alignItems: "center",
                   gap: 12,
                   cursor: "pointer",
                   background: "transparent",
-                  border: "none",
                   width: "100%",
                   textAlign: "left",
                   color: "inherit",
@@ -343,6 +345,13 @@ export default function SourcesPage() {
         onClose={() => setSelectedSourceId(null)}
         open={selectedSource !== null}
         source={selectedSource}
+        onDeleted={(deletedId) => {
+          setSources((prev) => prev.filter((s) => s.id !== deletedId));
+          setTotal((prev) => Math.max(0, prev - 1));
+        }}
+        onChanged={() => {
+          void loadSources({ background: true });
+        }}
       />
     </div>
   );

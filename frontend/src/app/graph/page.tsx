@@ -74,6 +74,7 @@ export default function GraphPage() {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<"all" | MasteryStatus>("all");
   const [hovered, setHovered] = useState<string | null>(null);
+  const [tooltipPos, setTooltipPos] = useState<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -308,10 +309,31 @@ export default function GraphPage() {
                 return (
                   <div
                     key={node.id}
-                    onMouseEnter={() => setHovered(node.id)}
-                    onMouseLeave={() =>
-                      setHovered((current) => (current === node.id ? null : current))
-                    }
+                    onMouseEnter={(e) => {
+                      setHovered(node.id);
+                      const wrap = e.currentTarget.parentElement as HTMLElement | null;
+                      const wrapRect = wrap?.getBoundingClientRect();
+                      if (wrapRect) {
+                        setTooltipPos({
+                          x: e.clientX - wrapRect.left,
+                          y: e.clientY - wrapRect.top,
+                        });
+                      }
+                    }}
+                    onMouseMove={(e) => {
+                      const wrap = e.currentTarget.parentElement as HTMLElement | null;
+                      const wrapRect = wrap?.getBoundingClientRect();
+                      if (wrapRect) {
+                        setTooltipPos({
+                          x: e.clientX - wrapRect.left,
+                          y: e.clientY - wrapRect.top,
+                        });
+                      }
+                    }}
+                    onMouseLeave={() => {
+                      setHovered((current) => (current === node.id ? null : current));
+                      setTooltipPos(null);
+                    }}
                     onClick={() => {
                       if (node.section_id && activeCourseId) {
                         router.push(`/learn?courseId=${activeCourseId}&sectionId=${node.section_id}`);
@@ -364,6 +386,44 @@ export default function GraphPage() {
                   </div>
                 );
               })}
+              {hoveredNode && tooltipPos ? (
+                <div
+                  role="tooltip"
+                  style={{
+                    position: "absolute",
+                    left: tooltipPos.x + 14,
+                    top: tooltipPos.y + 14,
+                    pointerEvents: "none",
+                    background: "var(--surface)",
+                    border: "1px solid var(--border)",
+                    borderRadius: 8,
+                    padding: "8px 10px",
+                    boxShadow: "0 4px 16px rgba(20,16,10,0.18)",
+                    maxWidth: 220,
+                    fontSize: 12,
+                    color: "var(--ink)",
+                    zIndex: 20,
+                  }}
+                >
+                  <div style={{ fontWeight: 600, marginBottom: 3, fontFamily: "var(--serif)" }}>
+                    {hoveredNode.label}
+                  </div>
+                  <div style={{ color: "var(--ink-2)", lineHeight: 1.5 }}>
+                    {hoveredNode.category ? (
+                      <div>{lang === "zh" ? "类别：" : "Category: "}{hoveredNode.category}</div>
+                    ) : null}
+                    <div>
+                      {lang === "zh" ? "掌握度：" : "Mastery: "}
+                      {Math.round(hoveredNode.mastery * 100)}% · {t(`graph.${masteryFor(hoveredNode)}` as TranslationKey)}
+                    </div>
+                    {hoveredNode.section_id ? (
+                      <div style={{ marginTop: 4, color: "var(--accent)" }}>
+                        {lang === "zh" ? "点击跳转到所属课文" : "Click to open the lesson"}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
               <div
                 style={{
                   position: "absolute",

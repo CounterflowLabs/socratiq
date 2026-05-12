@@ -20,8 +20,10 @@ class Source(BaseMixin, Base):
         raw_content: Full extracted text content.
         metadata_: Arbitrary JSONB metadata (named with trailing underscore
             to avoid collision with SQLAlchemy's internal ``metadata``).
-        status: Processing pipeline status — 'pending', 'processing', 'ready',
-            or 'error'.
+        status: Processing pipeline status — 'pending', 'processing',
+            'extracting', 'analyzing', 'generating_lessons', 'generating_labs',
+            'storing', 'embedding', 'ready', 'cancelled', 'error', or
+            'deleted' (soft-deleted; hidden from default queries).
         created_by: UUID foreign key referencing the user who created this source.
         creator: Relationship back to the User model.
     """

@@ -171,8 +171,10 @@ export default function ImportPage() {
         });
       }
 
-      // Brief delay so the user sees the final pipeline tick.
-      setTimeout(() => router.push("/sources"), 600);
+      // No auto-redirect — the user explicitly opens the import history from
+      // the success card. Auto-jumping made the small progress pop disappear
+      // too fast for users to even register it.
+      setLoading(false);
     } catch (err) {
       if (err instanceof ApiError && err.status === 412 && err.code === "bilibili_credential_required") {
         setBiliLoggedIn(false);
@@ -550,6 +552,39 @@ export default function ImportPage() {
             {lang === "zh"
               ? "你可以离开这个页面，处理状态会出现在资料库。"
               : "You can leave this page — progress shows up in the Library."}
+          </div>
+
+          <div
+            style={{
+              display: "flex",
+              gap: 10,
+              marginBottom: 24,
+              flexWrap: "wrap",
+            }}
+          >
+            <button
+              type="button"
+              className="btn btn-accent"
+              onClick={() => router.push("/sources")}
+            >
+              <span>{lang === "zh" ? "查看资料列表" : "View source library"}</span>
+              <IcArrowRight size={12} />
+            </button>
+            <button
+              type="button"
+              className="btn btn-outline"
+              onClick={() => {
+                setAnalyzing(false);
+                setStage(0);
+                setUrl("");
+                setPdfFile(null);
+                setPdfName("");
+                setTextContent("");
+                setErrorMsg(null);
+              }}
+            >
+              <span>{lang === "zh" ? "继续导入" : "Import another"}</span>
+            </button>
           </div>
 
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>

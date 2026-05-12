@@ -1,15 +1,20 @@
-"""Reaper: re-dispatch course-generation tasks orphaned by commit-then-dispatch races.
+"""Reapers: recover tasks orphaned across worker restarts.
 
-When ``finish_source_processing_and_enqueue_course`` writes a SourceTask row
-with ``status='pending'`` and a pre-allocated ``celery_task_id``, the actual
-``apply_async`` happens *after* the DB commit. If the worker crashes between
-those two steps, the task row stays pending forever — Celery never accepted
-it, and AsyncResult would just say ``PENDING`` for the rest of time.
+Two reapers run on ``worker_ready``:
 
-This reaper scans for ``course_generation`` tasks that have been pending
-beyond a grace window and re-dispatches them with the same task_id. The
-``generate_course_task`` worker is now idempotent at entry, so a re-dispatch
-that races with the original (if it existed) is safe.
+1. **course_generation** — when ``finish_source_processing_and_enqueue_course``
+   writes a SourceTask row with ``status='pending'`` and a pre-allocated
+   ``celery_task_id``, the actual ``apply_async`` happens *after* the DB
+   commit. If the worker crashes between those two steps, the task row stays
+   pending forever — Celery never accepted it, and AsyncResult would just say
+   ``PENDING`` for the rest of time. This reaper re-dispatches them.
+
+2. **source_processing** — content ingestion has no commit-then-dispatch
+   race, but if a worker dies mid-pipeline (extract / analyze / store /
+   embed), the Source row stays in an intermediate ``processing`` status and
+   the SourceTask row stays ``running``. We mark these as ``error`` and let
+   the user retry from the UI — auto-redispatch is risky because the failure
+   may have been caused by a bug we'd just hit again.
 """
 
 from __future__ import annotations
@@ -21,12 +26,26 @@ from datetime import datetime, timedelta
 from celery.signals import worker_ready
 from sqlalchemy import select
 
+from app.db.models.source import Source
 from app.db.models.source_task import SourceTask
 from app.worker.resources import _create_worker_resources
 
 logger = logging.getLogger(__name__)
 
 _REAPER_GRACE = timedelta(minutes=2)
+
+_SOURCE_PROCESSING_ACTIVE_STATUSES = (
+    "pending",
+    "processing",
+    "extracting",
+    "analyzing",
+    "generating_lessons",
+    "generating_labs",
+    "storing",
+    "embedding",
+)
+
+_STARTUP_INTERRUPT_MESSAGE = "服务重启中断，请重试"
 
 
 async def _reap_pending_course_tasks() -> int:
@@ -83,12 +102,79 @@ async def _reap_pending_course_tasks() -> int:
     return redispatched
 
 
+async def _reap_stuck_source_processing() -> int:
+    """Mark source-processing tasks orphaned by a worker crash as failed.
+
+    On worker boot, any SourceTask still in ``running`` is by definition stale
+    — the previous worker died holding it. ``pending`` rows older than the
+    grace window were never picked up. In both cases we flip the SourceTask
+    to ``failure`` and the parent Source to ``error`` with a clear message so
+    the UI surfaces a retry button.
+    """
+    resources = _create_worker_resources()
+    cutoff = datetime.utcnow() - _REAPER_GRACE
+    repaired = 0
+
+    try:
+        async with resources.session_factory() as db:
+            rows = (
+                await db.execute(
+                    select(SourceTask)
+                    .where(
+                        SourceTask.task_type == "source_processing",
+                        SourceTask.status.in_(("pending", "running")),
+                    )
+                )
+            ).scalars().all()
+
+            for task in rows:
+                # Skip very-fresh pending rows: they might still be on the
+                # broker queue and a worker could legitimately pick them up.
+                if task.status == "pending" and task.created_at and task.created_at > cutoff:
+                    continue
+
+                task.status = "failure"
+                task.error_summary = _STARTUP_INTERRUPT_MESSAGE
+
+                source = await db.get(Source, task.source_id)
+                if source and source.status in _SOURCE_PROCESSING_ACTIVE_STATUSES:
+                    source.status = "error"
+                    if isinstance(source.metadata_, dict):
+                        source.metadata_ = {
+                            **source.metadata_,
+                            "error": _STARTUP_INTERRUPT_MESSAGE,
+                        }
+                repaired += 1
+                logger.info(
+                    "Reaper marked source_processing task %s (source %s) as failed after restart",
+                    task.celery_task_id or task.id,
+                    task.source_id,
+                )
+
+            if repaired:
+                await db.commit()
+    finally:
+        await resources.engine.dispose()
+
+    return repaired
+
+
 @worker_ready.connect
 def _on_worker_ready(**_kwargs) -> None:
     """Run once when the worker boots — clears any pending backlog."""
     try:
         count = asyncio.run(_reap_pending_course_tasks())
         if count:
-            logger.info("Reaper re-dispatched %d pending tasks at startup", count)
+            logger.info("Reaper re-dispatched %d pending course tasks at startup", count)
     except Exception:
-        logger.exception("Reaper failed during worker_ready")
+        logger.exception("Course-generation reaper failed during worker_ready")
+
+    try:
+        count = asyncio.run(_reap_stuck_source_processing())
+        if count:
+            logger.info(
+                "Reaper marked %d stuck source_processing tasks as failed at startup",
+                count,
+            )
+    except Exception:
+        logger.exception("Source-processing reaper failed during worker_ready")

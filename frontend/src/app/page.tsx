@@ -27,6 +27,7 @@ import {
   getCourseProgress,
   cancelSource,
   retrySource,
+  deleteSource,
   type CourseResponse,
   type ReviewItemDetail,
   type SourceProgressResponse,
@@ -617,6 +618,15 @@ export default function DashboardPage() {
                         if (fresh) {
                           setProgressMap((prev) => ({ ...prev, [task.sourceId]: fresh }));
                         }
+                      }}
+                      onDelete={async () => {
+                        await deleteSource(task.sourceId);
+                        removeTask(task.taskId);
+                        setProgressMap((prev) => {
+                          const next = { ...prev };
+                          delete next[task.sourceId];
+                          return next;
+                        });
                       }}
                     />
                   ) : null}

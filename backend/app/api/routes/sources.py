@@ -24,7 +24,7 @@ from app.models.source import (
 )
 from app.services.bilibili_credential import has_bilibili_credential
 from app.services.content_key import extract_content_key
-from app.services.source_tasks import create_source_task
+from app.services.source_tasks import create_source_task, dispatch_course_generation
 from app.worker.tasks.content_ingestion import ingest_source, clone_source
 
 router = APIRouter(prefix="/api/v1/sources", tags=["sources"])
@@ -305,7 +305,11 @@ async def get_source(
 ) -> SourceResponse:
     """Get a single source by ID."""
     result = await db.execute(
-        select(Source).where(Source.id == source_id, Source.created_by == user.id)
+        select(Source).where(
+            Source.id == source_id,
+            Source.created_by == user.id,
+            Source.status != "deleted",
+        )
     )
     source = result.scalar_one_or_none()
     if not source:
@@ -331,7 +335,9 @@ async def cancel_source(
     source = (
         await db.execute(
             select(Source).where(
-                Source.id == source_id, Source.created_by == user.id
+                Source.id == source_id,
+                Source.created_by == user.id,
+                Source.status != "deleted",
             )
         )
     ).scalar_one_or_none()
@@ -376,18 +382,30 @@ async def retry_source(
     source = (
         await db.execute(
             select(Source).where(
-                Source.id == source_id, Source.created_by == user.id
+                Source.id == source_id,
+                Source.created_by == user.id,
+                Source.status != "deleted",
             )
         )
     ).scalar_one_or_none()
     if not source:
         raise HTTPException(404, f"Source {source_id} not found")
 
-    if source.status not in {"cancelled", "error"}:
+    if source.status not in {"cancelled", "error", "pending"}:
         raise HTTPException(
             409,
-            f"Source is {source.status!r}; only cancelled/error sources can be retried",
+            f"Source is {source.status!r}; only cancelled/error/pending sources can be retried",
         )
+
+    # If retrying a stuck pending, revoke any in-flight celery task first so
+    # we don't end up with two workers racing on the same source.
+    if source.status == "pending" and source.celery_task_id:
+        from celery.result import AsyncResult
+        from app.worker.celery_app import celery_app
+        try:
+            AsyncResult(source.celery_task_id, app=celery_app).revoke(terminate=False)
+        except Exception:
+            pass
 
     # Reset cancel flag on the active SourceTask rows.
     rows = (
@@ -417,6 +435,157 @@ async def retry_source(
     return {"task_id": task.id, "source_id": str(source_id)}
 
 
+@router.delete("/{source_id}", status_code=202)
+async def delete_source(
+    source_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_local_user)],
+) -> dict:
+    """Soft-delete a source.
+
+    Works in every non-deleted state: active sources have their Celery tasks
+    revoked and ``cancel_requested`` set so any in-flight worker exits at the
+    next safe break point. The source row stays in the database with
+    ``status='deleted'`` and is filtered out of all default queries.
+    """
+    from celery.result import AsyncResult
+    from datetime import datetime, timezone
+    from app.worker.celery_app import celery_app
+
+    source = (
+        await db.execute(
+            select(Source).where(
+                Source.id == source_id,
+                Source.created_by == user.id,
+                Source.status != "deleted",
+            )
+        )
+    ).scalar_one_or_none()
+    if not source:
+        raise HTTPException(404, f"Source {source_id} not found")
+
+    active_rows = (
+        await db.execute(
+            select(SourceTask).where(
+                SourceTask.source_id == source_id,
+                SourceTask.status.in_(("pending", "running")),
+            )
+        )
+    ).scalars().all()
+    for row in active_rows:
+        row.cancel_requested = True
+        if row.celery_task_id:
+            try:
+                AsyncResult(row.celery_task_id, app=celery_app).revoke(terminate=False)
+            except Exception:
+                pass
+
+    if source.celery_task_id:
+        try:
+            AsyncResult(source.celery_task_id, app=celery_app).revoke(terminate=False)
+        except Exception:
+            pass
+
+    source.status = "deleted"
+    if isinstance(source.metadata_, dict):
+        new_meta = dict(source.metadata_)
+        new_meta["deleted_at"] = datetime.now(timezone.utc).isoformat()
+        source.metadata_ = new_meta
+
+    await db.commit()
+    return {"deleted": True, "source_id": str(source_id)}
+
+
+@router.post("/{source_id}/generate-course", status_code=202)
+async def generate_course_for_source(
+    source_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_local_user)],
+) -> dict:
+    """Dispatch async course generation for a ready source.
+
+    The synchronous ``POST /courses/generate`` runs the full LLM pipeline in
+    request scope (minutes long); calling it from the source drawer is
+    unsuitable because the user can't see in-flight state and can re-fire it.
+    This endpoint mirrors the auto-flow used at the end of content ingestion:
+    create a ``pending`` ``course_generation`` SourceTask row, then dispatch
+    ``generate_course_task`` with the pre-allocated task id. The list endpoint
+    picks up the pending task immediately so the UI shows 课程生成中.
+    """
+    from uuid import uuid4
+
+    source = (
+        await db.execute(
+            select(Source).where(
+                Source.id == source_id,
+                Source.created_by == user.id,
+                Source.status != "deleted",
+            )
+        )
+    ).scalar_one_or_none()
+    if not source:
+        raise HTTPException(404, f"Source {source_id} not found")
+
+    if source.status != "ready":
+        raise HTTPException(
+            409,
+            f"Source is {source.status!r}; only ready sources can generate a course",
+        )
+
+    existing_active = (
+        await db.execute(
+            select(SourceTask)
+            .where(
+                SourceTask.source_id == source_id,
+                SourceTask.task_type == "course_generation",
+                SourceTask.status.in_(("pending", "running")),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if existing_active is not None:
+        return {
+            "task_id": existing_active.celery_task_id,
+            "source_id": str(source_id),
+            "status": "already_dispatched",
+        }
+
+    existing_course = (
+        await db.execute(
+            select(CourseSource.course_id)
+            .join(Course, Course.id == CourseSource.course_id)
+            .where(
+                CourseSource.source_id == source_id,
+                Course.created_by == user.id,
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if existing_course is not None:
+        raise HTTPException(
+            409,
+            f"Source already has a generated course ({existing_course}); use regenerate instead",
+        )
+
+    queued_task_id = str(uuid4())
+    await create_source_task(
+        db,
+        source_id=source_id,
+        task_type="course_generation",
+        celery_task_id=queued_task_id,
+        status="pending",
+        stage="pending",
+    )
+    await db.commit()
+
+    dispatch_course_generation(
+        payload={"source_id": str(source_id)},
+        task_id=queued_task_id,
+        user_id=str(user.id),
+    )
+    return {"task_id": queued_task_id, "source_id": str(source_id), "status": "dispatched"}
+
+
 @router.get("/{source_id}/progress", response_model=SourceProgressResponse)
 async def get_source_progress(
     source_id: uuid.UUID,
@@ -431,7 +600,9 @@ async def get_source_progress(
     source = (
         await db.execute(
             select(Source).where(
-                Source.id == source_id, Source.created_by == user.id
+                Source.id == source_id,
+                Source.created_by == user.id,
+                Source.status != "deleted",
             )
         )
     ).scalar_one_or_none()
@@ -492,7 +663,11 @@ async def get_source_file(
 ) -> FileResponse:
     """Serve an uploaded PDF file for the owning user."""
     result = await db.execute(
-        select(Source).where(Source.id == source_id, Source.created_by == user.id)
+        select(Source).where(
+            Source.id == source_id,
+            Source.created_by == user.id,
+            Source.status != "deleted",
+        )
     )
     source = result.scalar_one_or_none()
     if not source:
@@ -677,7 +852,7 @@ def _build_source_base_query(
     query: str | None,
     source_type: str | None,
 ):
-    filters = [Source.created_by == user_id]
+    filters = [Source.created_by == user_id, Source.status != "deleted"]
 
     if query:
         pattern = f"%{query}%"

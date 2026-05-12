@@ -1,20 +1,49 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import {
   IcArrowRight as ArrowRight,
   IcDoc as FileText,
+  IcRegen,
+  IcSpark,
+  IcTrash,
   IcVideo as Play,
   IcClose as X,
 } from "@/components/icons";
-import type { SourceResponse, SourceTaskSummary } from "@/lib/api";
+import {
+  deleteSource,
+  generateCourseForSource,
+  retrySource,
+  type SourceResponse,
+  type SourceTaskSummary,
+} from "@/lib/api";
 import { deriveMaterialPresentation } from "@/lib/materials-state";
 
 interface SourceDetailDrawerProps {
   open: boolean;
   source: SourceResponse | null;
   onClose: () => void;
+  onDeleted?: (sourceId: string) => void;
+  onChanged?: () => void;
+}
+
+function canRetryFor(source: SourceResponse): boolean {
+  if (source.status === "error" || source.status === "cancelled") return true;
+  const proc = source.latest_processing_task;
+  if (proc?.status === "failure" || proc?.status === "cancelled") return true;
+  // Stuck pending (no live task): processing_task says failure but source still says pending.
+  if (source.status === "pending" && proc?.status !== "running") return true;
+  return false;
+}
+
+function canGenerateCourseFor(source: SourceResponse): boolean {
+  if (source.status !== "ready") return false;
+  if (source.latest_course_id) return false;
+  const ct = source.latest_course_task;
+  // If a generation is already pending/running, don't offer to start another.
+  if (ct?.status === "pending" || ct?.status === "running") return false;
+  return true;
 }
 
 const STAGE_LABELS: Record<string, string> = {
@@ -115,7 +144,22 @@ export default function SourceDetailDrawer({
   open,
   source,
   onClose,
+  onDeleted,
+  onChanged,
 }: SourceDetailDrawerProps) {
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      setConfirmingDelete(false);
+      setActionError(null);
+    }
+  }, [open]);
+
   useEffect(() => {
     if (!open) {
       document.body.style.overflow = "";
@@ -217,7 +261,12 @@ export default function SourceDetailDrawer({
             </section>
           </div>
 
-          <div className="border-t border-gray-200 bg-white p-5">
+          <div className="border-t border-gray-200 bg-white p-5 space-y-3">
+            {actionError ? (
+              <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                {actionError}
+              </p>
+            ) : null}
             {presentation.primaryAction === "enter-course" && source.latest_course_id ? (
               <Link
                 className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-blue-700"
@@ -226,12 +275,108 @@ export default function SourceDetailDrawer({
                 进入课程
                 <ArrowRight className="w-4 h-4" />
               </Link>
+            ) : canGenerateCourseFor(source) ? (
+              <button
+                type="button"
+                disabled={generating}
+                onClick={async () => {
+                  if (!source) return;
+                  setGenerating(true);
+                  setActionError(null);
+                  try {
+                    await generateCourseForSource(source.id);
+                    onChanged?.();
+                    onClose();
+                  } catch (err) {
+                    setActionError(
+                      err instanceof Error ? err.message : "课程生成失败，请稍后重试",
+                    );
+                  } finally {
+                    setGenerating(false);
+                  }
+                }}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-60"
+              >
+                <IcSpark className="w-4 h-4" />
+                {generating ? "正在派发…" : "生成课程"}
+              </button>
+            ) : canRetryFor(source) ? (
+              <button
+                type="button"
+                disabled={retrying}
+                onClick={async () => {
+                  if (!source) return;
+                  setRetrying(true);
+                  setActionError(null);
+                  try {
+                    await retrySource(source.id);
+                    onChanged?.();
+                    onClose();
+                  } catch (err) {
+                    setActionError(
+                      err instanceof Error ? err.message : "重试失败，请稍后再试",
+                    );
+                  } finally {
+                    setRetrying(false);
+                  }
+                }}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-blue-200 bg-white px-4 py-2.5 text-sm font-medium text-blue-700 transition hover:bg-blue-50 disabled:opacity-60"
+              >
+                <IcRegen className="w-4 h-4" />
+                {retrying ? "正在重试…" : "重试处理"}
+              </button>
             ) : (
               <p className="text-sm text-gray-500">
                 {presentation.category === "error"
                   ? "当前没有可进入的课程，请先查看失败原因。"
                   : "课程生成完成后，就可以从这里直接进入课程。"}
               </p>
+            )}
+            {confirmingDelete ? (
+              <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm">
+                <p className="text-red-700">
+                  确认删除？资料会从列表中移除，
+                  {presentation.isActive ? "进行中的后台任务会被停止。" : "已生成的内容仍会保留在数据库。"}
+                </p>
+                <div className="mt-3 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setConfirmingDelete(false)}
+                    disabled={deleting}
+                    className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!source) return;
+                      setDeleting(true);
+                      try {
+                        await deleteSource(source.id);
+                        onDeleted?.(source.id);
+                        onClose();
+                      } finally {
+                        setDeleting(false);
+                        setConfirmingDelete(false);
+                      }
+                    }}
+                    disabled={deleting}
+                    className="rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-red-700 disabled:opacity-50"
+                  >
+                    {deleting ? "删除中…" : "确认删除"}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setConfirmingDelete(true)}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-red-200 bg-white px-4 py-2 text-sm font-medium text-red-600 transition hover:bg-red-50"
+              >
+                <IcTrash className="w-4 h-4" />
+                删除资料
+              </button>
             )}
           </div>
         </div>

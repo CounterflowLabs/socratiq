@@ -6,6 +6,7 @@ import {
   IcAlert as AlertCircle,
   IcClose as Ban,
   IcCheck as Check,
+  IcTrash as Trash2,
   IcLoader as CircleDashed,
   IcLoader as Loader2,
   IcRegen as RefreshCcw,
@@ -123,12 +124,20 @@ function isActive(progress: SourceProgressResponse): boolean {
   );
 }
 
-function isTerminalFailureOrCancel(progress: SourceProgressResponse): boolean {
+function isRunning(progress: SourceProgressResponse): boolean {
+  return progress.tasks.some((t) => t.status === "running");
+}
+
+function isRetryable(progress: SourceProgressResponse): boolean {
+  // Anything not actively running can be retried: explicit failures and
+  // cancellations obviously, but also pending tasks that never picked up
+  // (worker crashed before ack, or the queue went away).
+  if (isRunning(progress)) return false;
   if (progress.source_status === "error" || progress.source_status === "cancelled") {
     return true;
   }
   return progress.tasks.some(
-    (t) => t.status === "failure" || t.status === "cancelled"
+    (t) => t.status === "failure" || t.status === "cancelled" || t.status === "pending"
   );
 }
 
@@ -194,6 +203,7 @@ interface SourcePipelineViewProps {
   title?: string;
   onCancel?: () => Promise<void> | void;
   onRetry?: () => Promise<void> | void;
+  onDelete?: () => Promise<void> | void;
 }
 
 export default function SourcePipelineView({
@@ -201,8 +211,9 @@ export default function SourcePipelineView({
   title,
   onCancel,
   onRetry,
+  onDelete,
 }: SourcePipelineViewProps) {
-  const [confirm, setConfirm] = useState<"cancel" | "retry" | null>(null);
+  const [confirm, setConfirm] = useState<"cancel" | "retry" | "delete" | null>(null);
   const [busy, setBusy] = useState(false);
 
   const segments = useMemo(() => {
@@ -219,14 +230,17 @@ export default function SourcePipelineView({
     return null;
   }
 
-  const showCancel = Boolean(onCancel) && isActive(progress);
-  const showRetry = Boolean(onRetry) && isTerminalFailureOrCancel(progress);
+  const showCancel = Boolean(onCancel) && isRunning(progress);
+  const showRetry = Boolean(onRetry) && isRetryable(progress);
+  const showDelete = Boolean(onDelete);
+  const deleteWhileActive = isActive(progress);
 
-  async function handleConfirmed(action: "cancel" | "retry") {
+  async function handleConfirmed(action: "cancel" | "retry" | "delete") {
     setBusy(true);
     try {
       if (action === "cancel" && onCancel) await onCancel();
       if (action === "retry" && onRetry) await onRetry();
+      if (action === "delete" && onDelete) await onDelete();
     } finally {
       setBusy(false);
       setConfirm(null);
@@ -271,6 +285,18 @@ export default function SourcePipelineView({
             >
               <X className="h-3.5 w-3.5" />
               取消
+            </button>
+          )}
+          {showDelete && (
+            <button
+              type="button"
+              onClick={() => setConfirm("delete")}
+              disabled={busy}
+              className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-white px-2.5 py-1 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
+              aria-label="删除资料"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              删除
             </button>
           )}
         </div>
@@ -336,6 +362,19 @@ export default function SourcePipelineView({
         description="将从中断的阶段继续运行，已完成的步骤会跳过。"
         confirmLabel={busy ? "正在重试…" : "确认重试"}
         onConfirm={() => handleConfirmed("retry")}
+        onCancel={() => setConfirm(null)}
+      />
+      <ConfirmDialog
+        open={confirm === "delete"}
+        title="删除资料"
+        description={
+          deleteWhileActive
+            ? "资料正在处理中。删除会停止后台任务并从列表中移除，已生成的内容仍会保留在数据库。"
+            : "资料会从列表中移除，已生成的内容仍会保留在数据库。"
+        }
+        confirmLabel={busy ? "删除中…" : "确认删除"}
+        destructive
+        onConfirm={() => handleConfirmed("delete")}
         onCancel={() => setConfirm(null)}
       />
     </div>

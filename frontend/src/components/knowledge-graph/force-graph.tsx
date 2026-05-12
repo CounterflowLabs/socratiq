@@ -16,8 +16,25 @@ function getMasteryColor(mastery: number): string {
   return "var(--error)";
 }
 
+function masteryLabel(mastery: number): string {
+  if (mastery >= 0.7) return "已掌握";
+  if (mastery >= 0.3) return "学习中";
+  return "未掌握";
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 export default function ForceGraph({ nodes, edges, onNodeClick }: ForceGraphProps) {
   const svgRef = useRef<SVGSVGElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const tooltipRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!svgRef.current || nodes.length === 0) return;
@@ -53,6 +70,33 @@ export default function ForceGraph({ nodes, edges, onNodeClick }: ForceGraphProp
       .attr("stroke-width", 1.5);
 
     // Nodes
+    const showTooltip = (event: MouseEvent, d: KnowledgeGraphNode) => {
+      const tooltip = tooltipRef.current;
+      const container = containerRef.current;
+      if (!tooltip || !container) return;
+      const rect = container.getBoundingClientRect();
+      tooltip.style.left = `${event.clientX - rect.left + 14}px`;
+      tooltip.style.top = `${event.clientY - rect.top + 14}px`;
+      tooltip.style.opacity = "1";
+      tooltip.style.pointerEvents = "none";
+      const masteryPct = Math.round(d.mastery * 100);
+      tooltip.innerHTML = `
+        <div style="font-weight:600;font-size:13px;color:var(--text-primary,#1f1a14);margin-bottom:4px;">
+          ${escapeHtml(d.label)}
+        </div>
+        <div style="font-size:11px;color:var(--text-secondary,#6b6258);line-height:1.5;">
+          ${d.category ? `<div>类别：${escapeHtml(d.category)}</div>` : ""}
+          <div>掌握度：${masteryPct}% · ${masteryLabel(d.mastery)}</div>
+          ${d.section_id ? `<div style="margin-top:2px;color:var(--accent,#a4582b);">点击跳转到所属章节</div>` : ""}
+        </div>
+      `;
+    };
+
+    const hideTooltip = () => {
+      const tooltip = tooltipRef.current;
+      if (tooltip) tooltip.style.opacity = "0";
+    };
+
     const node = g.append("g")
       .selectAll<SVGCircleElement, KnowledgeGraphNode>("circle")
       .data(nodes)
@@ -62,7 +106,16 @@ export default function ForceGraph({ nodes, edges, onNodeClick }: ForceGraphProp
       .attr("stroke", "var(--surface)")
       .attr("stroke-width", 2)
       .style("cursor", "pointer")
-      .on("click", (_, d) => onNodeClick?.(d));
+      .on("click", (_, d) => onNodeClick?.(d))
+      .on("mouseover", function (event: MouseEvent, d) {
+        d3.select(this).attr("stroke", "var(--accent, #a4582b)").attr("stroke-width", 3);
+        showTooltip(event, d);
+      })
+      .on("mousemove", (event: MouseEvent, d) => showTooltip(event, d))
+      .on("mouseout", function () {
+        d3.select(this).attr("stroke", "var(--surface)").attr("stroke-width", 2);
+        hideTooltip();
+      });
 
     // Labels
     const label = g.append("g")
@@ -75,9 +128,10 @@ export default function ForceGraph({ nodes, edges, onNodeClick }: ForceGraphProp
       .attr("dx", 16)
       .attr("dy", 4);
 
-    // Tooltip
+    // Native SVG title remains as an a11y fallback for screen readers + users
+    // without hover (touch devices won't fire mouseover).
     node.append("title")
-      .text((d) => `${d.label}\n掌握度: ${Math.round(d.mastery * 100)}%`);
+      .text((d) => `${d.label} · 掌握度 ${Math.round(d.mastery * 100)}%`);
 
     // Drag
     node.call(d3.drag<SVGCircleElement, KnowledgeGraphNode>()
@@ -115,8 +169,25 @@ export default function ForceGraph({ nodes, edges, onNodeClick }: ForceGraphProp
   }, [nodes, edges, onNodeClick]);
 
   return (
-    <div className="relative w-full" style={{ minHeight: 400 }}>
+    <div ref={containerRef} className="relative w-full" style={{ minHeight: 400 }}>
       <svg ref={svgRef} className="w-full h-full" style={{ minHeight: 400 }} />
+      <div
+        ref={tooltipRef}
+        role="tooltip"
+        style={{
+          position: "absolute",
+          pointerEvents: "none",
+          opacity: 0,
+          transition: "opacity 120ms ease",
+          background: "var(--surface, #fffdf7)",
+          border: "1px solid var(--border, rgba(20,16,10,0.12))",
+          borderRadius: 8,
+          padding: "8px 10px",
+          boxShadow: "0 4px 16px rgba(20,16,10,0.12)",
+          maxWidth: 220,
+          zIndex: 20,
+        }}
+      />
       {/* Legend */}
       <div
         className="absolute bottom-3 left-3 flex items-center gap-3 rounded-lg border px-3 py-2 text-xs"

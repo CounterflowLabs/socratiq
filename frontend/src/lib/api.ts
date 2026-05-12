@@ -542,6 +542,23 @@ export async function retrySource(
   return res.json();
 }
 
+export async function deleteSource(sourceId: string): Promise<void> {
+  const res = await apiFetch(`${API_BASE}/sources/${sourceId}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw await responseError(res);
+}
+
+export async function generateCourseForSource(
+  sourceId: string
+): Promise<{ task_id: string; source_id: string; status: string }> {
+  const res = await apiFetch(`${API_BASE}/sources/${sourceId}/generate-course`, {
+    method: "POST",
+  });
+  if (!res.ok) throw await responseError(res);
+  return res.json();
+}
+
 export async function cancelCourseRegeneration(courseId: string): Promise<void> {
   const res = await apiFetch(
     `${API_BASE}/courses/${courseId}/regeneration/cancel`,

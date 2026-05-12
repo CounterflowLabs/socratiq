@@ -61,8 +61,43 @@ export function Sidebar({
   // client mount. Defer any DOM that depends on the resolved preference
   // until after hydration to avoid the SSR/client title mismatch.
   const [mounted, setMounted] = useState(false);
+  // Pull the actual mentor model out of /api/v1/model-routes so the account
+  // row in the sidebar shows the truth (was hardcoded to "ollama · qwen2.5"
+  // even when the user routed mentor_chat to a different model).
+  const [mentorModelLabel, setMentorModelLabel] = useState<string | null>(null);
   useEffect(() => {
     setMounted(true);
+  }, []);
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.all([
+      fetch("/api/v1/model-routes").then((r) => (r.ok ? r.json() : [])),
+      fetch("/api/v1/models").then((r) => (r.ok ? r.json() : [])),
+    ])
+      .then(([routes, models]) => {
+        if (cancelled) return;
+        const mentorRoute = Array.isArray(routes)
+          ? routes.find((r: { task_type: string }) => r.task_type === "mentor_chat")
+          : null;
+        if (!mentorRoute) return;
+        const model = Array.isArray(models)
+          ? models.find((m: { name: string }) => m.name === mentorRoute.model_name)
+          : null;
+        if (!model) {
+          setMentorModelLabel(mentorRoute.model_name);
+          return;
+        }
+        const provider = String(model.provider_type ?? "")
+          .replace(/_/g, " ")
+          .trim();
+        setMentorModelLabel(provider ? `${provider} · ${model.model_id}` : model.model_id);
+      })
+      .catch(() => {
+        // Sidebar is decorative — never show an error here.
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const showLabels = !collapsed || mobileOpen;
@@ -434,8 +469,9 @@ export function Sidebar({
                   overflow: "hidden",
                   textOverflow: "ellipsis",
                 }}
+                suppressHydrationWarning
               >
-                ollama · qwen2.5
+                {mentorModelLabel ?? (lang === "zh" ? "未配置导师模型" : "Mentor not set")}
               </div>
             </div>
           </div>

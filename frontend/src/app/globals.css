@@ -498,38 +498,63 @@ textarea.input {
    error tokens. Re-route those classes so we don't have to rewrite every
    site of use at once.
    ────────────────────────────────────────────────────────────────── */
-:where(
-  .bg-blue-500, .bg-blue-600, .bg-blue-700, .bg-blue-800,
-  .bg-violet-500, .bg-violet-600, .bg-violet-700,
-  .bg-sky-500, .bg-sky-600,
-  .hover\:bg-blue-700:hover, .hover\:bg-violet-700:hover,
-  .hover\:bg-blue-600:hover, .hover\:bg-violet-600:hover
-) {
+/* Specificity bumped via :root so we beat Tailwind utility classes (which
+   have class-selector specificity 0,1,0). Without this prefix the
+   :where() variant has 0 specificity and Tailwind always wins. */
+:root .bg-blue-500,
+:root .bg-blue-600,
+:root .bg-blue-700,
+:root .bg-blue-800,
+:root .bg-violet-500,
+:root .bg-violet-600,
+:root .bg-violet-700,
+:root .bg-sky-500,
+:root .bg-sky-600,
+:root .hover\:bg-blue-700:hover,
+:root .hover\:bg-violet-700:hover,
+:root .hover\:bg-blue-600:hover,
+:root .hover\:bg-violet-600:hover {
   background-color: var(--accent);
   color: #fff;
 }
-:where(
-  .bg-emerald-500, .bg-emerald-600, .bg-emerald-700,
-  .bg-green-600, .bg-green-700, .bg-teal-600, .bg-teal-700,
-  .hover\:bg-emerald-700:hover
-) {
+:root .bg-emerald-500,
+:root .bg-emerald-600,
+:root .bg-emerald-700,
+:root .bg-green-600,
+:root .bg-green-700,
+:root .bg-teal-600,
+:root .bg-teal-700,
+:root .hover\:bg-emerald-700:hover {
   background-color: var(--sage);
   color: #fff;
 }
-:where(
-  .bg-amber-500, .bg-amber-600,
-  .bg-orange-500, .bg-orange-600, .bg-yellow-500, .bg-yellow-600,
-  .hover\:bg-amber-600:hover
-) {
+:root .bg-amber-500,
+:root .bg-amber-600,
+:root .bg-orange-500,
+:root .bg-orange-600,
+:root .bg-yellow-500,
+:root .bg-yellow-600,
+:root .hover\:bg-amber-600:hover {
   background-color: var(--warn);
   color: #fff;
 }
-:where(
-  .bg-red-500, .bg-red-600, .bg-red-700,
-  .hover\:bg-red-700:hover
-) {
+:root .bg-red-500,
+:root .bg-red-600,
+:root .bg-red-700,
+:root .hover\:bg-red-700:hover {
   background-color: var(--error);
   color: #fff;
+}
+
+/* Dark "ink" CTA used by the legacy setup page (`bg-slate-900`). Maps to
+   the design ink token so it inverts properly in dark mode (parchment on
+   ink surface instead of "darker rectangle on dark surface"). */
+:root .bg-slate-900,
+:root .bg-gray-900,
+:root .hover\:bg-slate-800:hover,
+:root .hover\:bg-gray-800:hover {
+  background-color: var(--ink);
+  color: var(--surface);
 }
 
 /* ──────────────────────────────────────────────────────────────────

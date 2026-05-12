@@ -1,6 +1,6 @@
 "use client";
 
-import type { ComponentType } from "react";
+import { useEffect, useState, type ComponentType } from "react";
 
 import type { IconProps } from "@/components/icons";
 
@@ -8,6 +8,12 @@ import type { IconProps } from "@/components/icons";
  * Segmented control — three or four mutually-exclusive options sitting in a
  * `surface-2` track with a sliding `surface` pill for the active item.
  * Used by Settings (theme, language, density) and the live Tweaks panel.
+ *
+ * Hydration: the `value` prop usually comes from a Zustand store that reads
+ * localStorage on the client, so SSR sees the default (`"system"`) while the
+ * client may see `"dark"`. Until the component has mounted, we render every
+ * option with the same neutral state and `suppressHydrationWarning` on the
+ * mismatched attributes. After mount we render the real active option.
  */
 
 interface SegmentedOption<T extends string> {
@@ -27,6 +33,11 @@ export function SegmentedControl<T extends string>({
   onChange: (next: T) => void;
   ariaLabel?: string;
 }) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   return (
     <div
       role="radiogroup"
@@ -42,13 +53,14 @@ export function SegmentedControl<T extends string>({
     >
       {options.map((option) => {
         const Icon = option.icon;
-        const active = option.v === value;
+        const active = mounted && option.v === value;
         return (
           <button
             key={option.v}
             type="button"
             role="radio"
             aria-checked={active}
+            suppressHydrationWarning
             onClick={() => onChange(option.v)}
             style={{
               height: 26,

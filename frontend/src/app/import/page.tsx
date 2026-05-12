@@ -48,11 +48,11 @@ const SAMPLES: Array<{
   {
     type: "bilibili",
     title: {
-      zh: "3Blue1Brown · 深度学习之数学原理",
-      en: "3Blue1Brown · The math behind deep learning",
+      zh: "3Blue1Brown · 深度学习之神经网络的结构",
+      en: "3Blue1Brown · But what is a neural network?",
     },
-    url: "https://www.bilibili.com/video/BV1gZ4y1F7hS",
-    meta: "26m",
+    url: "https://www.bilibili.com/video/BV1bx411M7Zx",
+    meta: "19m",
   },
   {
     type: "pdf",

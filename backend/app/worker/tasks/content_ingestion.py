@@ -353,6 +353,14 @@ async def _ingest_source_async(task, source_id: str, resources) -> dict:
                         )
                     )
 
+            # The LLM emits prerequisites as concept names (per the contract
+            # in prompts/content_analysis.md). The Concept.prerequisites
+            # column stores UUIDs, so we resolve names -> ids in a second
+            # pass once every concept has been upserted and has an id. This
+            # is what populates the edges in /knowledge-graph; without it
+            # the graph endpoint returns nodes only.
+            await _resolve_concept_prerequisites(db, analysis.concepts, concept_ids)
+
             source.metadata_ = {
                 **source.metadata_,
                 "overall_summary": analysis.overall_summary,
@@ -658,3 +666,112 @@ async def _get_or_create_concept(db, ext_concept):
     db.add(concept)
     await db.flush()
     return concept
+
+
+async def _resolve_concept_prerequisites(
+    db,
+    ext_concepts,
+    concept_ids,
+) -> int:
+    """Resolve LLM-emitted prerequisite names into ``Concept.prerequisites`` UUIDs.
+
+    The content-analysis prompt requires every entry of ``prerequisites`` to
+    be a ``name`` that also appears in the same ``concepts[]`` payload. We
+    enforce that contract here and use the resulting in-memory name->id map
+    to update ``Concept.prerequisites`` in Postgres. Aliases of each
+    concept also resolve to the same id so the LLM can refer to a prereq
+    by any of its known surface forms.
+
+    Merging is union-style: re-ingesting a concept from a second source
+    adds new prereqs without losing the ones learned from the first source.
+    Self-references (a concept listing itself as a prereq) are dropped, as
+    are unknown names. Two-node cycles (``A -> B -> A``) are prevented by
+    checking the other concept's existing prereq list before insertion;
+    longer cycles are not detected here because the prompt forbids them
+    and the run-time cost of a full DFS isn't worth it for typical 3-15
+    concept analyses.
+
+    Args:
+        db: Async SQLAlchemy session inside the ingestion transaction.
+        ext_concepts: Parallel list of ``ExtractedConcept`` objects (from
+            ``ContentAnalyzer``). Same length and order as ``concept_ids``.
+        concept_ids: Parallel list of ``Concept.id`` UUIDs.
+
+    Returns:
+        The number of concepts whose ``prerequisites`` column was updated.
+        Callers can use this to decide whether to emit a log line.
+    """
+    from sqlalchemy import select, update
+
+    from app.db.models.concept import Concept
+
+    if len(ext_concepts) != len(concept_ids):
+        raise ValueError("ext_concepts and concept_ids must be the same length")
+
+    # Build a name + alias -> id map scoped to *this* analysis. The prompt
+    # contract says prereqs only refer to local names, so we deliberately
+    # don't fall back to a global concept lookup — that would let unrelated
+    # concepts from other domains pollute the graph.
+    name_to_id: dict[str, UUID] = {}
+    for ext_concept, cid in zip(ext_concepts, concept_ids):
+        name_to_id[ext_concept.name] = cid
+        for alias in ext_concept.aliases or []:
+            name_to_id.setdefault(alias, cid)
+
+    updated = 0
+    for ext_concept, cid in zip(ext_concepts, concept_ids):
+        if not ext_concept.prerequisites:
+            continue
+
+        # Resolve names to ids; drop unknowns, self-refs, and duplicates.
+        candidates: list[UUID] = []
+        seen: set[str] = set()
+        for prereq_name in ext_concept.prerequisites:
+            pid = name_to_id.get(prereq_name)
+            if pid is None or pid == cid:
+                continue
+            if str(pid) in seen:
+                continue
+            candidates.append(pid)
+            seen.add(str(pid))
+
+        if not candidates:
+            continue
+
+        # Load existing prereqs to union-merge and to run the 2-cycle check.
+        existing_row = await db.execute(
+            select(Concept.prerequisites).where(Concept.id == cid)
+        )
+        existing = existing_row.scalar_one_or_none() or []
+        existing_strs = {str(p) for p in existing}
+
+        merged = list(existing)
+        added_this_pass = False
+        for pid in candidates:
+            if str(pid) in existing_strs:
+                continue
+            # 2-cycle check: refuse pid as prereq of cid if cid is already
+            # listed as a prereq of pid.
+            rev_row = await db.execute(
+                select(Concept.prerequisites).where(Concept.id == pid)
+            )
+            rev_prereqs = rev_row.scalar_one_or_none() or []
+            if any(str(p) == str(cid) for p in rev_prereqs):
+                continue
+            merged.append(pid)
+            existing_strs.add(str(pid))
+            added_this_pass = True
+
+        if added_this_pass:
+            await db.execute(
+                update(Concept)
+                .where(Concept.id == cid)
+                .values(prerequisites=merged)
+            )
+            updated += 1
+
+    if updated:
+        await db.flush()
+        logger.info("Resolved prerequisites for %s concepts", updated)
+
+    return updated

@@ -127,3 +127,82 @@ class TestLessonGenerator:
 
         sent_content = mock_provider.chat.call_args.kwargs["messages"][0].content
         assert "Learning goal: quick overview" in sent_content
+
+    @pytest.mark.asyncio
+    async def test_recovers_truncated_blocks_array(self):
+        """LLM ran out of tokens midway through a block — we should keep the
+        complete ones instead of falling back to the raw transcript."""
+        truncated = (
+            '{"title": "Net", "summary": "summary", "blocks": ['
+            '{"type": "intro_card", "title": "A", "body": "intro body"},'
+            '{"type": "prose", "title": "B", "body": "complete prose"},'
+            '{"type": "prose", "title": "C", "body": "incomplet'
+        )
+        mock_provider = AsyncMock()
+        mock_provider.chat.return_value = LLMResponse(
+            content=[ContentBlock(type="text", text=truncated)],
+            model="mock",
+        )
+        gen = LessonGenerator(mock_provider)
+        result = await gen.generate(["sub"], "Title", target_language="zh-CN")
+
+        assert result.title == "Net"
+        assert [b.type for b in result.blocks] == ["intro_card", "prose"]
+        assert result.blocks[1].body == "complete prose"
+
+    @pytest.mark.asyncio
+    async def test_strips_unknown_block_types(self):
+        """Models sometimes hallucinate block types — drop them, keep the rest."""
+        mock_provider = AsyncMock()
+        mock_provider.chat.return_value = _mock_response({
+            "title": "T", "summary": "S",
+            "blocks": [
+                {"type": "intro_card", "title": "i", "body": "hook"},
+                {"type": "weird_made_up_type", "title": "x", "body": "y"},
+                {"type": "recap", "title": "r", "body": "synth"},
+                {"type": "next_step", "title": "n", "body": "open Q"},
+            ],
+        })
+        gen = LessonGenerator(mock_provider)
+        result = await gen.generate(["sub"], "T", target_language="zh-CN")
+
+        assert [b.type for b in result.blocks] == ["intro_card", "recap", "next_step"]
+
+    @pytest.mark.asyncio
+    async def test_retries_once_when_first_attempt_unparseable(self):
+        """When the first response is garbage, we get one retry with a
+        stricter directive appended."""
+        good_payload = {
+            "title": "Good",
+            "summary": "S",
+            "blocks": [{"type": "prose", "title": "x", "body": "y"}],
+        }
+        mock_provider = AsyncMock()
+        mock_provider.chat.side_effect = [
+            LLMResponse(
+                content=[ContentBlock(type="text", text="not json at all")],
+                model="mock",
+            ),
+            _mock_response(good_payload),
+        ]
+        gen = LessonGenerator(mock_provider)
+        result = await gen.generate(["sub"], "Fallback", target_language="zh-CN")
+
+        assert mock_provider.chat.call_count == 2
+        assert result.title == "Good"
+        retry_prompt = mock_provider.chat.call_args_list[1].kwargs["messages"][0].content
+        assert "previous response failed to parse" in retry_prompt
+
+    @pytest.mark.asyncio
+    async def test_falls_back_after_retry_also_fails(self):
+        mock_provider = AsyncMock()
+        mock_provider.chat.return_value = LLMResponse(
+            content=[ContentBlock(type="text", text="still not json")],
+            model="mock",
+        )
+        gen = LessonGenerator(mock_provider)
+        result = await gen.generate(["the raw transcript"], "Title", target_language="zh-CN")
+
+        assert mock_provider.chat.call_count == 2
+        assert result.title == "Title"
+        assert "the raw transcript" in result.blocks[0].body

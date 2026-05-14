@@ -43,8 +43,17 @@ class SectionResponse(BaseModel):
     source_id: uuid.UUID | None = None
     content: dict[str, Any] = Field(default_factory=dict)
     difficulty: int = 1
+    lesson_generation_error: str | None = None
+    active_lesson_task_id: str | None = None
 
     model_config = {"from_attributes": True}
+
+
+class RegenerateSectionLessonResponse(BaseModel):
+    """202 response when a lesson regeneration task is dispatched."""
+    task_id: str
+    section_id: uuid.UUID
+    status: str
 
 
 class CourseDetailResponse(BaseModel):

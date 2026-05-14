@@ -28,7 +28,7 @@ from app.db.models.source import Source
 from app.models.lesson import CodeSnippet
 from app.prompt_template import load_prompt
 from app.services.lab_generator import LabGenerator
-from app.services.lesson_generator import LessonGenerator
+from app.services.lesson_generator import LessonGenerationError, LessonGenerator
 from app.services.llm.base import UnifiedMessage
 from app.services.llm.router import ModelRouter, TaskType
 
@@ -179,6 +179,8 @@ class CourseGenerator:
 
         lesson_by_page: dict[int, dict] = {}
         lesson_by_chunk_id: dict[UUID, dict] = {}
+        error_by_page: dict[int, str] = {}
+        error_by_chunk_id: dict[UUID, str] = {}
 
         if per_chunk_mode:
             async def _gen_one_chunk_lesson(chunk: ContentChunkModel):
@@ -190,18 +192,28 @@ class CourseGenerator:
                         or source.title
                         or "Untitled"
                     )
-                    lesson = await lesson_gen.generate(
-                        subtitle_chunks=[chunk.text],
-                        video_title=chunk_title,
-                        target_language=target_language,
-                        user_directive=user_directive,
-                    )
-                    return chunk.id, lesson
+                    try:
+                        lesson = await lesson_gen.generate(
+                            subtitle_chunks=[chunk.text],
+                            video_title=chunk_title,
+                            target_language=target_language,
+                            user_directive=user_directive,
+                        )
+                        return chunk.id, lesson, None
+                    except LessonGenerationError as e:
+                        logger.warning(
+                            "Lesson generation failed for chunk %s: %s", chunk.id, e
+                        )
+                        return chunk.id, None, str(e)[:500]
 
             chunk_results = await asyncio.gather(
                 *(_gen_one_chunk_lesson(c) for c in chunks)
             )
-            lesson_by_chunk_id = {cid: lsn.model_dump() for cid, lsn in chunk_results}
+            for cid, lsn, err in chunk_results:
+                if lsn is not None:
+                    lesson_by_chunk_id[cid] = lsn.model_dump()
+                elif err is not None:
+                    error_by_chunk_id[cid] = err
         else:
             # Run lesson generation in parallel across pages
             async def _gen_one_lesson(page_idx: int, page_chunks: list[ContentChunkModel]):
@@ -210,19 +222,29 @@ class CourseGenerator:
                     page_title = (
                         first_meta.get("page_title") or source.title or "Untitled"
                     )
-                    lesson = await lesson_gen.generate(
-                        subtitle_chunks=[c.text for c in page_chunks],
-                        video_title=page_title,
-                        target_language=target_language,
-                        user_directive=user_directive,
-                    )
-                    return page_idx, lesson
+                    try:
+                        lesson = await lesson_gen.generate(
+                            subtitle_chunks=[c.text for c in page_chunks],
+                            video_title=page_title,
+                            target_language=target_language,
+                            user_directive=user_directive,
+                        )
+                        return page_idx, lesson, None
+                    except LessonGenerationError as e:
+                        logger.warning(
+                            "Lesson generation failed for page %s: %s", page_idx, e
+                        )
+                        return page_idx, None, str(e)[:500]
 
             sorted_pages = sorted(page_groups.keys())
             lesson_results = await asyncio.gather(
                 *(_gen_one_lesson(p, page_groups[p]) for p in sorted_pages)
             )
-            lesson_by_page = {p: lesson.model_dump() for p, lesson in lesson_results}
+            for p, lsn, err in lesson_results:
+                if lsn is not None:
+                    lesson_by_page[p] = lsn.model_dump()
+                elif err is not None:
+                    error_by_page[p] = err
 
         # Build graph cards from lesson concept_relation blocks
         suggested_prereqs = smeta.get("suggested_prerequisites", [])
@@ -285,6 +307,8 @@ class CourseGenerator:
             labs_by_page=labs_by_page,
             lab_mode=lab_mode,
             lesson_by_chunk_id=lesson_by_chunk_id,
+            error_by_page=error_by_page,
+            error_by_chunk_id=error_by_chunk_id,
         )
 
     async def _build_sections(
@@ -319,6 +343,7 @@ class CourseGenerator:
                 lesson = assets.lesson_for(page_idx)
                 graph = assets.graph_for(page_idx)
                 lab_data = assets.lab_for(page_idx)
+                lesson_error = None if lesson else assets.error_for(page_idx)
 
                 section_title = (
                     (lesson or {}).get("title")
@@ -348,6 +373,7 @@ class CourseGenerator:
                     ),
                     content=section_content,
                     difficulty=first_meta.get("difficulty", 1),
+                    lesson_generation_error=lesson_error,
                 )
                 db.add(section)
                 await db.flush()
@@ -368,6 +394,10 @@ class CourseGenerator:
                 assets = per_source_assets.get(source_id) or _SourceAssets.empty()
                 lesson = assets.lesson_for_chunk(chunk.id) or assets.lesson_for(0)
                 graph = assets.graph_for(0)
+                lesson_error = (
+                    None if lesson
+                    else assets.error_for_chunk(chunk.id) or assets.error_for(0)
+                )
 
                 section_title = (
                     (lesson or {}).get("title")
@@ -393,6 +423,7 @@ class CourseGenerator:
                     source_end=self._format_source_ref(metadata, "end"),
                     content=section_content,
                     difficulty=metadata.get("difficulty", 1),
+                    lesson_generation_error=lesson_error,
                 )
                 db.add(section)
                 await db.flush()
@@ -482,12 +513,16 @@ class _SourceAssets:
         labs_by_page: dict[int, dict | None],
         lab_mode: str,
         lesson_by_chunk_id: dict[UUID, dict] | None = None,
+        error_by_page: dict[int, str] | None = None,
+        error_by_chunk_id: dict[UUID, str] | None = None,
     ) -> None:
         self.lesson_by_page = lesson_by_page
         self.graph_by_page = graph_by_page
         self.labs_by_page = labs_by_page
         self.lab_mode = lab_mode
         self.lesson_by_chunk_id = lesson_by_chunk_id or {}
+        self.error_by_page = error_by_page or {}
+        self.error_by_chunk_id = error_by_chunk_id or {}
 
     @classmethod
     def empty(cls) -> "_SourceAssets":
@@ -531,3 +566,9 @@ class _SourceAssets:
 
     def lab_for(self, page_idx: int) -> dict | None:
         return self.labs_by_page.get(page_idx) or self.labs_by_page.get(str(page_idx))
+
+    def error_for(self, page_idx: int) -> str | None:
+        return self.error_by_page.get(page_idx) or self.error_by_page.get(str(page_idx))
+
+    def error_for_chunk(self, chunk_id: UUID) -> str | None:
+        return self.error_by_chunk_id.get(chunk_id)

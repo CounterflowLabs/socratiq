@@ -5,7 +5,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.services.lesson_generator import LessonGenerator
+from app.services.lesson_generator import (
+    LessonGenerationError,
+    LessonGenerator,
+)
 from app.services.llm.base import ContentBlock, LLMResponse
 
 
@@ -86,29 +89,27 @@ class TestLessonGenerator:
         assert "Lesson language: en" in sent_content
 
     @pytest.mark.asyncio
-    async def test_llm_failure_returns_single_prose_fallback(self):
+    async def test_llm_failure_raises_after_retry(self):
+        """Two consecutive LLM failures must surface as LessonGenerationError so
+        the caller can mark the section as errored — no fake subtitle fallback."""
         mock_provider = AsyncMock()
         mock_provider.chat.side_effect = Exception("LLM down")
         gen = LessonGenerator(mock_provider)
-        result = await gen.generate(["raw subtitle"], "Title", target_language="zh-CN")
 
-        assert result.title == "Title"
-        assert len(result.blocks) == 1
-        assert result.blocks[0].type == "prose"
-        assert "raw subtitle" in result.blocks[0].body
+        with pytest.raises(LessonGenerationError):
+            await gen.generate(["raw subtitle"], "Title", target_language="zh-CN")
+        assert mock_provider.chat.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_malformed_json_falls_back(self):
+    async def test_malformed_json_raises_after_retry(self):
         mock_provider = AsyncMock()
         mock_provider.chat.return_value = LLMResponse(
             content=[ContentBlock(type="text", text="not json at all")],
             model="mock",
         )
         gen = LessonGenerator(mock_provider)
-        result = await gen.generate(["subtitle text"], "Title", target_language="zh-CN")
-
-        assert result.title == "Title"
-        assert result.blocks[0].type == "prose"
+        with pytest.raises(LessonGenerationError):
+            await gen.generate(["subtitle text"], "Title", target_language="zh-CN")
 
     @pytest.mark.asyncio
     async def test_appends_goal_to_prompt(self):
@@ -149,6 +150,22 @@ class TestLessonGenerator:
         assert result.title == "Net"
         assert [b.type for b in result.blocks] == ["intro_card", "prose"]
         assert result.blocks[1].body == "complete prose"
+
+    @pytest.mark.asyncio
+    async def test_empty_blocks_triggers_retry_then_raises(self):
+        """LLM returns valid JSON with blocks=[] — must not write a blank
+        lesson; retry, and if retry also yields empty, raise so the caller
+        marks the section as errored."""
+        mock_provider = AsyncMock()
+        mock_provider.chat.return_value = _mock_response({
+            "title": "Empty", "summary": "", "blocks": []
+        })
+        gen = LessonGenerator(mock_provider)
+        with pytest.raises(LessonGenerationError):
+            await gen.generate(
+                ["the raw transcript text"], "Title", target_language="zh-CN"
+            )
+        assert mock_provider.chat.call_count == 2
 
     @pytest.mark.asyncio
     async def test_strips_unknown_block_types(self):
@@ -194,15 +211,13 @@ class TestLessonGenerator:
         assert "previous response failed to parse" in retry_prompt
 
     @pytest.mark.asyncio
-    async def test_falls_back_after_retry_also_fails(self):
+    async def test_raises_when_both_attempts_unparseable(self):
         mock_provider = AsyncMock()
         mock_provider.chat.return_value = LLMResponse(
             content=[ContentBlock(type="text", text="still not json")],
             model="mock",
         )
         gen = LessonGenerator(mock_provider)
-        result = await gen.generate(["the raw transcript"], "Title", target_language="zh-CN")
-
+        with pytest.raises(LessonGenerationError):
+            await gen.generate(["the raw transcript"], "Title", target_language="zh-CN")
         assert mock_provider.chat.call_count == 2
-        assert result.title == "Title"
-        assert "the raw transcript" in result.blocks[0].body

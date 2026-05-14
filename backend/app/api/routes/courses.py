@@ -24,6 +24,7 @@ from app.models.course import (
     CourseListResponse,
     RegenerateCourseRequest,
     RegenerateCourseResponse,
+    RegenerateSectionLessonResponse,
     SectionResponse,
     SourceSummary,
 )
@@ -533,4 +534,54 @@ async def get_course_task_progress(
         parent_course_id=course.parent_id,
         active_regeneration_task_id=course.active_regeneration_task_id,
         tasks=tasks,
+    )
+
+
+@router.post(
+    "/sections/{section_id}/regenerate-lesson",
+    response_model=RegenerateSectionLessonResponse,
+    status_code=202,
+)
+async def regenerate_section_lesson_endpoint(
+    section_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_local_user)],
+) -> RegenerateSectionLessonResponse:
+    """Retry lesson generation for one section.
+
+    Used by the frontend when a section shows ``lesson_generation_error``.
+    Per-section lock: at most one in-flight retry per section. The active
+    task id is also returned so the UI can poll for completion.
+    """
+    from app.worker.tasks.lesson_regeneration import regenerate_section_lesson_task
+
+    section = await db.get(Section, section_id)
+    if section is None:
+        raise HTTPException(404, f"Section {section_id} not found")
+
+    # Authorize: caller must own the course this section belongs to.
+    course = await db.get(Course, section.course_id)
+    if course is None or course.created_by != user.id:
+        raise HTTPException(404, f"Section {section_id} not found")
+
+    if section.active_lesson_task_id:
+        existing = AsyncResult(section.active_lesson_task_id, app=celery_app)
+        if existing.state in {"PENDING", "STARTED", "PROGRESS", "RETRY"}:
+            return RegenerateSectionLessonResponse(
+                task_id=section.active_lesson_task_id,
+                section_id=section_id,
+                status="in_flight",
+            )
+
+    celery_task = regenerate_section_lesson_task.delay(
+        str(section_id), str(user.id)
+    )
+    section.active_lesson_task_id = celery_task.id
+    section.lesson_generation_error = None
+    await db.commit()
+
+    return RegenerateSectionLessonResponse(
+        task_id=celery_task.id,
+        section_id=section_id,
+        status="dispatched",
     )

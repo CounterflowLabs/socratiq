@@ -57,3 +57,9 @@ class Section(BaseMixin, Base):
     exercise_generation_error: Mapped[str | None] = mapped_column(
         Text, nullable=True
     )
+    active_lesson_task_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
+    lesson_generation_error: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )

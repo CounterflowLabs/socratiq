@@ -6,7 +6,6 @@ import re
 from pathlib import Path
 
 from app.models.lesson import LessonContent
-from app.models.lesson_blocks import LessonBlock
 from app.prompt_template import load_prompt
 from app.services.llm.base import LLMProvider, UnifiedMessage
 
@@ -51,7 +50,8 @@ class LessonGenerator:
         ) + goal_prompt
 
         # First attempt — any LLM error (timeout, network, parse failure) drops
-        # us into the retry path; a second failure drops us into fallback.
+        # us into the retry path; a second failure raises so the caller can
+        # mark the section as errored rather than receive a fake lesson.
         try:
             data = await self._attempt(prompt_text)
             return self._build_content(data, video_title)
@@ -74,7 +74,7 @@ class LessonGenerator:
             return self._build_content(data, video_title)
         except Exception as second_err:  # noqa: BLE001
             logger.error("Lesson generation failed after retry: %s", second_err)
-            return self._fallback(video_title, subtitles)
+            raise LessonGenerationError(str(second_err)) from second_err
 
     async def _attempt(self, prompt_text: str) -> dict:
         response = await self._provider.chat(
@@ -102,21 +102,22 @@ class LessonGenerator:
             if btype not in _ALLOWED_BLOCK_TYPES:
                 continue
             cleaned.append(blk)
+        if not cleaned:
+            # A parse-succeeds-but-no-usable-blocks response gives the learner
+            # a blank section. Treat it the same as a JSON failure so the
+            # caller retries, and eventually falls back to a single prose
+            # block of the raw transcript rather than nothing at all.
+            raise _LessonGenError("no usable blocks in response")
         data["blocks"] = cleaned
         return LessonContent(**data)
 
-    def _fallback(self, video_title: str, subtitles: str) -> LessonContent:
-        return LessonContent(
-            title=video_title,
-            summary="",
-            blocks=[
-                LessonBlock(
-                    type="prose",
-                    title=video_title,
-                    body=subtitles[:3000],
-                )
-            ],
-        )
+class LessonGenerationError(Exception):
+    """Raised when lesson generation gives up after retry.
+
+    Public exception — callers (course_generator, lesson regeneration task)
+    catch this to surface a per-section error to the user instead of writing
+    a fake lesson.
+    """
 
 
 class _LessonGenError(Exception):

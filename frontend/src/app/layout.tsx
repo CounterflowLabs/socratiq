@@ -9,10 +9,7 @@ import {
 import Script from "next/script";
 
 import "./globals.css";
-import { LayoutInner, SIDEBAR_DESKTOP_QUERY } from "./layout-inner";
-
-// Re-exports retained for existing call sites and tests.
-export { LayoutInner, SIDEBAR_DESKTOP_QUERY };
+import { LayoutInner } from "./layout-inner";
 
 /* Fonts — loaded once at the root and hung on `--font-*` CSS variables.
    `globals.css` references these via `--serif/--sans/--mono`. */

@@ -10,7 +10,7 @@ import {
   IcPanelLeftOpen,
   IcSparkle,
 } from "@/components/icons";
-import { SIDEBAR_DESKTOP_QUERY } from "@/app/layout";
+import { SIDEBAR_DESKTOP_QUERY } from "@/app/layout-inner";
 
 interface RegenerationBanner {
   state: "running" | "ready" | "failed";

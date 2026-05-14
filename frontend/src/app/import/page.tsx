@@ -24,11 +24,90 @@ import {
   createSourceFromURL,
   createSourceFromFile,
   getBilibiliStatus,
+  getSourceProgress,
+  retrySource,
+  type SourceProgressResponse,
 } from "@/lib/api";
 import { useSourcesStore, useTasksStore } from "@/lib/stores";
 import { useT } from "@/lib/i18n";
 
 type Tab = "url" | "file" | "text";
+type CardStatus = "running" | "failed" | "done";
+
+// Map worker stage strings to the 4 visible stages on the card.
+// Stages live in two task buckets server-side (source_processing then
+// course_generation); we collapse them into the same 4-step UI.
+const STAGE_INDEX: Record<string, number> = {
+  PENDING: 0,
+  cloning: 0,
+  extracting: 0,
+  analyzing: 1,
+  generating_lessons: 2,
+  generating_labs: 2,
+  storing: 3,
+  embedding: 3,
+  assembling_course: 3,
+  generating_course: 3,
+  SUCCESS: 4,
+  FAILURE: 4,
+};
+
+interface CardState {
+  status: CardStatus;
+  stageIndex: number;
+  failedStageIndex: number | null;
+  errorMessage: string | null;
+  courseId: string | null;
+}
+
+function deriveCardState(
+  progress: SourceProgressResponse,
+): CardState {
+  const byType: Record<string, SourceProgressResponse["tasks"][number]> = {};
+  for (const t of progress.tasks) byType[t.task_type] = t;
+  const proc = byType.source_processing;
+  const gen = byType.course_generation;
+
+  if (gen?.status === "success" && (gen.course_id || progress.course_id)) {
+    return {
+      status: "done",
+      stageIndex: 4,
+      failedStageIndex: null,
+      errorMessage: null,
+      courseId: gen.course_id ?? progress.course_id ?? null,
+    };
+  }
+
+  if (proc?.status === "failure" || gen?.status === "failure") {
+    const failingTask = proc?.status === "failure" ? proc : gen;
+    const failingStage = failingTask?.stage ?? "extracting";
+    return {
+      status: "failed",
+      stageIndex: STAGE_INDEX[failingStage] ?? 0,
+      failedStageIndex: STAGE_INDEX[failingStage] ?? 0,
+      errorMessage:
+        failingTask?.error_summary ||
+        progress.error ||
+        null,
+      courseId: null,
+    };
+  }
+
+  // In-flight: prefer the further-along task's stage.
+  const activeStage =
+    (proc?.status === "success" ? gen?.stage : proc?.stage) ??
+    gen?.stage ??
+    proc?.stage ??
+    progress.source_status ??
+    "PENDING";
+  return {
+    status: "running",
+    stageIndex: STAGE_INDEX[activeStage] ?? 0,
+    failedStageIndex: null,
+    errorMessage: null,
+    courseId: null,
+  };
+}
 
 const SAMPLES: Array<{
   type: "youtube" | "bilibili" | "pdf";
@@ -80,9 +159,19 @@ export default function ImportPage() {
 
   const [loading, setLoading] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
-  const [stage, setStage] = useState(0);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [biliLoggedIn, setBiliLoggedIn] = useState<boolean | null>(null);
+  const [activeSourceId, setActiveSourceId] = useState<string | null>(null);
+  const [activeSourceLabel, setActiveSourceLabel] = useState<string>("");
+  const [activeSourceType, setActiveSourceType] = useState<"youtube" | "bilibili" | "pdf" | "markdown" | "url">("url");
+  const [card, setCard] = useState<CardState>({
+    status: "running",
+    stageIndex: 0,
+    failedStageIndex: null,
+    errorMessage: null,
+    courseId: null,
+  });
+  const [retrying, setRetrying] = useState(false);
 
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -118,12 +207,29 @@ export default function ImportPage() {
         ? Boolean(pdfFile)
         : Boolean(textContent.trim());
 
-  // Fake-progress through pipeline stages while the backend works.
+  // Poll real backend progress so the card reflects extractor/worker state
+  // (including failures), not a cosmetic timer.
   useEffect(() => {
-    if (!analyzing || stage >= stages.length) return;
-    const handle = setTimeout(() => setStage((s) => s + 1), 1100);
-    return () => clearTimeout(handle);
-  }, [analyzing, stage, stages.length]);
+    if (!analyzing || !activeSourceId || card.status !== "running") return;
+    let cancelled = false;
+
+    const tick = async () => {
+      try {
+        const progress = await getSourceProgress(activeSourceId);
+        if (cancelled) return;
+        setCard(deriveCardState(progress));
+      } catch {
+        // transient — retry next tick
+      }
+    };
+
+    void tick();
+    const handle = setInterval(tick, 2500);
+    return () => {
+      cancelled = true;
+      clearInterval(handle);
+    };
+  }, [analyzing, activeSourceId, card.status]);
 
   function handleFileSelect(file: File | undefined) {
     if (!file) return;
@@ -137,7 +243,13 @@ export default function ImportPage() {
     if (!canSubmit || bilibiliBlocked) return;
     setLoading(true);
     setErrorMsg(null);
-    setStage(0);
+    setCard({
+      status: "running",
+      stageIndex: 0,
+      failedStageIndex: null,
+      errorMessage: null,
+      courseId: null,
+    });
     setAnalyzing(true);
 
     try {
@@ -160,6 +272,11 @@ export default function ImportPage() {
       }
 
       addSource(source);
+      setActiveSourceId(source.id);
+      setActiveSourceLabel(source.title || url.trim() || pdfName || source.id);
+      setActiveSourceType(
+        (source.type as typeof activeSourceType) ?? (tab === "url" ? "url" : "pdf"),
+      );
 
       if (source.task_id) {
         addTask({
@@ -171,9 +288,6 @@ export default function ImportPage() {
         });
       }
 
-      // No auto-redirect — the user explicitly opens the import history from
-      // the success card. Auto-jumping made the small progress pop disappear
-      // too fast for users to even register it.
       setLoading(false);
     } catch (err) {
       if (err instanceof ApiError && err.status === 412 && err.code === "bilibili_credential_required") {
@@ -191,6 +305,50 @@ export default function ImportPage() {
       setLoading(false);
       setAnalyzing(false);
     }
+  }
+
+  async function handleRetry() {
+    if (!activeSourceId || retrying) return;
+    setRetrying(true);
+    setCard({
+      status: "running",
+      stageIndex: 0,
+      failedStageIndex: null,
+      errorMessage: null,
+      courseId: null,
+    });
+    try {
+      await retrySource(activeSourceId);
+    } catch (err) {
+      setCard({
+        status: "failed",
+        stageIndex: 0,
+        failedStageIndex: 0,
+        errorMessage:
+          err instanceof Error ? err.message : t("import.errorUnknown"),
+        courseId: null,
+      });
+    } finally {
+      setRetrying(false);
+    }
+  }
+
+  function handleImportAnother() {
+    setAnalyzing(false);
+    setActiveSourceId(null);
+    setActiveSourceLabel("");
+    setCard({
+      status: "running",
+      stageIndex: 0,
+      failedStageIndex: null,
+      errorMessage: null,
+      courseId: null,
+    });
+    setUrl("");
+    setPdfFile(null);
+    setPdfName("");
+    setTextContent("");
+    setErrorMsg(null);
   }
 
   return (
@@ -524,133 +682,226 @@ export default function ImportPage() {
           </div>
         </>
       ) : (
-        <div className="card" style={{ padding: 32 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 8 }}>
-            <SourceIcon type={tab === "url" ? "youtube" : "pdf"} size={20} />
-            <div
-              className="mono"
-              style={{
-                fontSize: 13,
-                color: "var(--ink-2)",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-                flex: 1,
-              }}
-            >
-              {tab === "url" ? url : pdfName}
-            </div>
-            <span className="chip chip-accent">{lang === "zh" ? "处理中" : "processing"}</span>
-          </div>
-          <h2
-            className="display"
-            style={{ fontSize: 22, margin: "12px 0 4px", fontWeight: 400 }}
-          >
-            {lang === "zh" ? "已开始解析" : "Pipeline started"}
-          </h2>
-          <div style={{ fontSize: 12, color: "var(--ink-3)", marginBottom: 32 }}>
-            {lang === "zh"
-              ? "你可以离开这个页面，处理状态会出现在资料库。"
-              : "You can leave this page — progress shows up in the Library."}
-          </div>
+        (() => {
+          const isFailed = card.status === "failed";
+          const isDone = card.status === "done";
+          const chipClass = isFailed
+            ? "chip"
+            : isDone
+              ? "chip"
+              : "chip chip-accent";
+          const chipStyle = isFailed
+            ? {
+                background: "var(--error-soft)",
+                color: "var(--error)",
+                borderColor: "rgba(179, 66, 47, 0.3)",
+              }
+            : isDone
+              ? {
+                  background: "var(--sage-soft, rgba(120, 140, 90, 0.18))",
+                  color: "var(--sage)",
+                }
+              : undefined;
+          const heading = isFailed
+            ? t("import.pipelineFailedTitle")
+            : isDone
+              ? t("import.pipelineDoneTitle")
+              : t("import.pipelineStartedTitle");
+          const hint = isFailed
+            ? t("import.pipelineFailedHint")
+            : isDone
+              ? t("import.pipelineDoneHint")
+              : t("import.pipelineStartedHint");
+          const chipLabel = isFailed
+            ? t("import.statusFailed")
+            : isDone
+              ? t("import.statusDone")
+              : t("import.statusProcessing");
 
-          <div
-            style={{
-              display: "flex",
-              gap: 10,
-              marginBottom: 24,
-              flexWrap: "wrap",
-            }}
-          >
-            <button
-              type="button"
-              className="btn btn-accent"
-              onClick={() => router.push("/sources")}
-            >
-              <span>{lang === "zh" ? "查看资料列表" : "View source library"}</span>
-              <IcArrowRight size={12} />
-            </button>
-            <button
-              type="button"
-              className="btn btn-outline"
-              onClick={() => {
-                setAnalyzing(false);
-                setStage(0);
-                setUrl("");
-                setPdfFile(null);
-                setPdfName("");
-                setTextContent("");
-                setErrorMsg(null);
-              }}
-            >
-              <span>{lang === "zh" ? "继续导入" : "Import another"}</span>
-            </button>
-          </div>
-
-          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            {stages.map((s, i) => {
-              const active = i === stage;
-              const done = i < stage;
-              return (
+          return (
+            <div className="card" style={{ padding: 32 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 8 }}>
+                <SourceIcon type={activeSourceType} size={20} />
                 <div
-                  key={s.tag}
-                  style={{ display: "flex", alignItems: "center", gap: 14 }}
+                  className="mono"
+                  style={{
+                    fontSize: 13,
+                    color: "var(--ink-2)",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    flex: 1,
+                  }}
                 >
-                  <div
-                    style={{
-                      width: 22,
-                      height: 22,
-                      borderRadius: "50%",
-                      border: `1.5px solid ${
-                        done
-                          ? "var(--sage)"
-                          : active
-                            ? "var(--accent)"
-                            : "var(--border-strong)"
-                      }`,
-                      background: done
-                        ? "var(--sage)"
-                        : active
-                          ? "var(--accent-soft)"
-                          : "transparent",
-                      color: done ? "#fff" : "var(--accent)",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      flexShrink: 0,
-                    }}
-                  >
-                    {done ? (
-                      <IcCheck size={12} />
-                    ) : active ? (
-                      <IcLoader size={12} className="spin" />
-                    ) : (
-                      <span
-                        className="mono num"
-                        style={{ fontSize: 11, color: "var(--ink-3)" }}
-                      >
-                        {i + 1}
-                      </span>
-                    )}
-                  </div>
-                  <div
-                    style={{
-                      flex: 1,
-                      fontSize: 14,
-                      color: done ? "var(--ink-3)" : "var(--ink)",
-                      fontWeight: active ? 500 : 400,
-                    }}
-                  >
-                    {s.label}
-                  </div>
-                  <span className="mono" style={{ fontSize: 11, color: "var(--ink-4)" }}>
-                    {s.tag}
+                  {activeSourceLabel}
+                </div>
+                <span className={chipClass} style={chipStyle}>
+                  {chipLabel}
+                </span>
+              </div>
+              <h2
+                className="display"
+                style={{ fontSize: 22, margin: "12px 0 4px", fontWeight: 400 }}
+              >
+                {heading}
+              </h2>
+              <div style={{ fontSize: 12, color: "var(--ink-3)", marginBottom: isFailed && card.errorMessage ? 16 : 32 }}>
+                {hint}
+              </div>
+
+              {isFailed && card.errorMessage ? (
+                <div
+                  role="alert"
+                  className="card-quiet"
+                  style={{
+                    display: "flex",
+                    gap: 10,
+                    padding: 12,
+                    marginBottom: 24,
+                    borderColor: "rgba(179, 66, 47, 0.3)",
+                    background: "var(--error-soft)",
+                    color: "var(--error)",
+                    fontSize: 13,
+                    lineHeight: 1.6,
+                  }}
+                >
+                  <IcAlert size={14} style={{ flexShrink: 0, marginTop: 2 }} />
+                  <span style={{ wordBreak: "break-word" }}>
+                    {card.errorMessage}
                   </span>
                 </div>
-              );
-            })}
-          </div>
-        </div>
+              ) : null}
+
+              <div
+                style={{
+                  display: "flex",
+                  gap: 10,
+                  marginBottom: 24,
+                  flexWrap: "wrap",
+                }}
+              >
+                {isDone && card.courseId ? (
+                  <button
+                    type="button"
+                    className="btn btn-accent"
+                    onClick={() => router.push(`/learn?courseId=${card.courseId}`)}
+                  >
+                    <span>{t("import.openCourse")}</span>
+                    <IcArrowRight size={12} />
+                  </button>
+                ) : null}
+                {isFailed ? (
+                  <button
+                    type="button"
+                    className="btn btn-accent"
+                    onClick={handleRetry}
+                    disabled={retrying || !activeSourceId}
+                  >
+                    {retrying ? (
+                      <IcLoader size={12} className="spin" />
+                    ) : null}
+                    <span>{t("import.retryImport")}</span>
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className={isDone || isFailed ? "btn btn-outline" : "btn btn-accent"}
+                  onClick={() => router.push("/sources")}
+                >
+                  <span>{t("import.viewSources")}</span>
+                  <IcArrowRight size={12} />
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-outline"
+                  onClick={handleImportAnother}
+                >
+                  <span>{t("import.importAnother")}</span>
+                </button>
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                {stages.map((s, i) => {
+                  const isThisFailed = card.failedStageIndex === i;
+                  const active = !isFailed && !isDone && i === card.stageIndex;
+                  const done = isDone || i < card.stageIndex;
+                  const dotBorder = isThisFailed
+                    ? "var(--error)"
+                    : done
+                      ? "var(--sage)"
+                      : active
+                        ? "var(--accent)"
+                        : "var(--border-strong)";
+                  const dotBg = isThisFailed
+                    ? "var(--error-soft)"
+                    : done
+                      ? "var(--sage)"
+                      : active
+                        ? "var(--accent-soft)"
+                        : "transparent";
+                  const dotColor = isThisFailed
+                    ? "var(--error)"
+                    : done
+                      ? "#fff"
+                      : "var(--accent)";
+                  return (
+                    <div
+                      key={s.tag}
+                      style={{ display: "flex", alignItems: "center", gap: 14 }}
+                    >
+                      <div
+                        style={{
+                          width: 22,
+                          height: 22,
+                          borderRadius: "50%",
+                          border: `1.5px solid ${dotBorder}`,
+                          background: dotBg,
+                          color: dotColor,
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          flexShrink: 0,
+                        }}
+                      >
+                        {isThisFailed ? (
+                          <IcAlert size={12} />
+                        ) : done ? (
+                          <IcCheck size={12} />
+                        ) : active ? (
+                          <IcLoader size={12} className="spin" />
+                        ) : (
+                          <span
+                            className="mono num"
+                            style={{ fontSize: 11, color: "var(--ink-3)" }}
+                          >
+                            {i + 1}
+                          </span>
+                        )}
+                      </div>
+                      <div
+                        style={{
+                          flex: 1,
+                          fontSize: 14,
+                          color: isThisFailed
+                            ? "var(--error)"
+                            : done
+                              ? "var(--ink-3)"
+                              : "var(--ink)",
+                          fontWeight: active || isThisFailed ? 500 : 400,
+                        }}
+                      >
+                        {s.label}
+                      </div>
+                      <span className="mono" style={{ fontSize: 11, color: "var(--ink-4)" }}>
+                        {s.tag}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()
       )}
     </div>
   );

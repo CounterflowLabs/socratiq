@@ -168,28 +168,61 @@ class CourseGenerator:
         asset_plan = smeta.get("asset_plan") or {"lab_mode": "none"}
         lab_mode = asset_plan.get("lab_mode", "none")
 
-        # Run lesson generation in parallel across pages
-        async def _gen_one_lesson(page_idx: int, page_chunks: list[ContentChunkModel]):
-            async with sem:
-                first_meta = page_chunks[0].metadata_ or {}
-                page_title = (
-                    first_meta.get("page_title") or source.title or "Untitled"
-                )
-                lesson = await lesson_gen.generate(
-                    subtitle_chunks=[c.text for c in page_chunks],
-                    video_title=page_title,
-                    target_language=target_language,
-                    user_directive=user_directive,
-                )
-                return page_idx, lesson
-
-        sorted_pages = sorted(page_groups.keys())
-        lesson_results = await asyncio.gather(
-            *(_gen_one_lesson(p, page_groups[p]) for p in sorted_pages)
+        # Videos (and other un-paginated sources) all collapse into page 0.
+        # Generating a single lesson for the whole transcript and reusing it
+        # for every chunk-derived section produces N identical sections — fix
+        # by generating one lesson per chunk in this case.
+        has_real_pages = any(
+            (c.metadata_ or {}).get("page_index") is not None for c in chunks
         )
-        lesson_by_page: dict[int, dict] = {
-            p: lesson.model_dump() for p, lesson in lesson_results
-        }
+        per_chunk_mode = not has_real_pages and len(chunks) > 1
+
+        lesson_by_page: dict[int, dict] = {}
+        lesson_by_chunk_id: dict[UUID, dict] = {}
+
+        if per_chunk_mode:
+            async def _gen_one_chunk_lesson(chunk: ContentChunkModel):
+                async with sem:
+                    cmeta = chunk.metadata_ or {}
+                    chunk_title = (
+                        cmeta.get("topic")
+                        or cmeta.get("page_title")
+                        or source.title
+                        or "Untitled"
+                    )
+                    lesson = await lesson_gen.generate(
+                        subtitle_chunks=[chunk.text],
+                        video_title=chunk_title,
+                        target_language=target_language,
+                        user_directive=user_directive,
+                    )
+                    return chunk.id, lesson
+
+            chunk_results = await asyncio.gather(
+                *(_gen_one_chunk_lesson(c) for c in chunks)
+            )
+            lesson_by_chunk_id = {cid: lsn.model_dump() for cid, lsn in chunk_results}
+        else:
+            # Run lesson generation in parallel across pages
+            async def _gen_one_lesson(page_idx: int, page_chunks: list[ContentChunkModel]):
+                async with sem:
+                    first_meta = page_chunks[0].metadata_ or {}
+                    page_title = (
+                        first_meta.get("page_title") or source.title or "Untitled"
+                    )
+                    lesson = await lesson_gen.generate(
+                        subtitle_chunks=[c.text for c in page_chunks],
+                        video_title=page_title,
+                        target_language=target_language,
+                        user_directive=user_directive,
+                    )
+                    return page_idx, lesson
+
+            sorted_pages = sorted(page_groups.keys())
+            lesson_results = await asyncio.gather(
+                *(_gen_one_lesson(p, page_groups[p]) for p in sorted_pages)
+            )
+            lesson_by_page = {p: lesson.model_dump() for p, lesson in lesson_results}
 
         # Build graph cards from lesson concept_relation blocks
         suggested_prereqs = smeta.get("suggested_prerequisites", [])
@@ -251,6 +284,7 @@ class CourseGenerator:
             graph_by_page=graph_by_page,
             labs_by_page=labs_by_page,
             lab_mode=lab_mode,
+            lesson_by_chunk_id=lesson_by_chunk_id,
         )
 
     async def _build_sections(
@@ -325,12 +359,14 @@ class CourseGenerator:
 
                 section_order += 1
         else:
-            # No page grouping: one section per chunk
+            # No page grouping: one section per chunk. Prefer a per-chunk
+            # lesson when available (videos, plain text) so each section has
+            # distinct title/content instead of N copies of the shared lesson.
             for i, chunk in enumerate(all_chunks):
                 metadata = chunk.metadata_ or {}
                 source_id = chunk.source_id
                 assets = per_source_assets.get(source_id) or _SourceAssets.empty()
-                lesson = assets.lesson_for(0)
+                lesson = assets.lesson_for_chunk(chunk.id) or assets.lesson_for(0)
                 graph = assets.graph_for(0)
 
                 section_title = (
@@ -445,11 +481,13 @@ class _SourceAssets:
         graph_by_page: dict[int, dict],
         labs_by_page: dict[int, dict | None],
         lab_mode: str,
+        lesson_by_chunk_id: dict[UUID, dict] | None = None,
     ) -> None:
         self.lesson_by_page = lesson_by_page
         self.graph_by_page = graph_by_page
         self.labs_by_page = labs_by_page
         self.lab_mode = lab_mode
+        self.lesson_by_chunk_id = lesson_by_chunk_id or {}
 
     @classmethod
     def empty(cls) -> "_SourceAssets":
@@ -458,6 +496,7 @@ class _SourceAssets:
             graph_by_page={},
             labs_by_page={},
             lab_mode="none",
+            lesson_by_chunk_id={},
         )
 
     @classmethod
@@ -483,6 +522,9 @@ class _SourceAssets:
 
     def lesson_for(self, page_idx: int) -> dict | None:
         return self.lesson_by_page.get(page_idx) or self.lesson_by_page.get(str(page_idx))
+
+    def lesson_for_chunk(self, chunk_id: UUID) -> dict | None:
+        return self.lesson_by_chunk_id.get(chunk_id)
 
     def graph_for(self, page_idx: int) -> dict | None:
         return self.graph_by_page.get(page_idx) or self.graph_by_page.get(str(page_idx))

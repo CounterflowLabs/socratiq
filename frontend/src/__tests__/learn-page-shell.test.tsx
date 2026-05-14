@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import React, { Suspense } from "react";
 
-import { LayoutInner, SIDEBAR_DESKTOP_QUERY } from "@/app/layout";
+import { LayoutInner, SIDEBAR_DESKTOP_QUERY } from "@/app/layout-inner";
 
 vi.mock("react-markdown", () => ({
   default: ({ children }: { children: string }) =>

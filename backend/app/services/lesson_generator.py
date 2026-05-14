@@ -54,6 +54,16 @@ class LessonGenerator:
                 text = text.strip()
 
             data = json.loads(text)
+            # Some LLMs (notably small open-weights models) drop optional-looking
+            # fields like `title` even when the prompt requires them. Patch the
+            # mandatory scalar fields with sensible per-chunk defaults instead
+            # of nuking the whole LLM response into a generic fallback.
+            if not data.get("title"):
+                data["title"] = video_title
+            if "summary" not in data:
+                data["summary"] = ""
+            if "blocks" not in data:
+                data["blocks"] = []
             return LessonContent(**data)
 
         except Exception as e:

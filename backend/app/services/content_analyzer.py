@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -226,6 +227,15 @@ class ContentAnalyzer:
             all_prereqs.update(result.suggested_prerequisites)
             total_minutes += result.estimated_study_minutes
             difficulties.append(result.overall_difficulty)
+
+        # Each batch numbers its own fallback topics (``Section 1``, ``Section 2``
+        # …) starting at 1, so merged chunks end up with duplicate generic
+        # topics across batches. Renumber generic topics globally so per-chunk
+        # section titles stay distinct.
+        generic_pat = re.compile(r"^(Section|Part|Chunk)\s*\d+$", re.IGNORECASE)
+        for i, ch in enumerate(all_chunks):
+            if not ch.topic or generic_pat.match(ch.topic.strip()):
+                ch.topic = f"Section {i + 1}"
 
         avg_difficulty = round(sum(difficulties) / len(difficulties)) if difficulties else 3
         summaries = [r.overall_summary for r in results if r.overall_summary]

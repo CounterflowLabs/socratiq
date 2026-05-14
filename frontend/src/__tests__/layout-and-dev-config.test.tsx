@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import nextConfig from "../../next.config";
-import { LayoutInner, SIDEBAR_DESKTOP_QUERY } from "@/app/layout";
+import { LayoutInner, SIDEBAR_DESKTOP_QUERY } from "@/app/layout-inner";
 
 const { mockPathname } = vi.hoisted(() => ({
   mockPathname: vi.fn(),

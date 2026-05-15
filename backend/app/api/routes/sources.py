@@ -16,6 +16,7 @@ from app.db.models.source import Source
 from app.db.models.source_task import SourceTask
 from app.db.models.user import User
 from app.models.source import (
+    SourceEmbed,
     SourceListResponse,
     SourceProgressResponse,
     SourceResponse,
@@ -829,6 +830,12 @@ async def _source_to_response(
             await _get_course_summaries(db, [source.id], user_id=user_id)
         ).get(source.id, (0, None))
 
+    embed = await _build_source_embed(
+        db,
+        source=source,
+        latest_processing_task=latest_processing_task,
+    )
+
     return SourceResponse(
         id=source.id,
         type=source.type,
@@ -841,9 +848,98 @@ async def _source_to_response(
         latest_course_task=latest_course_task,
         course_count=course_count,
         latest_course_id=latest_course_id,
+        embed=embed,
         created_at=source.created_at,
         updated_at=source.updated_at,
     )
+
+
+_EMBEDDING_ROUTE_CACHE: dict[str, str | None] = {"name": None}
+
+
+async def _current_embedding_model_name(db: AsyncSession) -> str | None:
+    """Return the model_name currently routed for ``task_type='embedding'``."""
+    from app.db.models.model_config import ModelRouteConfig
+
+    if _EMBEDDING_ROUTE_CACHE.get("loaded"):
+        return _EMBEDDING_ROUTE_CACHE.get("name")
+    row = (
+        await db.execute(
+            select(ModelRouteConfig.model_name).where(
+                ModelRouteConfig.tier == "embedding"
+            )
+        )
+    ).first()
+    _EMBEDDING_ROUTE_CACHE["name"] = row[0] if row else None
+    _EMBEDDING_ROUTE_CACHE["loaded"] = True
+    return _EMBEDDING_ROUTE_CACHE["name"]
+
+
+def invalidate_embedding_route_cache() -> None:
+    """Call after the user changes the embedding route in Settings."""
+    _EMBEDDING_ROUTE_CACHE.clear()
+
+
+async def _build_source_embed(
+    db: AsyncSession,
+    *,
+    source: Source,
+    latest_processing_task: SourceTaskSummary | None,
+) -> SourceEmbed:
+    """Fold flat source/task fields into the PRD §9 embed sub-object.
+
+    The 5-state taxonomy:
+
+    - ``ready``   — pipeline finished and the stored embed model still
+                    matches the currently-routed embedding model.
+    - ``running`` — Source.status is one of the active in-flight values
+                    OR the latest task row is running/progress.
+    - ``queued``  — pending dispatch.
+    - ``failed``  — Source.status == 'error' or latest task row failed.
+    - ``stale``   — was ready, but the model has been switched since.
+    """
+    meta = source.metadata_ if isinstance(source.metadata_, dict) else {}
+    used_model = meta.get("embed_model") or meta.get("embedding_model")
+    chunks = meta.get("chunks") if isinstance(meta.get("chunks"), int) else None
+    vectors = meta.get("vectors") if isinstance(meta.get("vectors"), int) else None
+    err = meta.get("error") if isinstance(meta.get("error"), str) else None
+
+    if source.status == "error":
+        return SourceEmbed(status="failed", model=used_model, error=err)
+    if (
+        latest_processing_task
+        and latest_processing_task.status == "failure"
+    ):
+        return SourceEmbed(
+            status="failed",
+            model=used_model,
+            error=latest_processing_task.error_summary or err,
+        )
+    if source.status in _ACTIVE_SOURCE_STATUSES or (
+        latest_processing_task and latest_processing_task.status in {"running", "progress"}
+    ):
+        return SourceEmbed(status="running", model=used_model)
+    if source.status == "pending" or (
+        latest_processing_task and latest_processing_task.status == "pending"
+    ):
+        return SourceEmbed(status="queued", model=used_model)
+    if source.status == "ready":
+        current = await _current_embedding_model_name(db)
+        if used_model and current and used_model != current:
+            return SourceEmbed(
+                status="stale",
+                model=used_model,
+                chunks=chunks,
+                vectors=vectors,
+                reason=f"embed model upgraded: {used_model} → {current}",
+            )
+        return SourceEmbed(
+            status="ready",
+            model=used_model,
+            chunks=chunks,
+            vectors=vectors,
+        )
+    return SourceEmbed(status="queued", model=used_model)
 
 
 def _build_source_base_query(

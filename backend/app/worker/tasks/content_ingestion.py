@@ -394,6 +394,19 @@ async def _ingest_source_async(task, source_id: str, resources) -> dict:
                 len(concept_ids),
             )
 
+            # Stamp the embed-model identity so a later model upgrade can
+            # mark this source as ``stale`` (PRD §3).
+            from app.services.embedding import current_embedding_model_id
+
+            embed_model_id = await current_embedding_model_id(resources.model_router)
+            if embed_model_id:
+                source.metadata_ = {
+                    **(source.metadata_ or {}),
+                    "embed_model": embed_model_id,
+                    "chunks": len(chunk_ids),
+                    "vectors": len(chunk_ids) + len(concept_ids),
+                }
+
             # === STEP 7: DONE ===
             completion = await finish_source_processing_and_enqueue_course(
                 db=db,

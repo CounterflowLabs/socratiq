@@ -9,10 +9,11 @@ Legacy ``GET /tasks/{id}/status`` is still served here for back-compat
 
 from __future__ import annotations
 
+import uuid
 from typing import Annotated, Literal
 
 from celery.result import AsyncResult
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import Select, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -170,6 +171,151 @@ async def list_tasks(
         counts_by_type=counts_by_type,
         counts_by_status=counts_by_status,
     )
+
+
+@router.post("/{task_id}/cancel", status_code=202)
+async def cancel_task(
+    task_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_local_user)],
+) -> dict:
+    """Cooperative cancel for a single task (PRD §5.5 row action).
+
+    Looks the task up either by ``source_tasks.id`` *or*
+    ``celery_task_id`` — the unified queue returns the former while
+    legacy callers may pass the latter.
+    """
+    from uuid import UUID as _UUID
+    from celery.result import AsyncResult
+
+    task = await _find_task_for_user(db, user, task_id)
+    if task is None:
+        raise HTTPException(404, f"Task {task_id} not found")
+
+    if task.status not in {"pending", "running", "progress"}:
+        return {"task_id": str(task.id), "cancelled": False, "reason": "not_active"}
+
+    task.cancel_requested = True
+    if task.celery_task_id:
+        try:
+            AsyncResult(task.celery_task_id, app=celery_app).revoke(terminate=False)
+        except Exception:
+            pass
+    await db.commit()
+    return {"task_id": str(task.id), "cancelled": True}
+
+
+@router.post("/{task_id}/retry", status_code=202)
+async def retry_task(
+    task_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_local_user)],
+) -> dict:
+    """Re-dispatch a failed task (PRD §5.5 failed-state row action).
+
+    For ``source_processing`` we re-run ingestion via the source-level
+    retry. For ``course_generation`` we re-fire the same Celery task with
+    the original metadata payload (multi-source aware).
+    """
+    from uuid import uuid4
+
+    from app.db.models.source_task import SourceTask
+    from app.services.source_tasks import create_source_task, dispatch_course_generation
+    from app.worker.tasks.content_ingestion import ingest_source
+    from app.worker.tasks.course_generation_multi import generate_multi_course_task
+
+    task = await _find_task_for_user(db, user, task_id)
+    if task is None:
+        raise HTTPException(404, f"Task {task_id} not found")
+    if task.status != "failure":
+        raise HTTPException(
+            409,
+            f"Task is {task.status!r}; only failed tasks can be retried",
+        )
+
+    new_task_id = str(uuid4())
+
+    if task.task_type == "source_processing":
+        source = await db.get(Source, task.source_id)
+        if source is None:
+            raise HTTPException(404, f"Owning source {task.source_id} not found")
+        source.status = "pending"
+        if isinstance(source.metadata_, dict):
+            new_meta = dict(source.metadata_)
+            new_meta.pop("error", None)
+            source.metadata_ = new_meta
+        celery_handle = ingest_source.apply_async(args=[str(source.id)], task_id=new_task_id)
+        await create_source_task(
+            db,
+            source_id=source.id,
+            task_type="source_processing",
+            celery_task_id=celery_handle.id,
+            status="pending",
+        )
+        await db.commit()
+        return {"task_id": celery_handle.id, "status": "dispatched"}
+
+    if task.task_type == "course_generation":
+        meta = task.metadata_ or {}
+        source_ids = meta.get("source_ids") or [str(task.source_id)]
+        config = meta.get("config") or {}
+        anchor = uuid.UUID(meta.get("anchor_source_id") or source_ids[0])
+        for sid in source_ids:
+            await create_source_task(
+                db,
+                source_id=uuid.UUID(sid),
+                task_type="course_generation",
+                celery_task_id=new_task_id if uuid.UUID(sid) == anchor else None,
+                status="pending",
+                stage="pending",
+                metadata_={**meta, "retry_of": str(task.id)},
+            )
+        await db.commit()
+        if len(source_ids) == 1 and not config:
+            # Legacy single-source row pattern — keep using the simple wrapper
+            dispatch_course_generation(
+                payload={"source_id": source_ids[0]},
+                task_id=new_task_id,
+                user_id=str(user.id),
+            )
+        else:
+            generate_multi_course_task.apply_async(
+                args=[
+                    {
+                        "source_ids": source_ids,
+                        "title": meta.get("title"),
+                        "config": config,
+                    }
+                ],
+                kwargs={"user_id": str(user.id)},
+                task_id=new_task_id,
+            )
+        return {"task_id": new_task_id, "status": "dispatched"}
+
+    raise HTTPException(400, f"Task type {task.task_type!r} cannot be retried")
+
+
+async def _find_task_for_user(
+    db: AsyncSession, user: User, task_id: str
+):
+    """Find a SourceTask owned by the user, by either row id or celery id."""
+    import uuid as _uuid
+    from app.db.models.source_task import SourceTask
+
+    candidates: list = []
+    try:
+        candidates.append(SourceTask.id == _uuid.UUID(task_id))
+    except ValueError:
+        pass
+    candidates.append(SourceTask.celery_task_id == task_id)
+
+    stmt = (
+        select(SourceTask)
+        .join(Source, Source.id == SourceTask.source_id)
+        .where(or_(*candidates), Source.created_by == user.id)
+        .limit(1)
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
 
 
 @router.get("/{task_id}/status", deprecated=True)

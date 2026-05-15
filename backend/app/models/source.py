@@ -26,6 +26,24 @@ class SourceTaskSummary(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class SourceEmbed(BaseModel):
+    """Embedding-side state of a source — PRD §9.
+
+    Folds ``Source.status`` + the latest ``source_processing`` row into a
+    single 5-state taxonomy the UI can render without sniffing both
+    structures.
+    """
+
+    status: str  # ready | running | queued | failed | stale
+    model: str | None = None
+    chunks: int | None = None
+    vectors: int | None = None
+    progress: float | None = None
+    eta_seconds: int | None = None
+    error: str | None = None
+    reason: str | None = None  # populated for stale to say *why*
+
+
 class SourceResponse(BaseModel):
     """Response model for a single source."""
     id: uuid.UUID
@@ -39,6 +57,10 @@ class SourceResponse(BaseModel):
     latest_course_task: SourceTaskSummary | None = None
     course_count: int = 0
     latest_course_id: uuid.UUID | None = None
+    # New PRD §9 sub-object. Legacy callers can keep reading the flat
+    # status/latest_processing_task fields above for the duration of the
+    # transition.
+    embed: SourceEmbed | None = None
     created_at: datetime
     updated_at: datetime
 

@@ -2,15 +2,40 @@
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 
+class GenerateIncludes(BaseModel):
+    """Asset toggles surfaced by the /generate step-2 config form."""
+    exercises: bool = True
+    lab: bool = True
+    review: bool = True
+
+
 class CourseGenerateRequest(BaseModel):
-    """Request body for generating a course from sources."""
+    """Request body for generating a course from sources.
+
+    PRD §5.4 step 2 — surfaces only the knobs that meaningfully change
+    generation output. Temperature / top-p / prompt template stay in
+    Settings.
+    """
     source_ids: list[uuid.UUID] = Field(..., min_length=1)
     title: str | None = None
+    brief: str | None = None
+    depth: int = Field(12, ge=4, le=48)
+    audience: Literal["intro", "mid", "adv"] = "mid"
+    tier: Literal["fast", "smart"] = "smart"
+    language: Literal["source", "zh", "en"] = "source"
+    includes: GenerateIncludes = Field(default_factory=GenerateIncludes)
+
+
+class CourseGenerateResponse(BaseModel):
+    """202 response from async POST /courses/generate."""
+    task_id: str
+    source_ids: list[uuid.UUID]
+    status: str  # "dispatched" | "already_dispatched"
 
 
 class CourseResponse(BaseModel):

@@ -18,6 +18,7 @@ from app.models.source import SourceTaskProgress
 from app.worker.celery_app import celery_app
 from app.models.course import (
     CourseGenerateRequest,
+    CourseGenerateResponse,
     CourseProgressResponse,
     CourseResponse,
     CourseDetailResponse,
@@ -110,14 +111,141 @@ def _extract_page_indices(metadata: dict[str, Any]) -> list[int]:
     return []
 
 
-@router.post("/generate", response_model=CourseResponse, status_code=201)
+@router.post(
+    "/generate",
+    response_model=CourseGenerateResponse,
+    status_code=202,
+)
 async def generate_course(
+    request: CourseGenerateRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_local_user)],
+) -> CourseGenerateResponse:
+    """Asynchronously synthesize a single course from one or more sources.
+
+    PRD §5.4 — replaces the legacy synchronous variant (which blocked the
+    request thread for minutes) with a dispatch endpoint that returns a
+    task id. Progress is tracked through the unified ``/api/v1/tasks``
+    queue; the resulting ``course_id`` shows up on the per-source task row
+    once generation completes.
+    """
+    from uuid import uuid4
+
+    from app.db.models.source_task import SourceTask
+    from app.services.source_tasks import create_source_task
+    from app.worker.tasks.course_generation_multi import (
+        generate_multi_course_task,
+    )
+
+    sources = (
+        await db.execute(
+            select(Source).where(
+                Source.id.in_(request.source_ids),
+                Source.created_by == user.id,
+                Source.status != "deleted",
+            )
+        )
+    ).scalars().all()
+    if len(sources) != len(request.source_ids):
+        raise HTTPException(
+            404,
+            f"Not all sources are accessible: requested {len(request.source_ids)}, "
+            f"found {len(sources)}",
+        )
+    for s in sources:
+        if s.status != "ready":
+            raise HTTPException(
+                409,
+                f"Source {s.id} is {s.status!r}; only ready sources can generate a course",
+            )
+
+    # If any anchor source already has a pending/running course_generation
+    # task, surface that instead of spawning a duplicate.
+    existing = (
+        await db.execute(
+            select(SourceTask)
+            .where(
+                SourceTask.source_id.in_(request.source_ids),
+                SourceTask.task_type == "course_generation",
+                SourceTask.status.in_(("pending", "running")),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return CourseGenerateResponse(
+            task_id=existing.celery_task_id or str(existing.id),
+            source_ids=request.source_ids,
+            status="already_dispatched",
+        )
+
+    task_id = str(uuid4())
+    config = {
+        "brief": request.brief,
+        "depth": request.depth,
+        "audience": request.audience,
+        "tier": request.tier,
+        "language": request.language,
+        "includes": request.includes.model_dump(),
+    }
+    # One source_tasks row per source so the unified Tasks queue surfaces
+    # the work against every contributor. The anchor row carries the
+    # celery_task_id; the rest reference the same task in metadata so the
+    # cancel/retry endpoints can find the whole cohort.
+    anchor_id = request.source_ids[0]
+    for sid in request.source_ids:
+        await create_source_task(
+            db,
+            source_id=sid,
+            task_type="course_generation",
+            celery_task_id=task_id if sid == anchor_id else None,
+            status="pending",
+            stage="pending",
+            metadata_={
+                "source_ids": [str(s) for s in request.source_ids],
+                "anchor_source_id": str(anchor_id),
+                "config": config,
+                "title": request.title,
+            },
+        )
+    await db.commit()
+
+    generate_multi_course_task.apply_async(
+        args=[
+            {
+                "source_ids": [str(s) for s in request.source_ids],
+                "title": request.title,
+                "config": config,
+            }
+        ],
+        kwargs={"user_id": str(user.id)},
+        task_id=task_id,
+    )
+
+    return CourseGenerateResponse(
+        task_id=task_id,
+        source_ids=request.source_ids,
+        status="dispatched",
+    )
+
+
+@router.post(
+    "/generate-sync",
+    response_model=CourseResponse,
+    deprecated=True,
+    status_code=201,
+)
+async def generate_course_sync(
     request: CourseGenerateRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(get_local_user)],
     model_router: Annotated[ModelRouter, Depends(get_model_router)],
 ) -> CourseResponse:
-    """Generate a course from one or more ingested sources."""
+    """Synchronous legacy entry point — kept for older callers.
+
+    New callers should use ``POST /courses/generate`` which is now
+    asynchronous and accepts the §5.4 config.
+    """
     from app.services.profile import load_profile
 
     profile = await load_profile(db, user.id)

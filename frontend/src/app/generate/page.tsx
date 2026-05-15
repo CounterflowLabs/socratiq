@@ -15,7 +15,7 @@ import { Eyebrow } from "@/components/ui/eyebrow";
 import { PageHeader } from "@/components/ui/page-header";
 import { useT } from "@/lib/i18n";
 import {
-  generateCourseForSource,
+  generateCourse,
   listSources,
   type SourceResponse,
 } from "@/lib/api";
@@ -48,7 +48,7 @@ export default function GeneratePage() {
   const [sources, setSources] = useState<SourceResponse[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dispatched, setDispatched] = useState<
-    { taskIds: string[]; sourceIds: string[] } | null
+    { taskId: string; sourceIds: string[] } | null
   >(null);
 
   // Initial source list. Honor any pre-pick passed via sessionStorage from
@@ -96,20 +96,24 @@ export default function GeneratePage() {
     setError(null);
     setStep(3);
     try {
-      // For now the backend exposes single-source course generation only.
-      // Fan out one task per picked source — they show up as separate rows
-      // in /tasks but produce one course each. Multi-source synthesis lands
-      // in a follow-up.
-      const taskIds: string[] = [];
-      for (const s of pickedList) {
-        const res = await generateCourseForSource(s.id);
-        if (res?.task_id) taskIds.push(res.task_id);
-      }
-      setDispatched({ taskIds, sourceIds: pickedList.map((s) => s.id) });
+      const res = await generateCourse({
+        source_ids: pickedList.map((s) => s.id),
+        title: cfg.brief.slice(0, 80) || undefined,
+        brief: cfg.brief || undefined,
+        depth: cfg.depth,
+        audience: cfg.audience,
+        tier: cfg.tier,
+        language: cfg.lang,
+        includes: cfg.includes,
+      });
+      setDispatched({
+        taskId: res.task_id,
+        sourceIds: pickedList.map((s) => s.id),
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [pickedList]);
+  }, [pickedList, cfg]);
 
   return (
     <div className="page page-narrow">
@@ -511,7 +515,7 @@ function StepRun({
   pickedList,
   onOpenTasks,
 }: {
-  dispatched: { taskIds: string[]; sourceIds: string[] } | null;
+  dispatched: { taskId: string; sourceIds: string[] } | null;
   pickedList: SourceResponse[];
   onOpenTasks: () => void;
 }) {
@@ -520,15 +524,25 @@ function StepRun({
     return (
       <div style={{ textAlign: "center", padding: 64 }}>
         <IcLoader size={20} className="spin" />
-        <p style={{ marginTop: 12, color: "var(--ink-2)" }}>{t("generate.runEyebrow")}…</p>
+        <p style={{ marginTop: 12, color: "var(--ink-2)" }}>
+          {t("generate.runEyebrow")}…
+        </p>
       </div>
     );
   }
   return (
     <div className="card" style={{ textAlign: "center" }}>
       <Eyebrow>{t("generate.runEyebrow")}</Eyebrow>
-      <h2 className="serif" style={{ fontSize: 24, margin: "8px 0 4px" }}>
-        {dispatched.taskIds.length}
+      <p
+        className="mono"
+        style={{ fontSize: 12, color: "var(--ink-3)", margin: "8px 0 4px" }}
+      >
+        task {dispatched.taskId.slice(0, 8)}
+      </p>
+      <h2 className="serif" style={{ fontSize: 22, margin: "8px 0 4px" }}>
+        {pickedList.length === 1
+          ? pickedList[0].title
+          : `${pickedList.length} sources → 1 course`}
       </h2>
       <p style={{ color: "var(--ink-2)", margin: "0 0 16px", fontSize: 13 }}>
         {t("generate.runHint")}
@@ -551,12 +565,12 @@ function StepRun({
           fontSize: 12,
           color: "var(--ink-3)",
           marginTop: 16,
+          listStyle: "none",
+          paddingLeft: 0,
         }}
       >
-        {pickedList.map((s, i) => (
-          <li key={s.id}>
-            {s.title} · task {dispatched.taskIds[i]?.slice(0, 8) ?? "—"}
-          </li>
+        {pickedList.map((s) => (
+          <li key={s.id}>· {s.title}</li>
         ))}
       </ul>
     </div>

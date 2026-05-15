@@ -11,6 +11,22 @@ from app.db.models.concept import Concept as ConceptModel
 from app.services.llm.base import LLMProvider
 from app.services.llm.router import ModelRouter, TaskType
 
+
+async def current_embedding_model_id(router: ModelRouter) -> str | None:
+    """Return the model id currently routed for ``TaskType.EMBEDDING``.
+
+    Used by the ingestion pipeline to stamp ``source.metadata_.embed_model``
+    so the Library can later flag stale sources after a model upgrade.
+    """
+    try:
+        provider = await router.get_provider(TaskType.EMBEDDING)
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        return provider.model_id()
+    except Exception:  # noqa: BLE001
+        return None
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_FALLBACK_EMBEDDING_DIM = 768

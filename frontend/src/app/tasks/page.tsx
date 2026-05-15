@@ -18,9 +18,9 @@ import { Eyebrow } from "@/components/ui/eyebrow";
 import { PageHeader } from "@/components/ui/page-header";
 import { useT } from "@/lib/i18n";
 import {
-  cancelSource,
+  cancelTask,
   listTasks,
-  retrySource,
+  retryTask,
   type TaskListItem,
   type TaskListResponse,
   type TaskStatusUi,
@@ -275,20 +275,18 @@ function TaskRow({
   const [busy, setBusy] = useState(false);
 
   const handleCancel = async () => {
-    if (!task.source_id) return;
     setBusy(true);
     try {
-      await cancelSource(task.source_id);
+      await cancelTask(task.id);
       onActionDone();
     } finally {
       setBusy(false);
     }
   };
   const handleRetry = async () => {
-    if (!task.source_id) return;
     setBusy(true);
     try {
-      await retrySource(task.source_id);
+      await retryTask(task.id);
       onActionDone();
     } finally {
       setBusy(false);

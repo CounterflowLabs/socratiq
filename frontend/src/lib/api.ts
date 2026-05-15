@@ -92,6 +92,17 @@ export interface SourceTaskSummary {
   celery_task_id?: string | null;
 }
 
+export interface SourceEmbed {
+  status: "ready" | "running" | "queued" | "failed" | "stale";
+  model?: string | null;
+  chunks?: number | null;
+  vectors?: number | null;
+  progress?: number | null;
+  eta_seconds?: number | null;
+  error?: string | null;
+  reason?: string | null;
+}
+
 export interface SourceResponse {
   id: string;
   type: string;
@@ -104,6 +115,7 @@ export interface SourceResponse {
   latest_course_task?: SourceTaskSummary | null;
   course_count: number;
   latest_course_id: string | null;
+  embed?: SourceEmbed | null;
   created_at: string;
   updated_at: string;
 }
@@ -263,14 +275,38 @@ export interface LessonContent {
   blocks?: LessonBlock[] | null;
 }
 
+export interface GenerateIncludes {
+  exercises: boolean;
+  lab: boolean;
+  review: boolean;
+}
+
+export interface GenerateCourseConfig {
+  source_ids: string[];
+  title?: string;
+  brief?: string;
+  depth?: number;
+  audience?: "intro" | "mid" | "adv";
+  tier?: "fast" | "smart";
+  language?: "source" | "zh" | "en";
+  includes?: GenerateIncludes;
+}
+
+export interface GenerateCourseResponse {
+  task_id: string;
+  source_ids: string[];
+  status: "dispatched" | "already_dispatched";
+}
+
+/** Async multi-source course generation (PRD §5.4). Returns a task id; the
+ *  course id appears on the unified Tasks queue when generation completes. */
 export async function generateCourse(
-  sourceIds: string[],
-  title?: string
-): Promise<CourseResponse> {
+  config: GenerateCourseConfig,
+): Promise<GenerateCourseResponse> {
   const res = await apiFetch(`${API_BASE}/courses/generate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ source_ids: sourceIds, title }),
+    body: JSON.stringify(config),
   });
   if (!res.ok) throw await responseError(res);
   return res.json();
@@ -555,6 +591,23 @@ export async function listTasks(params: {
   if (params.limit !== undefined) query.set("limit", String(params.limit));
   const qs = query.toString();
   const res = await apiFetch(`${API_BASE}/tasks${qs ? `?${qs}` : ""}`);
+  if (!res.ok) throw await responseError(res);
+  return res.json();
+}
+
+export async function cancelTask(taskId: string): Promise<void> {
+  const res = await apiFetch(`${API_BASE}/tasks/${taskId}/cancel`, {
+    method: "POST",
+  });
+  if (!res.ok) throw await responseError(res);
+}
+
+export async function retryTask(
+  taskId: string,
+): Promise<{ task_id: string; status: string }> {
+  const res = await apiFetch(`${API_BASE}/tasks/${taskId}/retry`, {
+    method: "POST",
+  });
   if (!res.ok) throw await responseError(res);
   return res.json();
 }

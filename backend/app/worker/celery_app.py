@@ -27,6 +27,7 @@ celery_app.conf.update(
 # Explicitly import tasks so they register with Celery
 import app.worker.tasks.content_ingestion  # noqa: F401, E402
 import app.worker.tasks.course_generation  # noqa: F401, E402
+import app.worker.tasks.course_generation_multi  # noqa: F401, E402
 import app.worker.tasks.course_regeneration  # noqa: F401, E402
 import app.worker.tasks.exercise_generation  # noqa: F401, E402
 import app.worker.tasks.lesson_regeneration  # noqa: F401, E402

@@ -184,28 +184,46 @@ export default function SourceDetailDrawer({
 
   const presentation = deriveMaterialPresentation(source);
 
-  return (
-    <>
-      {open && (
-        <button
-          aria-label="关闭资料详情"
-          className="fixed inset-0 z-40 bg-black/20 backdrop-blur-sm"
-          onClick={onClose}
-          type="button"
-        />
-      )}
+  if (!open) {
+    // Mount nothing when closed so we don't run the lazy data fetches in
+    // the sub-sections below. Re-opening starts fresh — desired behavior
+    // for the "preview latest data" feel.
+    return null;
+  }
 
-      <aside
-        aria-hidden={!open}
-        className={`fixed right-0 top-0 z-50 h-full w-full max-w-md border-l shadow-2xl transition-transform duration-200 ${
-          open ? "translate-x-0" : "translate-x-full"
-        }`}
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="资料详情"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6"
+      onClick={(e) => {
+        // Click on the backdrop (not the dialog itself) closes.
+        if (e.target === e.currentTarget) onClose();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") onClose();
+      }}
+      style={{
+        background: "rgba(26, 22, 17, 0.45)",
+        backdropFilter: "blur(2px)",
+      }}
+    >
+      <div
+        className="relative flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl shadow-2xl"
         style={{
-          maxWidth: "min(28rem, calc(100vw - 1rem))",
           background: "var(--surface-alt)",
-          borderColor: "var(--border)",
+          border: "1px solid var(--border)",
+          animation: "soc-modal-in 180ms ease-out",
         }}
+        onClick={(e) => e.stopPropagation()}
       >
+        <style>{`
+          @keyframes soc-modal-in {
+            from { opacity: 0; transform: translateY(8px) scale(0.98); }
+            to   { opacity: 1; transform: translateY(0) scale(1); }
+          }
+        `}</style>
         <div className="flex h-full flex-col">
           <div className="flex items-start justify-between border-b border-gray-200 bg-white px-5 py-4">
             <div className="min-w-0">
@@ -391,8 +409,8 @@ export default function SourceDetailDrawer({
             )}
           </div>
         </div>
-      </aside>
-    </>
+      </div>
+    </div>
   );
 }
 

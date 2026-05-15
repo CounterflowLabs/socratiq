@@ -234,7 +234,7 @@ function StatusChip({
   );
 }
 
-function EmptyState({ t }: { t: (key: string, ...args: unknown[]) => string }) {
+function EmptyState({ t }: { t: ReturnType<typeof useT>["t"] }) {
   return (
     <div
       className="hatched"

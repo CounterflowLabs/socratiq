@@ -204,18 +204,96 @@ class CourseGenerator:
         # Videos (and other un-paginated sources) all collapse into page 0.
         # Generating a single lesson for the whole transcript and reusing it
         # for every chunk-derived section produces N identical sections — fix
-        # by generating one lesson per chunk in this case.
+        # by switching to bucket mode (preferred, when SectionPlanner has
+        # written metadata) or per-chunk mode (legacy fallback) when
+        # un-paginated.
         has_real_pages = any(
             (c.metadata_ or {}).get("page_index") is not None for c in chunks
         )
-        per_chunk_mode = not has_real_pages and len(chunks) > 1
+        # Bucket mode requires (a) no page index and (b) at least one chunk
+        # carrying a SectionPlanner assignment. Mixed-state sources where
+        # some chunks have buckets and others don't still flow through bucket
+        # mode — missing chunks fall into bucket 0 and merge with whatever
+        # else lands there.
+        bucket_ids_present: set[int] = set()
+        if not has_real_pages:
+            for c in chunks:
+                bid = (c.metadata_ or {}).get("section_bucket")
+                if bid is not None:
+                    try:
+                        bucket_ids_present.add(int(bid))
+                    except (TypeError, ValueError):
+                        continue
+        per_bucket_mode = (
+            not has_real_pages and len(chunks) > 1 and len(bucket_ids_present) > 0
+        )
+        per_chunk_mode = (
+            not has_real_pages and len(chunks) > 1 and not per_bucket_mode
+        )
+
+        # Group chunks by bucket once so both lesson generation and section
+        # build use the same ordering. Bucket id falls back to 0 for chunks
+        # missing the metadata key entirely.
+        bucket_groups: dict[int, list[ContentChunkModel]] = defaultdict(list)
+        if per_bucket_mode:
+            for c in chunks:
+                bid_raw = (c.metadata_ or {}).get("section_bucket", 0)
+                try:
+                    bid = int(bid_raw)
+                except (TypeError, ValueError):
+                    bid = 0
+                bucket_groups[bid].append(c)
 
         lesson_by_page: dict[int, dict] = {}
         lesson_by_chunk_id: dict[UUID, dict] = {}
+        lesson_by_bucket_id: dict[int, dict] = {}
         error_by_page: dict[int, str] = {}
         error_by_chunk_id: dict[UUID, str] = {}
+        error_by_bucket_id: dict[int, str] = {}
 
-        if per_chunk_mode:
+        if per_bucket_mode:
+            async def _gen_one_bucket_lesson(
+                bucket_id: int, bucket_chunks: list[ContentChunkModel]
+            ):
+                async with sem:
+                    if cancel_check is not None:
+                        await cancel_check()
+                    first_meta = bucket_chunks[0].metadata_ or {}
+                    # Bucket topic from SectionPlanner is the strongest signal;
+                    # fall back to first chunk's analyzer topic, then source title.
+                    bucket_title = (
+                        first_meta.get("section_bucket_topic")
+                        or first_meta.get("topic")
+                        or source.title
+                        or "Untitled"
+                    )
+                    try:
+                        lesson = await lesson_gen.generate(
+                            subtitle_chunks=[c.text for c in bucket_chunks],
+                            video_title=bucket_title,
+                            target_language=target_language,
+                            user_directive=user_directive,
+                        )
+                        return bucket_id, lesson, None
+                    except LessonGenerationError as e:
+                        logger.warning(
+                            "Lesson generation failed for bucket %s: %s", bucket_id, e
+                        )
+                        return bucket_id, None, str(e)[:500]
+
+            sorted_buckets = sorted(bucket_groups.keys())
+            bucket_results = await asyncio.gather(
+                *(
+                    _gen_one_bucket_lesson(b, bucket_groups[b])
+                    for b in sorted_buckets
+                )
+            )
+            for bid, lsn, err in bucket_results:
+                if lsn is not None:
+                    lesson_by_bucket_id[bid] = lsn.model_dump()
+                elif err is not None:
+                    error_by_bucket_id[bid] = err
+        elif per_chunk_mode:
             async def _gen_one_chunk_lesson(chunk: ContentChunkModel):
                 async with sem:
                     if cancel_check is not None:
@@ -285,8 +363,8 @@ class CourseGenerator:
 
         # Build graph cards from lesson concept_relation blocks
         suggested_prereqs = smeta.get("suggested_prerequisites", [])
-        graph_by_page: dict[int, dict] = {}
-        for page_idx, lesson_dict in lesson_by_page.items():
+
+        def _build_graph_card(lesson_dict: dict, anchor: int | str) -> dict:
             key_concepts: list[str] = []
             for block in lesson_dict.get("blocks", []):
                 if block.get("type") == "concept_relation":
@@ -295,16 +373,26 @@ class CourseGenerator:
                         if label:
                             key_concepts.append(label)
             deduped = list(dict.fromkeys(key_concepts))
-            graph_by_page[page_idx] = {
+            return {
                 "current": deduped[:2],
                 "prerequisites": suggested_prereqs[:3],
                 "unlocks": deduped[2:5],
-                "section_anchor": page_idx,
+                "section_anchor": anchor,
             }
 
-        # Run lab generation in parallel where lab_mode == "inline"
+        graph_by_page: dict[int, dict] = {}
+        for page_idx, lesson_dict in lesson_by_page.items():
+            graph_by_page[page_idx] = _build_graph_card(lesson_dict, page_idx)
+
+        graph_by_bucket_id: dict[int, dict] = {}
+        for bucket_id, lesson_dict in lesson_by_bucket_id.items():
+            graph_by_bucket_id[bucket_id] = _build_graph_card(lesson_dict, bucket_id)
+
+        # Run lab generation in parallel where lab_mode == "inline".
+        # Only meaningful when per-page lessons exist; per-chunk and per-bucket
+        # paths attach a single course-level lab via _build_sections instead.
         labs_by_page: dict[int, dict | None] = {}
-        if lab_mode == "inline":
+        if lab_mode == "inline" and lesson_by_page:
             async def _gen_one_lab(page_idx: int, lesson_dict: dict):
                 async with sem:
                     snippets = [
@@ -346,6 +434,10 @@ class CourseGenerator:
             lesson_by_chunk_id=lesson_by_chunk_id,
             error_by_page=error_by_page,
             error_by_chunk_id=error_by_chunk_id,
+            lesson_by_bucket_id=lesson_by_bucket_id,
+            graph_by_bucket_id=graph_by_bucket_id,
+            labs_by_bucket_id={},
+            error_by_bucket_id=error_by_bucket_id,
         )
 
     async def _build_sections(
@@ -363,6 +455,9 @@ class CourseGenerator:
         all_chunks = [c for cs in chunks_by_source.values() for c in cs]
         has_page_index = any(
             (c.metadata_ or {}).get("page_index") is not None for c in all_chunks
+        )
+        has_section_buckets = (not has_page_index) and any(
+            (c.metadata_ or {}).get("section_bucket") is not None for c in all_chunks
         )
 
         if has_page_index:
@@ -419,6 +514,89 @@ class CourseGenerator:
 
                 if assets.lab_mode == "inline" and lab_data:
                     await self._create_lab(db, section.id, lab_data)
+
+                section_order += 1
+        elif has_section_buckets:
+            # Bucket grouping: SectionPlanner has tagged each chunk with a
+            # section_bucket id. Consecutive chunks sharing a bucket merge
+            # into one section. Source order is preserved by sorting on the
+            # bucket's first chunk's created_at (stable across regenerations
+            # because chunks are inserted in extraction order in STEP 5).
+            bucket_groups: dict[tuple[UUID, int], list[ContentChunkModel]] = defaultdict(list)
+            for chunk in all_chunks:
+                bid_raw = (chunk.metadata_ or {}).get("section_bucket", 0)
+                try:
+                    bid = int(bid_raw)
+                except (TypeError, ValueError):
+                    bid = 0
+                bucket_groups[(chunk.source_id, bid)].append(chunk)
+
+            # Sort bucket groups: primary by source id (stable across runs),
+            # secondary by min(created_at) within bucket so source-order
+            # within a source is preserved even if bucket ids are not
+            # monotonic across the chunk sequence (defensive).
+            def _bucket_sort_key(item):
+                (source_id, bid), group = item
+                first_created = min(c.created_at for c in group)
+                return (str(source_id), first_created, bid)
+
+            section_order = 0
+            attached_lab_sources: set[UUID] = set()
+            for (source_id, bid), group_chunks in sorted(
+                bucket_groups.items(), key=_bucket_sort_key
+            ):
+                first_meta = group_chunks[0].metadata_ or {}
+                last_meta = group_chunks[-1].metadata_ or {}
+                assets = per_source_assets.get(source_id) or _SourceAssets.empty()
+                lesson = assets.lesson_for_bucket(bid)
+                graph = assets.graph_for_bucket(bid)
+                lesson_error = None if lesson else assets.error_for_bucket(bid)
+
+                bucket_topic = first_meta.get("section_bucket_topic")
+                section_title = (
+                    (lesson or {}).get("title")
+                    or bucket_topic
+                    or first_meta.get("topic")
+                    or f"Section {section_order + 1}"
+                )
+
+                section_content = {
+                    "summary": (lesson or {}).get("summary") or first_meta.get("summary", ""),
+                    "key_terms": first_meta.get("key_terms", []),
+                    "has_code": any((c.metadata_ or {}).get("has_code") for c in group_chunks),
+                    "lab_mode": assets.lab_mode,
+                    "graph_card": graph,
+                }
+                if lesson:
+                    section_content["lesson"] = lesson
+
+                section = Section(
+                    course_id=course.id,
+                    title=section_title,
+                    order_index=section_order,
+                    source_id=source_id,
+                    source_start=self._format_source_ref(first_meta, "start"),
+                    source_end=self._format_source_ref(last_meta, "end"),
+                    content=section_content,
+                    difficulty=first_meta.get("difficulty", 1),
+                    lesson_generation_error=lesson_error,
+                )
+                db.add(section)
+                await db.flush()
+                for chunk in group_chunks:
+                    chunk.section_id = section.id
+
+                # One lab per source: attach to the first bucket section we
+                # produce for that source. Matches the per_chunk_mode rule
+                # below; videos/plain text don't get per-bucket inline labs.
+                if (
+                    assets.lab_mode == "inline"
+                    and source_id not in attached_lab_sources
+                ):
+                    lab_data = assets.lab_for(0)
+                    if lab_data:
+                        await self._create_lab(db, section.id, lab_data)
+                        attached_lab_sources.add(source_id)
 
                 section_order += 1
         else:
@@ -540,7 +718,14 @@ class CourseGenerator:
 
 
 class _SourceAssets:
-    """Aggregated lesson/lab/graph dicts keyed by page index."""
+    """Aggregated lesson/lab/graph dicts keyed by page index or bucket id.
+
+    Three keying schemes coexist so the generator can serve all three
+    grouping modes without per-mode subclasses:
+      * ``*_by_page`` — paginated sources (PDF, etc.)
+      * ``*_by_bucket_id`` — sources with SectionPlanner output
+      * ``*_by_chunk_id`` — legacy per-chunk fallback
+    """
 
     def __init__(
         self,
@@ -552,6 +737,10 @@ class _SourceAssets:
         lesson_by_chunk_id: dict[UUID, dict] | None = None,
         error_by_page: dict[int, str] | None = None,
         error_by_chunk_id: dict[UUID, str] | None = None,
+        lesson_by_bucket_id: dict[int, dict] | None = None,
+        graph_by_bucket_id: dict[int, dict] | None = None,
+        labs_by_bucket_id: dict[int, dict | None] | None = None,
+        error_by_bucket_id: dict[int, str] | None = None,
     ) -> None:
         self.lesson_by_page = lesson_by_page
         self.graph_by_page = graph_by_page
@@ -560,6 +749,10 @@ class _SourceAssets:
         self.lesson_by_chunk_id = lesson_by_chunk_id or {}
         self.error_by_page = error_by_page or {}
         self.error_by_chunk_id = error_by_chunk_id or {}
+        self.lesson_by_bucket_id = lesson_by_bucket_id or {}
+        self.graph_by_bucket_id = graph_by_bucket_id or {}
+        self.labs_by_bucket_id = labs_by_bucket_id or {}
+        self.error_by_bucket_id = error_by_bucket_id or {}
 
     @classmethod
     def empty(cls) -> "_SourceAssets":
@@ -598,14 +791,34 @@ class _SourceAssets:
     def lesson_for_chunk(self, chunk_id: UUID) -> dict | None:
         return self.lesson_by_chunk_id.get(chunk_id)
 
+    def lesson_for_bucket(self, bucket_id: int) -> dict | None:
+        return self.lesson_by_bucket_id.get(bucket_id) or self.lesson_by_bucket_id.get(
+            str(bucket_id)
+        )
+
     def graph_for(self, page_idx: int) -> dict | None:
         return self.graph_by_page.get(page_idx) or self.graph_by_page.get(str(page_idx))
 
+    def graph_for_bucket(self, bucket_id: int) -> dict | None:
+        return self.graph_by_bucket_id.get(bucket_id) or self.graph_by_bucket_id.get(
+            str(bucket_id)
+        )
+
     def lab_for(self, page_idx: int) -> dict | None:
         return self.labs_by_page.get(page_idx) or self.labs_by_page.get(str(page_idx))
+
+    def lab_for_bucket(self, bucket_id: int) -> dict | None:
+        return self.labs_by_bucket_id.get(bucket_id) or self.labs_by_bucket_id.get(
+            str(bucket_id)
+        )
 
     def error_for(self, page_idx: int) -> str | None:
         return self.error_by_page.get(page_idx) or self.error_by_page.get(str(page_idx))
 
     def error_for_chunk(self, chunk_id: UUID) -> str | None:
         return self.error_by_chunk_id.get(chunk_id)
+
+    def error_for_bucket(self, bucket_id: int) -> str | None:
+        return self.error_by_bucket_id.get(bucket_id) or self.error_by_bucket_id.get(
+            str(bucket_id)
+        )

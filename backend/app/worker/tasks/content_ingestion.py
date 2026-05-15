@@ -384,7 +384,9 @@ async def _ingest_source_async(task, source_id: str, resources) -> dict:
             task.update_state(state="PROGRESS", meta={"stage": "embedding"})
 
             embedding_service = EmbeddingService(resources.model_router)
-            await embedding_service.embed_and_store_chunks(db, chunk_ids, chunk_texts)
+            chunk_embeddings = await embedding_service.embed_and_store_chunks(
+                db, chunk_ids, chunk_texts
+            )
             await embedding_service.embed_and_store_concepts(
                 db, concept_ids, concept_texts
             )
@@ -392,6 +394,68 @@ async def _ingest_source_async(task, source_id: str, resources) -> dict:
                 "Embedded %s chunks and %s concepts",
                 len(chunk_ids),
                 len(concept_ids),
+            )
+
+            # === STEP 6.5: SECTION PLANNING ===
+            # Group consecutive chunks into topic-coherent buckets so the
+            # course assembly stage can emit one section per bucket instead
+            # of one section per chunk (which fragments long videos). Runs
+            # AFTER embed so boundary-hint computation reuses the just-
+            # computed vectors at zero extra cost. Failure modes (no route,
+            # LLM error, JSON parse fail) drop to per-chunk fallback inside
+            # the planner — never raise out to the ingestion pipeline.
+            await raise_if_cancelled(
+                db, source_id=sid, task_type="source_processing"
+            )
+            await _update_status(db, sid, "planning")
+            task.update_state(state="PROGRESS", meta={"stage": "planning"})
+
+            from app.services.section_planner import (
+                SECTION_BUCKET_KEY,
+                SECTION_BUCKET_TOPIC_KEY,
+                SectionPlanner,
+            )
+
+            section_planner = SectionPlanner(resources.model_router)
+            plan_result = await section_planner.plan(
+                chunks=result.chunks,
+                analyses=analysis.chunks,
+                embeddings=chunk_embeddings,
+                title=source.title or "Untitled",
+            )
+
+            # Persist per-chunk bucket assignments back into metadata_. UPDATE
+            # (not INSERT) — chunks already exist from STEP 5. We re-read the
+            # rows, merge the new keys, and reassign so SQLAlchemy's JSONB
+            # change detection picks it up (in-place mutation of a dict on a
+            # JSONB column does NOT mark the attribute dirty).
+            result_chunks = await db.execute(
+                select(ContentChunkModel).where(
+                    ContentChunkModel.id.in_(chunk_ids)
+                )
+            )
+            db_chunks_by_id = {c.id: c for c in result_chunks.scalars().all()}
+            for chunk_id, bucket in zip(chunk_ids, plan_result.assignments):
+                db_chunk = db_chunks_by_id.get(chunk_id)
+                if db_chunk is None:
+                    continue
+                merged = {**(db_chunk.metadata_ or {})}
+                merged[SECTION_BUCKET_KEY] = bucket.bucket_id
+                merged[SECTION_BUCKET_TOPIC_KEY] = bucket.bucket_topic
+                db_chunk.metadata_ = merged
+            await db.flush()
+
+            source.metadata_ = {
+                **(source.metadata_ or {}),
+                "section_planner_stats": plan_result.stats,
+            }
+            await db.flush()
+            logger.info(
+                "Section planning: tier=%s buckets=%d chunks=%d (took %dms)",
+                plan_result.stats.get("tier_used"),
+                plan_result.stats.get("bucket_count"),
+                len(chunk_ids),
+                plan_result.stats.get("planning_duration_ms", 0),
             )
 
             # Stamp the embed-model identity so a later model upgrade can

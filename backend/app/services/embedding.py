@@ -74,10 +74,15 @@ class EmbeddingService:
 
     async def embed_and_store_chunks(
         self, db: AsyncSession, chunk_ids: list[UUID], texts: list[str],
-    ) -> None:
-        """Compute embeddings and update content_chunks in the database."""
+    ) -> list[list[float]]:
+        """Compute embeddings, persist them, and return the vectors in order.
+
+        Returning the embeddings lets downstream steps (e.g. SectionPlanner's
+        boundary-hint computation) reuse them without a second DB round-trip
+        or a redundant LLM call. Empty input returns ``[]``.
+        """
         if not chunk_ids:
-            return
+            return []
 
         embeddings = await self.embed_texts(texts)
 
@@ -90,6 +95,7 @@ class EmbeddingService:
 
         await db.flush()
         logger.info(f"Embedded and stored {len(chunk_ids)} content chunks")
+        return embeddings
 
     async def embed_and_store_concepts(
         self, db: AsyncSession, concept_ids: list[UUID], texts: list[str],

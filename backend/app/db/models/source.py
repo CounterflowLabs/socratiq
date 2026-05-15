@@ -22,8 +22,8 @@ class Source(BaseMixin, Base):
             to avoid collision with SQLAlchemy's internal ``metadata``).
         status: Processing pipeline status — 'pending', 'processing',
             'extracting', 'analyzing', 'generating_lessons', 'generating_labs',
-            'storing', 'embedding', 'ready', 'cancelled', 'error', or
-            'deleted' (soft-deleted; hidden from default queries).
+            'storing', 'embedding', 'planning', 'ready', 'cancelled', 'error',
+            or 'deleted' (soft-deleted; hidden from default queries).
         created_by: UUID foreign key referencing the user who created this source.
         creator: Relationship back to the User model.
     """

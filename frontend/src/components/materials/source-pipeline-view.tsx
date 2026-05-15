@@ -15,7 +15,7 @@ import {
 import type { SourceProgressResponse, SourceTaskProgress } from "@/lib/api";
 
 const STAGE_ORDER: Record<string, string[]> = {
-  source_processing: ["extracting", "analyzing", "storing", "embedding"],
+  source_processing: ["extracting", "analyzing", "storing", "embedding", "planning"],
   course_generation: ["assembling_course"],
   course_regeneration: ["generating"],
 };
@@ -25,6 +25,7 @@ const STAGE_LABELS: Record<string, string> = {
   analyzing: "结构分析",
   storing: "写入数据库",
   embedding: "生成向量",
+  planning: "划分章节",
   assembling_course: "装配课程",
   generating: "重新生成",
   ready: "已完成",

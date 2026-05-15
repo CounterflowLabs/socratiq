@@ -40,6 +40,7 @@ _ACTIVE_SOURCE_STATUSES = {
     "generating_labs",
     "storing",
     "embedding",
+    "planning",
 }
 _ACTIVE_TASK_STATUSES = {"pending", "running", "progress"}
 _ACTIONABLE_RANK = {"failure": 0, "processing": 1, "ready": 2}
@@ -124,7 +125,7 @@ async def create_source(
                 Source.created_by == user.id,
                 Source.content_key == content_key,
                 Source.status.in_(
-                    ["pending", "extracting", "analyzing", "generating_lessons", "generating_labs", "storing", "embedding"]
+                    ["pending", "extracting", "analyzing", "generating_lessons", "generating_labs", "storing", "embedding", "planning"]
                 ),
             )
             .order_by(Source.created_at.desc())

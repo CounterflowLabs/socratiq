@@ -353,7 +353,11 @@ export default function ImportPage() {
 
   return (
     <div style={{ padding: "32px 40px 80px", maxWidth: 720, margin: "0 auto", width: "100%" }}>
-      <PageHeader eyebrow="01" title={t("import.title")} subtitle={t("import.subtitle")} />
+      <PageHeader
+        eyebrow={t("tasks.typeEmbed")}
+        title={t("import.title")}
+        subtitle={t("import.subtitle")}
+      />
 
       {bilibiliBlocked ? (
         <div
@@ -787,6 +791,28 @@ export default function ImportPage() {
                     onClick={() => router.push(`/learn?courseId=${card.courseId}`)}
                   >
                     <span>{t("import.openCourse")}</span>
+                    <IcArrowRight size={12} />
+                  </button>
+                ) : null}
+                {isDone && !card.courseId && activeSourceId ? (
+                  // PRD §5.2: don't auto-jump to course generation. Surface
+                  // it as a primary CTA on the success card instead.
+                  <button
+                    type="button"
+                    className="btn btn-accent"
+                    onClick={() => {
+                      try {
+                        sessionStorage.setItem(
+                          "pendingGenerateSources",
+                          JSON.stringify([activeSourceId]),
+                        );
+                      } catch {
+                        /* sessionStorage unavailable — fine */
+                      }
+                      router.push("/generate");
+                    }}
+                  >
+                    <span>✨ {t("newPopover.generateTitle")}</span>
                     <IcArrowRight size={12} />
                   </button>
                 ) : null}

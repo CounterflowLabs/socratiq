@@ -224,7 +224,10 @@ export default function SourceDetailDrawer({
             to   { opacity: 1; transform: translateY(0) scale(1); }
           }
         `}</style>
-        <div className="flex h-full flex-col">
+        {/* No inner flex wrapper — the outer is already flex-col; an
+            extra `h-full` here would resolve against an auto-height
+            parent and collapse, breaking the body's overflow-y-auto. */}
+        <>
           <div className="flex items-start justify-between border-b border-gray-200 bg-white px-5 py-4">
             <div className="min-w-0">
               <div className="flex items-center gap-2 text-sm text-gray-500">
@@ -245,7 +248,7 @@ export default function SourceDetailDrawer({
             </button>
           </div>
 
-          <div className="flex-1 space-y-6 overflow-y-auto p-5">
+          <div className="flex-1 min-h-0 space-y-6 overflow-y-auto p-5">
             <section>
               <h3 className="text-sm font-semibold text-gray-900">当前状态</h3>
               <div className="mt-3 rounded-2xl border border-blue-100 bg-blue-50 p-4">
@@ -408,7 +411,7 @@ export default function SourceDetailDrawer({
               </button>
             )}
           </div>
-        </div>
+        </>
       </div>
     </div>
   );

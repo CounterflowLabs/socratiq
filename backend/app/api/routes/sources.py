@@ -737,36 +737,82 @@ async def list_source_citations(
     db: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(get_local_user)],
 ) -> dict:
-    """List the courses + sections that cite this source.
+    """List every course generated from (or citing) this source.
 
-    PRD §11 Phase E — used by the Library detail drawer's Citations
-    tab. A section "cites" the source if its ``source_id`` points at
-    the requested source (the legacy model — block-level citation
-    markers will land alongside the §10 weighted-chunk work).
+    Powers the source-detail modal's "该资料生成的课程" section. For each
+    course we return enough to render a version chip (``version_index``
+    over the parent-chain root) and ordered sections.
+
+    The order is newest-first so the row at the top is the one the
+    Library row's Sparkle CTA would jump to (``latest_course_id``).
     """
     if not (await _user_owns_source(db, source_id, user.id)):
         raise HTTPException(404, f"Source {source_id} not found")
 
-    rows = (
+    # All courses generated from this source — covers original /
+    # regenerate / multi-source synthesis (all three land a
+    # course_sources row).
+    course_rows = (
         await db.execute(
-            select(Section, Course.id, Course.title)
-            .join(Course, Course.id == Section.course_id)
-            .where(Section.source_id == source_id, Course.created_by == user.id)
-            .order_by(Course.created_at.desc(), Section.order_index)
+            select(Course)
+            .join(CourseSource, CourseSource.course_id == Course.id)
+            .where(
+                CourseSource.source_id == source_id,
+                Course.created_by == user.id,
+            )
+            .order_by(Course.created_at.desc())
         )
-    ).all()
-    grouped: dict[str, dict] = {}
-    for section, course_id, course_title in rows:
-        cid = str(course_id)
-        course_bucket = grouped.setdefault(
-            cid, {"course_id": cid, "course_title": course_title, "sections": []}
+    ).scalars().all()
+    if not course_rows:
+        return {"items": [], "total": 0}
+
+    course_ids = [c.id for c in course_rows]
+
+    # Sections per course that explicitly point at this source — for
+    # the "where exactly does this source appear" expansion inside each
+    # course card.
+    section_rows = (
+        await db.execute(
+            select(Section)
+            .where(
+                Section.course_id.in_(course_ids),
+                Section.source_id == source_id,
+            )
+            .order_by(Section.course_id, Section.order_index)
         )
-        course_bucket["sections"].append({
-            "section_id": str(section.id),
-            "title": section.title,
-            "order_index": section.order_index,
+    ).scalars().all()
+    sections_by_course: dict[uuid.UUID, list[dict]] = {}
+    for s in section_rows:
+        sections_by_course.setdefault(s.course_id, []).append(
+            {
+                "section_id": str(s.id),
+                "title": s.title,
+                "order_index": s.order_index,
+            }
+        )
+
+    # Compute version_index per course over its parent chain. Cached so
+    # sibling regenerations sharing the same root only pay one walk.
+    from app.api.routes.courses import _compute_version_index
+
+    version_cache: dict[uuid.UUID, int] = {}
+    for c in course_rows:
+        version_cache[c.id] = await _compute_version_index(db, c)
+
+    items = []
+    latest_id = course_rows[0].id  # already sorted desc by created_at
+    for c in course_rows:
+        items.append({
+            "course_id": str(c.id),
+            "course_title": c.title,
+            "created_at": c.created_at.isoformat(),
+            "parent_id": str(c.parent_id) if c.parent_id else None,
+            "regeneration_directive": c.regeneration_directive,
+            "version_index": version_cache[c.id],
+            "is_latest": c.id == latest_id,
+            "sections": sections_by_course.get(c.id, []),
         })
-    return {"items": list(grouped.values()), "total": sum(len(b["sections"]) for b in grouped.values())}
+    return {"items": items, "total": len(items)}
 
 
 async def _user_owns_source(db: AsyncSession, source_id: uuid.UUID, user_id: uuid.UUID) -> bool:

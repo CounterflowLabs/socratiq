@@ -496,12 +496,16 @@ function ChunksSection({ sourceId }: { sourceId: string }) {
   );
 }
 
-/* Citations — which courses & sections reference this source. */
+/* Courses generated from this source — surfaces every version so the
+   user can jump to an older regenerate without going through the
+   course-detail page's version chip. The latest version is the one
+   the Library row's Sparkle CTA jumps to. */
 function CitationsSection({ sourceId }: { sourceId: string }) {
   const [data, setData] = useState<{
     items: SourceCitationCourse[];
     total: number;
   } | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     listSourceCitations(sourceId)
@@ -520,7 +524,7 @@ function CitationsSection({ sourceId }: { sourceId: string }) {
   return (
     <section>
       <h3 className="text-sm font-semibold text-gray-900">
-        被引用
+        该资料生成的课程
         <span className="ml-2 text-xs text-gray-400">{data.total}</span>
       </h3>
       <ul className="mt-3 space-y-2">
@@ -528,23 +532,130 @@ function CitationsSection({ sourceId }: { sourceId: string }) {
           <li
             key={course.course_id}
             className="rounded-xl border border-gray-200 bg-white p-3"
+            style={
+              course.is_latest
+                ? { borderColor: "var(--accent)", background: "var(--accent-soft)" }
+                : undefined
+            }
           >
-            <Link
-              href={`/learn?courseId=${course.course_id}`}
-              className="text-sm font-medium text-blue-600 hover:underline"
-            >
-              {course.course_title}
-            </Link>
-            <ul className="mt-2 space-y-1 text-xs text-gray-500">
-              {course.sections.slice(0, 4).map((s) => (
-                <li key={s.section_id}>
-                  · {s.title}
-                </li>
-              ))}
-              {course.sections.length > 4 ? (
-                <li>· …+{course.sections.length - 4}</li>
+            <div className="flex items-center gap-2">
+              <span
+                className="mono"
+                style={{
+                  fontSize: 10,
+                  padding: "2px 6px",
+                  borderRadius: 999,
+                  background: course.is_latest
+                    ? "var(--accent)"
+                    : "var(--surface-2)",
+                  color: course.is_latest ? "white" : "var(--ink-2)",
+                  fontVariantNumeric: "tabular-nums",
+                  flexShrink: 0,
+                }}
+              >
+                v{course.version_index}
+              </span>
+              {course.is_latest ? (
+                <span
+                  className="mono"
+                  style={{
+                    fontSize: 10,
+                    color: "var(--accent)",
+                    flexShrink: 0,
+                  }}
+                >
+                  ★ latest
+                </span>
               ) : null}
-            </ul>
+              <span
+                style={{
+                  fontSize: 10,
+                  color: "var(--ink-3)",
+                  marginLeft: "auto",
+                  flexShrink: 0,
+                }}
+              >
+                {new Date(course.created_at).toLocaleDateString("zh-CN", {
+                  month: "short",
+                  day: "numeric",
+                })}
+              </span>
+            </div>
+
+            <div className="mt-2 flex items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <Link
+                  href={`/learn?courseId=${course.course_id}`}
+                  className="text-sm font-medium text-blue-600 hover:underline"
+                  style={{
+                    display: "block",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {course.course_title}
+                </Link>
+                {course.regeneration_directive ? (
+                  <p
+                    style={{
+                      fontSize: 11,
+                      color: "var(--ink-3)",
+                      marginTop: 2,
+                      fontStyle: "italic",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    "{course.regeneration_directive}"
+                  </p>
+                ) : null}
+              </div>
+              <Link
+                href={`/learn?courseId=${course.course_id}`}
+                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium hover:bg-white/60"
+                style={{ color: "var(--ink-2)", flexShrink: 0 }}
+              >
+                打开
+                <ArrowRight className="w-3 h-3" />
+              </Link>
+            </div>
+
+            {course.sections.length > 0 ? (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setExpandedId((prev) =>
+                    prev === course.course_id ? null : course.course_id,
+                  );
+                }}
+                style={{
+                  marginTop: 8,
+                  background: "transparent",
+                  border: "none",
+                  padding: 0,
+                  cursor: "pointer",
+                  color: "var(--ink-3)",
+                  fontSize: 11,
+                }}
+              >
+                {expandedId === course.course_id
+                  ? "收起"
+                  : `引用 ${course.sections.length} 个章节 ▾`}
+              </button>
+            ) : null}
+            {expandedId === course.course_id ? (
+              <ul className="mt-2 space-y-1 text-xs" style={{ color: "var(--ink-3)" }}>
+                {course.sections.slice(0, 6).map((s) => (
+                  <li key={s.section_id}>· {s.title}</li>
+                ))}
+                {course.sections.length > 6 ? (
+                  <li>· …+{course.sections.length - 6}</li>
+                ) : null}
+              </ul>
+            ) : null}
           </li>
         ))}
       </ul>

@@ -657,6 +657,11 @@ export async function listSourceChunks(
 export interface SourceCitationCourse {
   course_id: string;
   course_title: string;
+  created_at: string;
+  parent_id: string | null;
+  regeneration_directive: string | null;
+  version_index: number;
+  is_latest: boolean;
   sections: { section_id: string; title: string; order_index: number | null }[];
 }
 

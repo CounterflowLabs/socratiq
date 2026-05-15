@@ -276,6 +276,16 @@ export async function generateCourse(
   return res.json();
 }
 
+export async function generateCourseForSource(
+  sourceId: string,
+): Promise<{ task_id: string; source_id: string; status: string }> {
+  const res = await apiFetch(`${API_BASE}/sources/${sourceId}/generate-course`, {
+    method: "POST",
+  });
+  if (!res.ok) throw await responseError(res);
+  return res.json();
+}
+
 export async function listCourses(): Promise<{
   items: CourseResponse[];
   total: number;

@@ -3,13 +3,18 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 
+import { useRouter } from "next/navigation";
+
 import {
+  IcArrowRight,
+  IcCheck,
   IcDoc,
   IcFilter,
   IcLoader,
   IcMore,
   IcPlus,
   IcSearch,
+  IcSparkle,
   SourceIcon,
 } from "@/components/icons";
 import { Eyebrow } from "@/components/ui/eyebrow";
@@ -26,12 +31,35 @@ import { useT } from "@/lib/i18n";
 
 export default function SourcesPage() {
   const { t, lang } = useT();
+  const router = useRouter();
   const [sources, setSources] = useState<SourceResponse[]>([]);
   const [loading, setLoading] = useState(true);
   const [total, setTotal] = useState(0);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<MaterialStatusFilter>("all");
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+
+  const togglePicked = (id: string) =>
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const startGenerateFromSelection = () => {
+    if (picked.size === 0) return;
+    try {
+      sessionStorage.setItem(
+        "pendingGenerateSources",
+        JSON.stringify(Array.from(picked)),
+      );
+    } catch {
+      /* SSR / storage disabled — fine, the page will load empty */
+    }
+    router.push("/generate");
+  };
 
   const loadSources = useCallback(async (options?: { background?: boolean }) => {
     if (!options?.background) setLoading(true);
@@ -96,6 +124,44 @@ export default function SourcesPage() {
           </Link>
         }
       />
+
+      {picked.size > 0 ? (
+        <div
+          style={{
+            position: "sticky",
+            top: 0,
+            zIndex: 5,
+            background: "var(--ink)",
+            color: "var(--surface)",
+            padding: "10px 16px",
+            borderRadius: "var(--r-lg)",
+            margin: "0 0 16px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+          }}
+        >
+          <span style={{ fontSize: 13 }}>
+            {t("sources.batchSelected").replace("{n}", String(picked.size))}
+          </span>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              className="btn btn-sm"
+              onClick={() => setPicked(new Set())}
+              style={{ color: "var(--surface)" }}
+            >
+              {t("common.cancel")}
+            </button>
+            <button
+              className="btn btn-accent btn-sm"
+              onClick={startGenerateFromSelection}
+            >
+              <IcSparkle size={12} /> {t("sources.batchGenerate")}
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {/* Filter strip */}
       <div
@@ -247,38 +313,65 @@ export default function SourcesPage() {
               lang === "zh" ? "zh-CN" : "en-US",
               { month: "short", day: "numeric" },
             );
+            const isReady = source.status === "ready";
+            const isPicked = picked.has(source.id);
 
             return (
-              <button
+              <div
                 key={source.id}
-                type="button"
-                onClick={() => setSelectedSourceId(source.id)}
                 style={{
                   display: "grid",
                   gridTemplateColumns: "36px 1fr 110px 120px 90px 40px",
                   padding: "14px 16px",
-                  borderTop: "none",
-                  borderLeft: "none",
-                  borderRight: "none",
                   borderBottom: isLast ? "none" : "1px solid var(--border-2)",
                   alignItems: "center",
                   gap: 12,
+                  background: isPicked ? "var(--accent-soft)" : "transparent",
                   cursor: "pointer",
-                  background: "transparent",
-                  width: "100%",
-                  textAlign: "left",
-                  color: "inherit",
-                  fontFamily: "inherit",
                   transition: "background var(--duration-fast) ease",
                 }}
+                onClick={() => setSelectedSourceId(source.id)}
                 onMouseEnter={(e) => {
-                  e.currentTarget.style.background = "var(--surface-2)";
+                  if (!isPicked) {
+                    (e.currentTarget as HTMLDivElement).style.background =
+                      "var(--surface-2)";
+                  }
                 }}
                 onMouseLeave={(e) => {
-                  e.currentTarget.style.background = "transparent";
+                  if (!isPicked) {
+                    (e.currentTarget as HTMLDivElement).style.background =
+                      "transparent";
+                  }
                 }}
               >
-                <SourceIcon type={source.type} size={18} />
+                {isReady ? (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      togglePicked(source.id);
+                    }}
+                    aria-label={isPicked ? "deselect" : "select"}
+                    style={{
+                      width: 18,
+                      height: 18,
+                      borderRadius: 4,
+                      border:
+                        "1.5px solid " +
+                        (isPicked ? "var(--accent)" : "var(--border-strong)"),
+                      background: isPicked ? "var(--accent)" : "transparent",
+                      color: "white",
+                      cursor: "pointer",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    {isPicked ? <IcCheck size={12} /> : null}
+                  </button>
+                ) : (
+                  <SourceIcon type={source.type} size={18} />
+                )}
                 <div style={{ minWidth: 0 }}>
                   <div
                     className="serif"
@@ -332,10 +425,29 @@ export default function SourcesPage() {
                 >
                   {source.course_count}×
                 </span>
-                <span className="btn btn-ghost btn-icon btn-sm" aria-hidden>
-                  <IcMore size={14} />
-                </span>
-              </button>
+                {isReady ? (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    style={{ color: "var(--accent)" }}
+                    title={t("sources.rowGenerate")}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      sessionStorage.setItem(
+                        "pendingGenerateSources",
+                        JSON.stringify([source.id]),
+                      );
+                      router.push("/generate");
+                    }}
+                  >
+                    <IcSparkle size={14} />
+                  </button>
+                ) : (
+                  <span className="btn btn-ghost btn-icon btn-sm" aria-hidden>
+                    <IcMore size={14} />
+                  </span>
+                )}
+              </div>
             );
           })}
         </div>

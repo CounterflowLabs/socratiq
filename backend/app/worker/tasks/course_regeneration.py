@@ -58,9 +58,31 @@ async def _regenerate_course_async(
     user_id: str,
     resources,
 ) -> dict:
+    from app.services.source_tasks import TaskCancelledError, is_cancel_requested
+
     parent_uuid = UUID(parent_course_id)
     user_uuid = UUID(user_id)
     directive = user_directive.strip()
+
+    # Cooperative cancel: poll the first linked source's
+    # ``course_regeneration`` row for the flag at every chunk break point.
+    # The cancel endpoint sets cancel_requested on the matched row. Anchor
+    # is resolved once source_ids is known; we hand the closure a mutable
+    # 1-slot holder so it picks up the assignment later in this function.
+    anchor_holder: list[UUID] = []
+
+    async def _check_cancel():
+        if not anchor_holder:
+            return
+        async with resources.session_factory() as poll_db:
+            if await is_cancel_requested(
+                poll_db,
+                source_id=anchor_holder[0],
+                task_type="course_regeneration",
+            ):
+                raise TaskCancelledError(
+                    f"course_regeneration cancelled for {parent_course_id}"
+                )
 
     try:
         async with resources.session_factory() as db:
@@ -78,6 +100,7 @@ async def _regenerate_course_async(
                 raise ValueError(
                     f"Course {parent_course_id} has no linked sources to regenerate"
                 )
+            anchor_holder.append(source_ids[0])
 
             for sid in source_ids:
                 await mark_source_task(
@@ -103,6 +126,7 @@ async def _regenerate_course_async(
                 user_id=user_uuid,
                 skip_ready_check=True,
                 user_directive=directive,
+                cancel_check=_check_cancel,
             )
 
             new_course.parent_id = parent_uuid
@@ -138,6 +162,32 @@ async def _regenerate_course_async(
                 "parent_course_id": parent_course_id,
                 "status": "success",
             }
+    except TaskCancelledError as exc:
+        logger.info(
+            "Course regeneration cancelled for %s: %s", parent_course_id, exc
+        )
+        try:
+            async with resources.session_factory() as db:
+                cs_rows2 = (
+                    await db.execute(
+                        select(CourseSource).where(CourseSource.course_id == parent_uuid)
+                    )
+                ).scalars().all()
+                for cs in cs_rows2:
+                    await mark_source_task(
+                        db,
+                        source_id=cs.source_id,
+                        task_type="course_regeneration",
+                        status="cancelled",
+                        stage="cancelled",
+                    )
+                await db.commit()
+        except Exception:
+            logger.warning("Failed to record regeneration cancel marker", exc_info=True)
+        return {
+            "parent_course_id": parent_course_id,
+            "status": "cancelled",
+        }
     except Exception as exc:
         logger.error(
             "Course regeneration failed for %s: %s",

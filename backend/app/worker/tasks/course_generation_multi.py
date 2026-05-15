@@ -116,10 +116,27 @@ async def _generate_multi_async(
     from app.db.models.source import Source
     from app.services.course_generator import CourseGenerator
     from app.services.profile import load_profile
+    from app.services.source_tasks import (
+        TaskCancelledError,
+        is_cancel_requested,
+        mark_source_task,
+    )
 
     sids = [UUID(s) for s in source_ids]
     anchor = sids[0]
     uid = UUID(user_id) if user_id else None
+
+    # Cooperative cancel: the anchor source_tasks row carries the
+    # cancel_requested flag for the whole cohort; we poll it from a
+    # short-lived session at each chunk-level break point.
+    async def _check_cancel():
+        async with resources.session_factory() as poll_db:
+            if await is_cancel_requested(
+                poll_db, source_id=anchor, task_type="course_generation"
+            ):
+                raise TaskCancelledError(
+                    f"course_generation cancelled for sources {source_ids}"
+                )
 
     try:
         async with resources.session_factory() as db:
@@ -172,6 +189,7 @@ async def _generate_multi_async(
                 target_language=target_language,
                 user_directive=directive,
                 skip_ready_check=True,
+                cancel_check=_check_cancel,
             )
 
             for sid in sids:
@@ -197,6 +215,19 @@ async def _generate_multi_async(
                 "title": title,
                 "status": "ready",
             }
+    except TaskCancelledError as exc:
+        logger.info("Multi-source generation cancelled: %s", exc)
+        async with resources.session_factory() as db:
+            for sid in sids:
+                await mark_source_task(
+                    db,
+                    source_id=sid,
+                    task_type="course_generation",
+                    status="cancelled",
+                    stage="cancelled",
+                )
+            await db.commit()
+        return {"source_ids": source_ids, "status": "cancelled"}
     except Exception as exc:
         async with resources.session_factory() as db:
             for sid in sids:

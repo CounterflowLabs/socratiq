@@ -16,6 +16,7 @@ import asyncio
 import logging
 from collections import defaultdict
 from pathlib import Path
+from typing import Awaitable, Callable
 from uuid import UUID
 
 from sqlalchemy import select
@@ -66,8 +67,15 @@ class CourseGenerator:
         user_id: UUID | None = None,
         skip_ready_check: bool = False,
         user_directive: str = "",
+        cancel_check: "Callable[[], Awaitable[None]] | None" = None,
     ) -> Course:
-        """Generate a course from one or more ingested sources."""
+        """Generate a course from one or more ingested sources.
+
+        ``cancel_check``: optional async callable invoked at chunk-level
+        break points. If it raises ``TaskCancelledError`` the generation
+        bails out cooperatively. The Celery wrapper supplies a callback
+        that polls the ``source_tasks.cancel_requested`` flag.
+        """
         # 1. Validate sources
         sources: list[Source] = []
         for sid in source_ids:
@@ -123,6 +131,8 @@ class CourseGenerator:
 
         per_source_assets: dict[UUID, _SourceAssets] = {}
         for source in sources:
+            if cancel_check is not None:
+                await cancel_check()
             assets = await self._generate_assets_for_source(
                 source=source,
                 chunks=chunks_by_source[source.id],
@@ -131,6 +141,7 @@ class CourseGenerator:
                 sem=sem,
                 target_language=target_language,
                 user_directive=user_directive,
+                cancel_check=cancel_check,
             )
             per_source_assets[source.id] = assets
 
@@ -170,6 +181,7 @@ class CourseGenerator:
         sem: asyncio.Semaphore,
         target_language: str,
         user_directive: str,
+        cancel_check: Callable[[], Awaitable[None]] | None = None,
     ) -> "_SourceAssets":
         """Plan + generate lessons/labs/graphs for one source, in parallel per page."""
         smeta = source.metadata_ or {}
@@ -206,6 +218,8 @@ class CourseGenerator:
         if per_chunk_mode:
             async def _gen_one_chunk_lesson(chunk: ContentChunkModel):
                 async with sem:
+                    if cancel_check is not None:
+                        await cancel_check()
                     cmeta = chunk.metadata_ or {}
                     chunk_title = (
                         cmeta.get("topic")
@@ -239,6 +253,8 @@ class CourseGenerator:
             # Run lesson generation in parallel across pages
             async def _gen_one_lesson(page_idx: int, page_chunks: list[ContentChunkModel]):
                 async with sem:
+                    if cancel_check is not None:
+                        await cancel_check()
                     first_meta = page_chunks[0].metadata_ or {}
                     page_title = (
                         first_meta.get("page_title") or source.title or "Untitled"

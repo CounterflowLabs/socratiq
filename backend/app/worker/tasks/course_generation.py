@@ -53,9 +53,22 @@ async def _generate_course_async(
     from app.db.models.source import Source
     from app.db.models.source_task import SourceTask
     from app.services.course_generator import CourseGenerator
+    from app.services.source_tasks import (
+        TaskCancelledError,
+        is_cancel_requested,
+    )
 
     sid = UUID(source_id)
     uid = UUID(user_id) if user_id else None
+
+    async def _check_cancel():
+        async with resources.session_factory() as poll_db:
+            if await is_cancel_requested(
+                poll_db, source_id=sid, task_type="course_generation"
+            ):
+                raise TaskCancelledError(
+                    f"course_generation cancelled for source {source_id}"
+                )
 
     try:
         async with resources.session_factory() as db:
@@ -120,6 +133,7 @@ async def _generate_course_async(
                 user_id=uid,
                 skip_ready_check=True,
                 target_language=target_language,
+                cancel_check=_check_cancel,
             )
 
             sections = (
@@ -158,6 +172,18 @@ async def _generate_course_async(
                 "labs_created": len(labs),
                 "status": "ready",
             }
+    except TaskCancelledError as exc:
+        logger.info("Course generation cancelled for source %s: %s", source_id, exc)
+        async with resources.session_factory() as db:
+            await mark_source_task(
+                db,
+                source_id=sid,
+                task_type="course_generation",
+                status="cancelled",
+                stage="cancelled",
+            )
+            await db.commit()
+        return {"source_id": source_id, "status": "cancelled"}
     except Exception as exc:
         async with resources.session_factory() as db:
             await mark_source_task(

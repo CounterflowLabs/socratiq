@@ -65,6 +65,13 @@ def build_directive_from_config(config: dict[str, Any]) -> str:
         excluded.append("复习卡")
     if excluded:
         parts.append("不要包含：" + "、".join(excluded) + "。")
+    weights = config.get("source_weights") or {}
+    emphasized = [sid[:8] for sid, w in weights.items() if w and w > 1]
+    deemphasized = [sid[:8] for sid, w in weights.items() if w is not None and w < 1]
+    if emphasized:
+        parts.append("更侧重的资料：" + "、".join(emphasized) + "。")
+    if deemphasized:
+        parts.append("淡化的资料：" + "、".join(deemphasized) + "。")
     return "\n".join(parts)
 
 

@@ -29,6 +29,11 @@ class CourseGenerateRequest(BaseModel):
     tier: Literal["fast", "smart"] = "smart"
     language: Literal["source", "zh", "en"] = "source"
     includes: GenerateIncludes = Field(default_factory=GenerateIncludes)
+    # PRD §10 v2 — per-source weight (0..3, default 1) so the user can
+    # emphasize one source over the others during multi-source
+    # synthesis. The chunk-weighting algorithm consumes this from
+    # ``task.metadata_.config.source_weights``.
+    source_weights: dict[uuid.UUID, float] | None = None
 
 
 class CourseGenerateResponse(BaseModel):

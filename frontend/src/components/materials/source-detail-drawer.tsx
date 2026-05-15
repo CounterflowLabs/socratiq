@@ -14,7 +14,13 @@ import {
 import {
   deleteSource,
   generateCourseForSource,
+  getSourceProgress,
+  listSourceChunks,
+  listSourceCitations,
   retrySource,
+  type SourceCitationCourse,
+  type SourceChunkBrief,
+  type SourceProgressResponse,
   type SourceResponse,
   type SourceTaskSummary,
 } from "@/lib/api";
@@ -259,6 +265,11 @@ export default function SourceDetailDrawer({
                 </div>
               </dl>
             </section>
+
+            {/* PRD §11 Phase E — lazy-loaded chunks / citations / history. */}
+            {open && source.id ? <ChunksSection sourceId={source.id} /> : null}
+            {open && source.id ? <CitationsSection sourceId={source.id} /> : null}
+            {open && source.id ? <HistorySection sourceId={source.id} /> : null}
           </div>
 
           <div className="border-t border-gray-200 bg-white p-5 space-y-3">
@@ -382,5 +393,198 @@ export default function SourceDetailDrawer({
         </div>
       </aside>
     </>
+  );
+}
+
+/* PRD §11 Phase E — Chunks tab content. Lazy-loads on mount, paginates
+   client-side with a "show more" button. Embeddings deliberately
+   omitted (they bloat the wire by ~3KB per chunk). */
+function ChunksSection({ sourceId }: { sourceId: string }) {
+  const [data, setData] = useState<{
+    items: SourceChunkBrief[];
+    total: number;
+  } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [skip, setSkip] = useState(0);
+  const PAGE = 5;
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    listSourceChunks(sourceId, { skip: 0, limit: PAGE })
+      .then((res) => {
+        if (cancelled) return;
+        setData({ items: res.items, total: res.total });
+        setSkip(res.items.length);
+      })
+      .catch(() => {
+        if (!cancelled) setData({ items: [], total: 0 });
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sourceId]);
+
+  const loadMore = async () => {
+    setLoading(true);
+    const res = await listSourceChunks(sourceId, { skip, limit: PAGE });
+    setData((prev) =>
+      prev ? { items: [...prev.items, ...res.items], total: res.total } : { items: res.items, total: res.total },
+    );
+    setSkip((s) => s + res.items.length);
+    setLoading(false);
+  };
+
+  return (
+    <section>
+      <h3 className="text-sm font-semibold text-gray-900">
+        切片预览
+        {data ? <span className="ml-2 text-xs text-gray-400">{data.total}</span> : null}
+      </h3>
+      <div className="mt-3 space-y-2">
+        {data?.items.length === 0 && !loading ? (
+          <p className="text-xs text-gray-500">暂无切片</p>
+        ) : null}
+        {data?.items.map((c, idx) => (
+          <div
+            key={c.id}
+            className="rounded-xl border border-gray-200 bg-white p-3 text-xs"
+          >
+            <div className="mb-1 flex items-center justify-between text-[10px] text-gray-400">
+              <span className="mono">#{idx + 1}</span>
+              <span className="mono">{c.length} chars</span>
+            </div>
+            <p className="line-clamp-3 text-gray-700">{c.text}</p>
+          </div>
+        ))}
+        {data && skip < data.total ? (
+          <button
+            type="button"
+            className="text-xs text-blue-600 hover:underline disabled:opacity-50"
+            disabled={loading}
+            onClick={loadMore}
+          >
+            {loading ? "加载中…" : `继续加载 (${data.total - skip} 余)`}
+          </button>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+/* Citations — which courses & sections reference this source. */
+function CitationsSection({ sourceId }: { sourceId: string }) {
+  const [data, setData] = useState<{
+    items: SourceCitationCourse[];
+    total: number;
+  } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    listSourceCitations(sourceId)
+      .then((res) => {
+        if (!cancelled) setData(res);
+      })
+      .catch(() => {
+        if (!cancelled) setData({ items: [], total: 0 });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sourceId]);
+  if (!data) return null;
+  if (data.items.length === 0) return null;
+  return (
+    <section>
+      <h3 className="text-sm font-semibold text-gray-900">
+        被引用
+        <span className="ml-2 text-xs text-gray-400">{data.total}</span>
+      </h3>
+      <ul className="mt-3 space-y-2">
+        {data.items.map((course) => (
+          <li
+            key={course.course_id}
+            className="rounded-xl border border-gray-200 bg-white p-3"
+          >
+            <Link
+              href={`/learn?courseId=${course.course_id}`}
+              className="text-sm font-medium text-blue-600 hover:underline"
+            >
+              {course.course_title}
+            </Link>
+            <ul className="mt-2 space-y-1 text-xs text-gray-500">
+              {course.sections.slice(0, 4).map((s) => (
+                <li key={s.section_id}>
+                  · {s.title}
+                </li>
+              ))}
+              {course.sections.length > 4 ? (
+                <li>· …+{course.sections.length - 4}</li>
+              ) : null}
+            </ul>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/* History — every recorded task row for this source, newest first. */
+function HistorySection({ sourceId }: { sourceId: string }) {
+  const [data, setData] = useState<SourceProgressResponse | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    getSourceProgress(sourceId)
+      .then((res) => {
+        if (!cancelled) setData(res);
+      })
+      .catch(() => {
+        if (!cancelled) setData(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sourceId]);
+  if (!data || data.tasks.length === 0) return null;
+  return (
+    <section>
+      <h3 className="text-sm font-semibold text-gray-900">
+        历史 <span className="ml-2 text-xs text-gray-400">{data.tasks.length}</span>
+      </h3>
+      <ul className="mt-3 space-y-2">
+        {data.tasks.map((t) => (
+          <li
+            key={`${t.task_type}-${t.celery_task_id ?? t.created_at}`}
+            className="rounded-xl border border-gray-200 bg-white p-3 text-xs"
+          >
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="font-medium text-gray-700">{t.task_type}</span>
+              <span
+                className={
+                  t.status === "success"
+                    ? "text-emerald-600"
+                    : t.status === "failure"
+                      ? "text-red-600"
+                      : "text-gray-500"
+                }
+              >
+                {t.status}
+              </span>
+            </div>
+            {t.stage ? (
+              <p className="mt-1 text-[11px] text-gray-500 mono">{t.stage}</p>
+            ) : null}
+            {t.error_summary ? (
+              <p className="mt-1 text-[11px] text-red-500">{t.error_summary}</p>
+            ) : null}
+            <p className="mt-1 text-[10px] text-gray-400 mono">
+              {new Date(t.created_at).toLocaleString("zh-CN")}
+            </p>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }

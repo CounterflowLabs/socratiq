@@ -120,15 +120,25 @@ export interface SourceResponse {
   updated_at: string;
 }
 
+export interface IngestOptions {
+  chunk_size?: 256 | 512 | 1024;
+  transcript?: "reuse" | "force_whisper";
+  ocr?: "auto" | "force" | "off";
+}
+
 export async function createSourceFromURL(
   url: string,
   sourceType?: string,
-  title?: string
+  title?: string,
+  ingestOptions?: IngestOptions,
 ): Promise<SourceResponse> {
   const form = new FormData();
   form.append("url", url);
   if (sourceType) form.append("source_type", sourceType);
   if (title) form.append("title", title);
+  if (ingestOptions && Object.keys(ingestOptions).length > 0) {
+    form.append("ingest_options_json", JSON.stringify(ingestOptions));
+  }
 
   const res = await apiFetch(`${API_BASE}/sources`, {
     method: "POST",
@@ -140,11 +150,15 @@ export async function createSourceFromURL(
 
 export async function createSourceFromFile(
   file: File,
-  title?: string
+  title?: string,
+  ingestOptions?: IngestOptions,
 ): Promise<SourceResponse> {
   const form = new FormData();
   form.append("file", file);
   if (title) form.append("title", title);
+  if (ingestOptions && Object.keys(ingestOptions).length > 0) {
+    form.append("ingest_options_json", JSON.stringify(ingestOptions));
+  }
 
   const res = await apiFetch(`${API_BASE}/sources`, {
     method: "POST",
@@ -290,6 +304,10 @@ export interface GenerateCourseConfig {
   tier?: "fast" | "smart";
   language?: "source" | "zh" | "en";
   includes?: GenerateIncludes;
+  /** PRD §10 — per-source weight overrides keyed by source_id.
+   *  Absent entries default to 1.0. Persists in the task metadata for
+   *  weighted-chunk synthesis when it lands. */
+  source_weights?: Record<string, number>;
 }
 
 export interface GenerateCourseResponse {
@@ -557,6 +575,7 @@ export interface TaskListItem {
   status: TaskStatusUi;
   stage?: string | null;
   error?: string | null;
+  eta_seconds?: number | null;
   started_at: string;
   updated_at: string;
   finished_at?: string | null;
@@ -608,6 +627,43 @@ export async function retryTask(
   const res = await apiFetch(`${API_BASE}/tasks/${taskId}/retry`, {
     method: "POST",
   });
+  if (!res.ok) throw await responseError(res);
+  return res.json();
+}
+
+export interface SourceChunkBrief {
+  id: string;
+  text: string;
+  length: number;
+  section_id: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export async function listSourceChunks(
+  sourceId: string,
+  params: { skip?: number; limit?: number } = {},
+): Promise<{ items: SourceChunkBrief[]; total: number; skip: number; limit: number }> {
+  const qs = new URLSearchParams();
+  if (params.skip !== undefined) qs.set("skip", String(params.skip));
+  if (params.limit !== undefined) qs.set("limit", String(params.limit));
+  const res = await apiFetch(
+    `${API_BASE}/sources/${sourceId}/chunks${qs.toString() ? `?${qs.toString()}` : ""}`,
+  );
+  if (!res.ok) throw await responseError(res);
+  return res.json();
+}
+
+export interface SourceCitationCourse {
+  course_id: string;
+  course_title: string;
+  sections: { section_id: string; title: string; order_index: number | null }[];
+}
+
+export async function listSourceCitations(
+  sourceId: string,
+): Promise<{ items: SourceCitationCourse[]; total: number }> {
+  const res = await apiFetch(`${API_BASE}/sources/${sourceId}/citations`);
   if (!res.ok) throw await responseError(res);
   return res.json();
 }

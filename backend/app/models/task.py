@@ -30,6 +30,7 @@ class TaskListItem(BaseModel):
     status: TaskStatusUi
     stage: str | None = None
     error: str | None = None
+    eta_seconds: int | None = None
     started_at: datetime
     updated_at: datetime
     finished_at: datetime | None = None

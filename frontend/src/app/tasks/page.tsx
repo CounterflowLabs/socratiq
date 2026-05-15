@@ -344,12 +344,17 @@ function TaskRow({
           display: "inline-flex",
           flexDirection: "column",
           gap: 4,
-          minWidth: 140,
+          minWidth: 160,
         }}
       >
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
           <StatusDot status={task.status} />
           {task.stage ?? task.status}
+          {task.eta_seconds != null && task.status === "running" ? (
+            <span style={{ color: "var(--ink-4)" }}>
+              · ~{formatEta(task.eta_seconds)}
+            </span>
+          ) : null}
         </span>
         {task.status === "running" ? (
           <StageProgressBar type={task.type} stage={task.stage} />
@@ -504,6 +509,12 @@ function StatusDot({ status }: { status: TaskStatusUi }) {
       }}
     />
   );
+}
+
+function formatEta(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}min`;
+  return `${Math.round(seconds / 3600)}h`;
 }
 
 function relativeTime(iso: string): string {

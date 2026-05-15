@@ -137,11 +137,28 @@ async def list_tasks(
         )
     ).all()
 
+    # ETA: estimate remaining time from the median duration of recent
+    # successful tasks of the same type. Cheap one-shot query — capped by
+    # the page size, so it never explodes when the queue is huge.
+    eta_for_type = await _eta_seconds_by_type(db)
+
     items: list[TaskListItem] = []
     for task, source_title, source_type, course_id, course_title in page_rows:
         ui_type = map_task_type(task.task_type)
         if ui_type is None:
             continue
+        eta_seconds = None
+        if task.status in {"running", "progress", "pending"}:
+            full = eta_for_type.get(task.task_type)
+            if full is not None:
+                # Subtract however long the task has already been running.
+                from datetime import datetime, timezone
+
+                running_for = (
+                    datetime.now(timezone.utc)
+                    - task.created_at.replace(tzinfo=timezone.utc)
+                ).total_seconds()
+                eta_seconds = max(0, int(full - running_for))
         items.append(
             TaskListItem(
                 id=task.id,
@@ -150,6 +167,7 @@ async def list_tasks(
                 status=map_task_status(task.status),
                 stage=task.stage,
                 error=task.error_summary,
+                eta_seconds=eta_seconds,
                 started_at=task.created_at,
                 updated_at=task.updated_at,
                 finished_at=task.updated_at if task.status in {"success", "failure"} else None,
@@ -293,6 +311,35 @@ async def retry_task(
         return {"task_id": new_task_id, "status": "dispatched"}
 
     raise HTTPException(400, f"Task type {task.task_type!r} cannot be retried")
+
+
+async def _eta_seconds_by_type(db: AsyncSession) -> dict[str, float]:
+    """Median wall-clock for recent successful runs per task_type.
+
+    Cheap heuristic — sampled from the last 200 success rows so the page
+    cost stays flat. Returns ``{task_type: median_seconds}``.
+    """
+    from sqlalchemy import desc
+
+    rows = (
+        await db.execute(
+            select(SourceTask.task_type, SourceTask.created_at, SourceTask.updated_at)
+            .where(SourceTask.status == "success")
+            .order_by(desc(SourceTask.updated_at))
+            .limit(200)
+        )
+    ).all()
+    by_type: dict[str, list[float]] = {}
+    for task_type, created, updated in rows:
+        secs = (updated - created).total_seconds()
+        if secs <= 0:
+            continue
+        by_type.setdefault(task_type, []).append(secs)
+    return {
+        t: sorted(s)[len(s) // 2]
+        for t, s in by_type.items()
+        if s
+    }
 
 
 async def _find_task_for_user(

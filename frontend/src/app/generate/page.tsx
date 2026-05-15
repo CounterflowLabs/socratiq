@@ -44,12 +44,28 @@ export default function GeneratePage() {
 
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [picked, setPicked] = useState<Set<string>>(new Set());
+  // PRD §10 v2 — per-source weight (1 = baseline, ± shifts emphasis when
+  // the backend later weights chunks). Persisted only inside the task
+  // metadata for now so the weighting algorithm can land separately.
+  const [weights, setWeights] = useState<Record<string, number>>({});
   const [cfg, setCfg] = useState<GenConfig>(DEFAULT_CFG);
   const [sources, setSources] = useState<SourceResponse[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dispatched, setDispatched] = useState<
     { taskId: string; sourceIds: string[] } | null
   >(null);
+
+  const adjustWeight = (id: string, delta: number) =>
+    setWeights((prev) => {
+      const current = prev[id] ?? 1;
+      const next = Math.max(0, Math.min(3, current + delta));
+      if (next === 1) {
+        const copy = { ...prev };
+        delete copy[id];
+        return copy;
+      }
+      return { ...prev, [id]: next };
+    });
 
   // Initial source list. Honor any pre-pick passed via sessionStorage from
   // the Sources page "Generate from selection" CTA.
@@ -105,6 +121,12 @@ export default function GeneratePage() {
         tier: cfg.tier,
         language: cfg.lang,
         includes: cfg.includes,
+        source_weights: pickedList
+          .filter((s) => (weights[s.id] ?? 1) !== 1)
+          .reduce<Record<string, number>>((acc, s) => {
+            acc[s.id] = weights[s.id];
+            return acc;
+          }, {}),
       });
       setDispatched({
         taskId: res.task_id,
@@ -149,6 +171,8 @@ export default function GeneratePage() {
           ready={ready}
           picked={picked}
           toggle={toggle}
+          weights={weights}
+          adjustWeight={adjustWeight}
           pendingCount={pendingCount}
           loaded={sources !== null}
           onNext={() => setStep(2)}
@@ -242,6 +266,8 @@ function StepPick({
   ready,
   picked,
   toggle,
+  weights,
+  adjustWeight,
   pendingCount,
   loaded,
   onNext,
@@ -249,6 +275,8 @@ function StepPick({
   ready: SourceResponse[];
   picked: Set<string>;
   toggle: (id: string) => void;
+  weights: Record<string, number>;
+  adjustWeight: (id: string, delta: number) => void;
   pendingCount: number;
   loaded: boolean;
   onNext: () => void;
@@ -297,6 +325,8 @@ function StepPick({
               key={s.id}
               source={s}
               picked={picked.has(s.id)}
+              weight={weights[s.id] ?? 1}
+              onAdjustWeight={(delta) => adjustWeight(s.id, delta)}
               isLast={idx === ready.length - 1}
               onToggle={() => toggle(s.id)}
             />
@@ -328,18 +358,29 @@ function StepPick({
 function SourcePickRow({
   source,
   picked,
+  weight,
+  onAdjustWeight,
   isLast,
   onToggle,
 }: {
   source: SourceResponse;
   picked: boolean;
+  weight: number;
+  onAdjustWeight: (delta: number) => void;
   isLast: boolean;
   onToggle: () => void;
 }) {
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onToggle}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onToggle();
+        }
+      }}
       style={{
         display: "flex",
         alignItems: "center",
@@ -385,7 +426,75 @@ function SourcePickRow({
         </span>
         <span style={{ fontSize: 11, color: "var(--ink-3)" }}>{source.type}</span>
       </span>
-    </button>
+      {picked ? <WeightChip weight={weight} onAdjust={onAdjustWeight} /> : null}
+    </div>
+  );
+}
+
+function WeightChip({
+  weight,
+  onAdjust,
+}: {
+  weight: number;
+  onAdjust: (delta: number) => void;
+}) {
+  const isDefault = weight === 1;
+  return (
+    <span
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        background: isDefault ? "var(--surface-2)" : "var(--accent-soft)",
+        color: isDefault ? "var(--ink-2)" : "var(--accent-ink)",
+        padding: "2px 4px",
+        borderRadius: 999,
+        fontSize: 11,
+        flexShrink: 0,
+      }}
+      title="Generate-time weight for this source"
+    >
+      <button
+        type="button"
+        onClick={() => onAdjust(-0.5)}
+        disabled={weight <= 0}
+        aria-label="decrease weight"
+        style={{
+          width: 18,
+          height: 18,
+          borderRadius: "50%",
+          border: "none",
+          background: "transparent",
+          color: "inherit",
+          cursor: weight <= 0 ? "default" : "pointer",
+          opacity: weight <= 0 ? 0.4 : 1,
+        }}
+      >
+        −
+      </button>
+      <span className="mono num" style={{ fontVariantNumeric: "tabular-nums", minWidth: 18, textAlign: "center" }}>
+        ×{weight.toFixed(1)}
+      </span>
+      <button
+        type="button"
+        onClick={() => onAdjust(0.5)}
+        disabled={weight >= 3}
+        aria-label="increase weight"
+        style={{
+          width: 18,
+          height: 18,
+          borderRadius: "50%",
+          border: "none",
+          background: "transparent",
+          color: "inherit",
+          cursor: weight >= 3 ? "default" : "pointer",
+          opacity: weight >= 3 ? 0.4 : 1,
+        }}
+      >
+        +
+      </button>
+    </span>
   );
 }
 

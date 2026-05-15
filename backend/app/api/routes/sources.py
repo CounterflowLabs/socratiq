@@ -11,7 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_local_user
 from app.config import get_settings
-from app.db.models.course import Course, CourseSource
+from app.db.models.content_chunk import ContentChunk as ContentChunkModel
+from app.db.models.course import Course, CourseSource, Section
 from app.db.models.source import Source
 from app.db.models.source_task import SourceTask
 from app.db.models.user import User
@@ -50,6 +51,7 @@ async def create_source(
     url: str | None = Form(None),
     source_type: str | None = Form(None),
     title: str | None = Form(None),
+    ingest_options_json: str | None = Form(None),
     file: UploadFile | None = File(None),
 ) -> SourceResponse:
     """Submit a URL or upload a file for content ingestion."""
@@ -57,6 +59,19 @@ async def create_source(
         raise HTTPException(400, "Either 'url' or 'file' must be provided")
 
     metadata: dict = {}
+    # Optional per-source ingest overrides (PRD §5.2): chunk size,
+    # transcript source, OCR strategy. The pipeline reads these from
+    # metadata.ingest_options when they're present; absence falls back
+    # to global defaults so existing callers stay unaffected.
+    if ingest_options_json:
+        try:
+            import json as _json
+
+            opts = _json.loads(ingest_options_json)
+            if isinstance(opts, dict):
+                metadata["ingest_options"] = opts
+        except Exception:
+            raise HTTPException(400, "ingest_options_json is not valid JSON")
     file_content: bytes | None = None
 
     if file:
@@ -392,10 +407,23 @@ async def retry_source(
     if not source:
         raise HTTPException(404, f"Source {source_id} not found")
 
-    if source.status not in {"cancelled", "error", "pending"}:
+    # PRD §3 — stale sources are technically ``ready`` but the embed model
+    # they were built against is no longer routed. Allow re-processing
+    # those without needing the user to mark them as errored first.
+    allow_retry = {"cancelled", "error", "pending"}
+    if source.status == "ready":
+        current_embed = await _current_embedding_model_name(db)
+        stored_embed = None
+        if isinstance(source.metadata_, dict):
+            stored_embed = source.metadata_.get("embed_model") or source.metadata_.get(
+                "embedding_model"
+            )
+        if stored_embed and current_embed and stored_embed != current_embed:
+            allow_retry = allow_retry | {"ready"}
+    if source.status not in allow_retry:
         raise HTTPException(
             409,
-            f"Source is {source.status!r}; only cancelled/error/pending sources can be retried",
+            f"Source is {source.status!r}; only stale / cancelled / error / pending sources can be retried",
         )
 
     # If retrying a stuck pending, revoke any in-flight celery task first so
@@ -654,6 +682,103 @@ async def get_source_progress(
         course_id=course_id,
         tasks=tasks,
     )
+
+
+@router.get("/{source_id}/chunks")
+async def list_source_chunks(
+    source_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_local_user)],
+    skip: int = 0,
+    limit: int = 50,
+) -> dict:
+    """List the content chunks produced for a source (PRD §11 Phase E).
+
+    Powers the Library detail drawer's Chunks tab — gives the user
+    visibility into what the ingestion pipeline actually produced for
+    this source, without exposing embeddings.
+    """
+    if not (await _user_owns_source(db, source_id, user.id)):
+        raise HTTPException(404, f"Source {source_id} not found")
+
+    total = (
+        await db.execute(
+            select(func.count())
+            .select_from(ContentChunkModel)
+            .where(ContentChunkModel.source_id == source_id)
+        )
+    ).scalar_one()
+    rows = (
+        await db.execute(
+            select(ContentChunkModel)
+            .where(ContentChunkModel.source_id == source_id)
+            .order_by(ContentChunkModel.created_at)
+            .offset(skip)
+            .limit(limit)
+        )
+    ).scalars().all()
+    items = [
+        {
+            "id": str(c.id),
+            "text": c.text[:500] + ("…" if len(c.text) > 500 else ""),
+            "length": len(c.text),
+            "section_id": str(c.section_id) if c.section_id else None,
+            "metadata": c.metadata_ or {},
+            "created_at": c.created_at.isoformat(),
+        }
+        for c in rows
+    ]
+    return {"items": items, "total": total, "skip": skip, "limit": limit}
+
+
+@router.get("/{source_id}/citations")
+async def list_source_citations(
+    source_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_local_user)],
+) -> dict:
+    """List the courses + sections that cite this source.
+
+    PRD §11 Phase E — used by the Library detail drawer's Citations
+    tab. A section "cites" the source if its ``source_id`` points at
+    the requested source (the legacy model — block-level citation
+    markers will land alongside the §10 weighted-chunk work).
+    """
+    if not (await _user_owns_source(db, source_id, user.id)):
+        raise HTTPException(404, f"Source {source_id} not found")
+
+    rows = (
+        await db.execute(
+            select(Section, Course.id, Course.title)
+            .join(Course, Course.id == Section.course_id)
+            .where(Section.source_id == source_id, Course.created_by == user.id)
+            .order_by(Course.created_at.desc(), Section.order_index)
+        )
+    ).all()
+    grouped: dict[str, dict] = {}
+    for section, course_id, course_title in rows:
+        cid = str(course_id)
+        course_bucket = grouped.setdefault(
+            cid, {"course_id": cid, "course_title": course_title, "sections": []}
+        )
+        course_bucket["sections"].append({
+            "section_id": str(section.id),
+            "title": section.title,
+            "order_index": section.order_index,
+        })
+    return {"items": list(grouped.values()), "total": sum(len(b["sections"]) for b in grouped.values())}
+
+
+async def _user_owns_source(db: AsyncSession, source_id: uuid.UUID, user_id: uuid.UUID) -> bool:
+    return (
+        await db.execute(
+            select(Source.id).where(
+                Source.id == source_id,
+                Source.created_by == user_id,
+                Source.status != "deleted",
+            )
+        )
+    ).scalar_one_or_none() is not None
 
 
 @router.get("/{source_id}/file")

@@ -13,10 +13,12 @@ import {
   IcLoader,
   IcMore,
   IcPlus,
+  IcRegen,
   IcSearch,
   IcSparkle,
   SourceIcon,
 } from "@/components/icons";
+import { retrySource } from "@/lib/api";
 import { Eyebrow } from "@/components/ui/eyebrow";
 import { PageHeader } from "@/components/ui/page-header";
 import { listSources, type SourceResponse } from "@/lib/api";
@@ -417,28 +419,20 @@ export default function SourcesPage() {
                 >
                   {source.course_count}×
                 </span>
-                {isReady ? (
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm"
-                    style={{ color: "var(--accent)" }}
-                    title={t("sources.rowGenerate")}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      sessionStorage.setItem(
-                        "pendingGenerateSources",
-                        JSON.stringify([source.id]),
-                      );
-                      router.push("/generate");
-                    }}
-                  >
-                    <IcSparkle size={14} />
-                  </button>
-                ) : (
-                  <span className="btn btn-ghost btn-icon btn-sm" aria-hidden>
-                    <IcMore size={14} />
-                  </span>
-                )}
+                <RowAction
+                  source={source}
+                  onGenerate={() => {
+                    sessionStorage.setItem(
+                      "pendingGenerateSources",
+                      JSON.stringify([source.id]),
+                    );
+                    router.push("/generate");
+                  }}
+                  onReprocess={async () => {
+                    await retrySource(source.id);
+                    void loadSources({ background: true });
+                  }}
+                />
               </div>
             );
           })}
@@ -557,6 +551,74 @@ function EmbedChip({ embed }: { embed: import("@/lib/api").SourceEmbed | null | 
         }}
       />
       {m.label}
+    </span>
+  );
+}
+
+/* Right-most action button per row. The action depends on embed.status:
+   ready → Generate course; failed/stale → Re-process; running → spinner;
+   else → no-op. */
+function RowAction({
+  source,
+  onGenerate,
+  onReprocess,
+}: {
+  source: SourceResponse;
+  onGenerate: () => void;
+  onReprocess: () => Promise<void>;
+}) {
+  const { t } = useT();
+  const [busy, setBusy] = useState(false);
+  const status = source.embed?.status ?? "queued";
+
+  if (status === "running") {
+    return (
+      <span className="btn btn-ghost btn-icon btn-sm" aria-hidden>
+        <IcLoader size={14} className="spin" />
+      </span>
+    );
+  }
+  if (status === "ready") {
+    return (
+      <button
+        type="button"
+        className="btn btn-ghost btn-sm"
+        style={{ color: "var(--accent)" }}
+        title={t("sources.rowGenerate")}
+        onClick={(e) => {
+          e.stopPropagation();
+          onGenerate();
+        }}
+      >
+        <IcSparkle size={14} />
+      </button>
+    );
+  }
+  if (status === "failed" || status === "stale") {
+    return (
+      <button
+        type="button"
+        className="btn btn-ghost btn-sm"
+        style={{ color: status === "stale" ? "var(--warn)" : "var(--error)" }}
+        title={t("sources.rowReprocess")}
+        disabled={busy}
+        onClick={async (e) => {
+          e.stopPropagation();
+          setBusy(true);
+          try {
+            await onReprocess();
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {busy ? <IcLoader size={14} className="spin" /> : <IcRegen size={14} />}
+      </button>
+    );
+  }
+  return (
+    <span className="btn btn-ghost btn-icon btn-sm" aria-hidden>
+      <IcMore size={14} />
     </span>
   );
 }

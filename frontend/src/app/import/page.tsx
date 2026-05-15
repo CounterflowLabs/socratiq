@@ -26,6 +26,7 @@ import {
   getBilibiliStatus,
   getSourceProgress,
   retrySource,
+  type IngestOptions,
   type SourceProgressResponse,
 } from "@/lib/api";
 import { useSourcesStore, useTasksStore } from "@/lib/stores";
@@ -157,6 +158,45 @@ export default function ImportPage() {
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [dragOver, setDragOver] = useState(false);
 
+  // PRD §5.2 ingest config panel — defaults match the global pipeline.
+  // The values get serialized into ingest_options_json and stamped onto
+  // source.metadata at creation; the ingestion pipeline reads them when
+  // present, otherwise it falls back to the route-level model.
+  const [chunkSize, setChunkSize] = useState<256 | 512 | 1024>(512);
+  const [transcriptSource, setTranscriptSource] =
+    useState<"reuse" | "force_whisper">("reuse");
+  const [ocrMode, setOcrMode] = useState<"auto" | "force" | "off">("auto");
+  const [embedModelLabel, setEmbedModelLabel] = useState<string | null>(null);
+  const [showIngestPanel, setShowIngestPanel] = useState(false);
+
+  useEffect(() => {
+    void Promise.all([
+      fetch("/api/v1/model-routes").then((r) => (r.ok ? r.json() : [])),
+      fetch("/api/v1/models").then((r) => (r.ok ? r.json() : [])),
+    ])
+      .then(([routes, models]) => {
+        const route = Array.isArray(routes)
+          ? routes.find((r: { tier?: string; task_type?: string }) => (r.tier ?? r.task_type) === "embedding")
+          : null;
+        if (!route) return;
+        const model = Array.isArray(models)
+          ? models.find((m: { name: string }) => m.name === route.model_name)
+          : null;
+        setEmbedModelLabel(
+          model?.model_id ? `${model.provider_type ?? ""} · ${model.model_id}`.trim() : route.model_name,
+        );
+      })
+      .catch(() => setEmbedModelLabel(null));
+  }, []);
+
+  const buildIngestOptions = (): IngestOptions => {
+    const opts: IngestOptions = {};
+    if (chunkSize !== 512) opts.chunk_size = chunkSize;
+    if (transcriptSource !== "reuse") opts.transcript = transcriptSource;
+    if (ocrMode !== "auto") opts.ocr = ocrMode;
+    return opts;
+  };
+
   const [loading, setLoading] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -254,10 +294,11 @@ export default function ImportPage() {
 
     try {
       let source;
+      const ingestOpts = buildIngestOptions();
       if (tab === "url") {
-        source = await createSourceFromURL(url.trim());
+        source = await createSourceFromURL(url.trim(), undefined, undefined, ingestOpts);
       } else if (tab === "file" && pdfFile) {
-        source = await createSourceFromFile(pdfFile);
+        source = await createSourceFromFile(pdfFile, undefined, ingestOpts);
       } else {
         // Pasted text isn't yet supported by the backend — surface a helpful
         // hint so the user knows it's a near-term feature, not a silent fail.
@@ -494,6 +535,106 @@ export default function ImportPage() {
                     </span>
                   ))}
                 </div>
+
+                <details
+                  open={showIngestPanel}
+                  onToggle={(e) =>
+                    setShowIngestPanel((e.currentTarget as HTMLDetailsElement).open)
+                  }
+                  style={{
+                    marginTop: 18,
+                    padding: 14,
+                    borderRadius: "var(--r-lg)",
+                    border: "1px solid var(--border)",
+                    background: "var(--surface-2)",
+                  }}
+                >
+                  <summary
+                    style={{
+                      cursor: "pointer",
+                      listStyle: "none",
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      fontSize: 13,
+                      color: "var(--ink-2)",
+                      fontWeight: 500,
+                    }}
+                  >
+                    <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
+                      <IcImport size={14} />
+                      {lang === "zh" ? "处理参数" : "Ingest options"}
+                    </span>
+                    <span style={{ fontSize: 11, color: "var(--ink-3)" }}>
+                      {showIngestPanel
+                        ? lang === "zh"
+                          ? "收起"
+                          : "Collapse"
+                        : lang === "zh"
+                          ? "展开"
+                          : "Expand"}
+                    </span>
+                  </summary>
+
+                  <div
+                    style={{
+                      marginTop: 12,
+                      display: "grid",
+                      gridTemplateColumns: "1fr 1fr",
+                      gap: 14,
+                    }}
+                  >
+                    <Field
+                      label={lang === "zh" ? "向量模型（当前路由）" : "Embedding model (routed)"}
+                    >
+                      <div
+                        className="mono"
+                        style={{
+                          fontSize: 12,
+                          padding: "8px 10px",
+                          borderRadius: "var(--r)",
+                          background: "var(--surface)",
+                          color: "var(--ink-2)",
+                          border: "1px solid var(--border)",
+                        }}
+                      >
+                        {embedModelLabel ?? "—"}
+                      </div>
+                    </Field>
+                    <Field label={lang === "zh" ? "切片大小" : "Chunk size"}>
+                      <Segments<256 | 512 | 1024>
+                        value={chunkSize}
+                        options={[
+                          { v: 256, label: "256" },
+                          { v: 512, label: "512" },
+                          { v: 1024, label: "1024" },
+                        ]}
+                        onChange={setChunkSize}
+                      />
+                    </Field>
+                    <Field label={lang === "zh" ? "转录源" : "Transcript"}>
+                      <Segments<"reuse" | "force_whisper">
+                        value={transcriptSource}
+                        options={[
+                          { v: "reuse", label: lang === "zh" ? "复用已有" : "Reuse existing" },
+                          { v: "force_whisper", label: lang === "zh" ? "强制 Whisper" : "Force Whisper" },
+                        ]}
+                        onChange={setTranscriptSource}
+                      />
+                    </Field>
+                    <Field label={lang === "zh" ? "OCR 扫描件" : "OCR"}>
+                      <Segments<"auto" | "force" | "off">
+                        value={ocrMode}
+                        options={[
+                          { v: "auto", label: lang === "zh" ? "自动" : "Auto" },
+                          { v: "force", label: lang === "zh" ? "强制" : "Force" },
+                          { v: "off", label: lang === "zh" ? "关闭" : "Off" },
+                        ]}
+                        onChange={setOcrMode}
+                      />
+                    </Field>
+                  </div>
+                </details>
 
                 <div style={{ marginTop: 28 }}>
                   <Eyebrow>{t("import.sample")}</Eyebrow>
@@ -929,6 +1070,74 @@ export default function ImportPage() {
           );
         })()
       )}
+    </div>
+  );
+}
+
+function Field({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label style={{ display: "block" }}>
+      <span
+        style={{
+          display: "block",
+          fontSize: 11,
+          color: "var(--ink-3)",
+          marginBottom: 6,
+          fontWeight: 500,
+        }}
+      >
+        {label}
+      </span>
+      {children}
+    </label>
+  );
+}
+
+function Segments<V extends string | number>({
+  value,
+  options,
+  onChange,
+}: {
+  value: V;
+  options: { v: V; label: string }[];
+  onChange: (v: V) => void;
+}) {
+  return (
+    <div
+      style={{
+        display: "inline-flex",
+        background: "var(--surface)",
+        borderRadius: "var(--r)",
+        padding: 2,
+        gap: 2,
+        border: "1px solid var(--border)",
+      }}
+    >
+      {options.map((opt) => (
+        <button
+          key={String(opt.v)}
+          type="button"
+          onClick={() => onChange(opt.v)}
+          style={{
+            padding: "6px 10px",
+            borderRadius: "var(--r-sm)",
+            border: "none",
+            background: value === opt.v ? "var(--surface-2)" : "transparent",
+            color: value === opt.v ? "var(--ink)" : "var(--ink-2)",
+            cursor: "pointer",
+            fontSize: 12,
+            fontWeight: 500,
+          }}
+        >
+          {opt.label}
+        </button>
+      ))}
     </div>
   );
 }

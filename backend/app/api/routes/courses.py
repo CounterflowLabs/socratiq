@@ -187,6 +187,11 @@ async def generate_course(
         "tier": request.tier,
         "language": request.language,
         "includes": request.includes.model_dump(),
+        "source_weights": (
+            {str(k): float(v) for k, v in request.source_weights.items()}
+            if request.source_weights
+            else None
+        ),
     }
     # One source_tasks row per source so the unified Tasks queue surfaces
     # the work against every contributor. The anchor row carries the

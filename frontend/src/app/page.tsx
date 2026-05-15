@@ -20,6 +20,7 @@ import { SectionTitle } from "@/components/ui/section-title";
 import { Progress } from "@/components/ui/progress-bar";
 import {
   listCourses,
+  listTasks,
   getSetupStatus,
   getSourceProgress,
   getDueReviews,
@@ -31,6 +32,8 @@ import {
   type CourseResponse,
   type ReviewItemDetail,
   type SourceProgressResponse,
+  type TaskListItem,
+  type TaskTypeUi,
 } from "@/lib/api";
 import { useCoursesStore, useTasksStore } from "@/lib/stores";
 import { useT } from "@/lib/i18n";
@@ -510,6 +513,10 @@ export default function DashboardPage() {
         </section>
       ) : null}
 
+      {/* PRD §5.1 — two parallel rails (embed vs generate). Renders only
+          when at least one rail has live tasks. */}
+      <ProcessingRails />
+
       {/* Active processing tasks — inline, no card-with-loader */}
       {tasks.length > 0 ? (
         <section style={{ marginBottom: "var(--gap-xl)" }}>
@@ -871,5 +878,157 @@ function CourseCard({
         </span>
       </div>
     </button>
+  );
+}
+
+/* ─── ProcessingRails — PRD §5.1 ───────────────────────
+   Two parallel cards showing live ingestion and generation tasks.
+   Single source of data: GET /api/v1/tasks?status=running. */
+function ProcessingRails() {
+  const { t } = useT();
+  const [tasks, setTasks] = useState<TaskListItem[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function fetchOnce() {
+      try {
+        const [running, queued] = await Promise.all([
+          listTasks({ status: "running", limit: 20 }),
+          listTasks({ status: "queued", limit: 20 }),
+        ]);
+        if (cancelled) return;
+        setTasks([...running.items, ...queued.items]);
+      } catch {
+        if (!cancelled) setTasks([]);
+      }
+    }
+    void fetchOnce();
+    const id = setInterval(fetchOnce, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
+  const byType: Record<TaskTypeUi, TaskListItem[]> = { embed: [], generate: [] };
+  for (const tk of tasks) byType[tk.type].push(tk);
+
+  if (tasks.length === 0) return null;
+
+  return (
+    <section style={{ marginBottom: "var(--gap-xl)" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          justifyContent: "space-between",
+          marginBottom: 12,
+        }}
+      >
+        <SectionTitle>{t("common.processing")}</SectionTitle>
+        <Link href="/tasks" className="btn btn-ghost btn-sm">
+          {t("newPopover.viewTasks")} →
+        </Link>
+      </div>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+          gap: 12,
+        }}
+      >
+        <Rail
+          type="embed"
+          label={t("tasks.typeEmbed")}
+          chipClass="chip-accent"
+          tasks={byType.embed}
+        />
+        <Rail
+          type="generate"
+          label={t("tasks.typeGenerate")}
+          chipClass="chip-sage"
+          tasks={byType.generate}
+        />
+      </div>
+    </section>
+  );
+}
+
+function Rail({
+  type,
+  label,
+  chipClass,
+  tasks,
+}: {
+  type: TaskTypeUi;
+  label: string;
+  chipClass: string;
+  tasks: TaskListItem[];
+}) {
+  const { t } = useT();
+  return (
+    <div
+      className="card"
+      style={{
+        padding: 14,
+        display: "flex",
+        flexDirection: "column",
+        gap: 10,
+        minHeight: 110,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span className={`chip ${chipClass}`}>{label}</span>
+        <span
+          className="mono num"
+          style={{ fontSize: 12, color: "var(--ink-3)" }}
+        >
+          {tasks.length}
+        </span>
+      </div>
+      {tasks.length === 0 ? (
+        <Link
+          href={type === "embed" ? "/import" : "/generate"}
+          className="btn btn-ghost btn-sm"
+          style={{ marginTop: "auto", color: "var(--ink-3)" }}
+        >
+          + {type === "embed" ? t("newPopover.addSourceTitle") : t("newPopover.generateTitle")}
+        </Link>
+      ) : (
+        tasks.slice(0, 2).map((tk) => (
+          <div key={tk.id} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <span
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: "50%",
+                background: tk.status === "running" ? "var(--accent)" : "var(--ink-4)",
+                boxShadow:
+                  tk.status === "running"
+                    ? "0 0 0 3px var(--accent-soft)"
+                    : undefined,
+                flexShrink: 0,
+              }}
+            />
+            <div style={{ flex: 1, minWidth: 0, fontSize: 12 }}>
+              <div
+                className="serif"
+                style={{
+                  fontSize: 13,
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
+                {tk.course_title ?? tk.source_title ?? tk.id.slice(0, 8)}
+              </div>
+              <span className="mono" style={{ color: "var(--ink-3)" }}>
+                {tk.stage ?? tk.status}
+              </span>
+            </div>
+          </div>
+        ))
+      )}
+    </div>
   );
 }

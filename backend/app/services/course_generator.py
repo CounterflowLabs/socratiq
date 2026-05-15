@@ -37,6 +37,20 @@ logger = logging.getLogger(__name__)
 _DESCRIPTION_PROMPT = load_prompt(Path(__file__).parent / "prompts" / "course_description.md")
 
 
+_LOCAL_BASE_URL_HINTS = ("localhost", "127.0.0.1", "host.docker.internal", "ollama")
+
+
+def _provider_is_local(provider) -> bool:
+    """Heuristic — true when the provider points at a single-GPU local
+    server. Used to clamp fanout concurrency to 1 there (PRD §11 phase B
+    note: local serial, cloud parallel)."""
+    base_url = getattr(provider, "_base_url", None)
+    if not base_url:
+        return False
+    base_url = str(base_url).lower()
+    return any(hint in base_url for hint in _LOCAL_BASE_URL_HINTS)
+
+
 class CourseGenerator:
     """Generates structured courses from analyzed sources."""
 
@@ -98,7 +112,14 @@ class CourseGenerator:
         lesson_gen = LessonGenerator(provider)
         lab_gen = LabGenerator(provider)
         settings = get_settings()
-        sem = asyncio.Semaphore(getattr(settings, "llm_max_concurrency", 4))
+        # Auto-tune chunk-level concurrency: local providers (ollama,
+        # localhost-pointed) serialize anyway, so fanning out N parallel
+        # calls just queues them server-side AND eats N retry budgets if
+        # one stalls. Cloud providers benefit from the parallelism.
+        configured = getattr(settings, "llm_max_concurrency", 4)
+        sem = asyncio.Semaphore(
+            1 if _provider_is_local(provider) else configured
+        )
 
         per_source_assets: dict[UUID, _SourceAssets] = {}
         for source in sources:

@@ -991,7 +991,7 @@ async def _current_embedding_model_name(db: AsyncSession) -> str | None:
     row = (
         await db.execute(
             select(ModelRouteConfig.model_name).where(
-                ModelRouteConfig.tier == "embedding"
+                ModelRouteConfig.task_type == "embedding"
             )
         )
     ).first()

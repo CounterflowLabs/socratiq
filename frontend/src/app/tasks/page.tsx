@@ -342,12 +342,18 @@ function TaskRow({
           fontSize: 12,
           color: "var(--ink-3)",
           display: "inline-flex",
-          alignItems: "center",
-          gap: 6,
+          flexDirection: "column",
+          gap: 4,
+          minWidth: 140,
         }}
       >
-        <StatusDot status={task.status} />
-        {task.stage ?? task.status}
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <StatusDot status={task.status} />
+          {task.stage ?? task.status}
+        </span>
+        {task.status === "running" ? (
+          <StageProgressBar type={task.type} stage={task.stage} />
+        ) : null}
       </span>
 
       <span
@@ -411,6 +417,69 @@ function RowAction({
     );
   }
   return <span style={{ width: 26 }} />;
+}
+
+const STAGE_PERCENT: Record<string, Record<string, number>> = {
+  embed: {
+    pending: 0,
+    fetch_extract: 12,
+    extracting: 20,
+    analyzing: 45,
+    chunking: 55,
+    embedding: 75,
+    storing: 90,
+    generating_lessons: 70,
+    generating_labs: 80,
+    ready: 100,
+  },
+  generate: {
+    pending: 0,
+    planning: 15,
+    analyzing: 30,
+    drafting: 50,
+    assembling_course: 75,
+    ready: 100,
+    generating: 50,
+  },
+};
+
+export function stageToPercent(type: TaskTypeUi, stage?: string | null): number {
+  if (!stage) return 5;
+  const table = STAGE_PERCENT[type] ?? {};
+  return table[stage] ?? 35;
+}
+
+function StageProgressBar({
+  type,
+  stage,
+}: {
+  type: TaskTypeUi;
+  stage?: string | null;
+}) {
+  const pct = stageToPercent(type, stage);
+  return (
+    <span
+      aria-hidden
+      style={{
+        display: "inline-block",
+        width: 100,
+        height: 3,
+        borderRadius: 999,
+        background: "var(--surface-2)",
+        overflow: "hidden",
+      }}
+    >
+      <span
+        style={{
+          display: "block",
+          width: `${pct}%`,
+          height: "100%",
+          background: type === "embed" ? "var(--accent)" : "var(--sage)",
+          transition: "width 240ms ease",
+        }}
+      />
+    </span>
+  );
 }
 
 function StatusDot({ status }: { status: TaskStatusUi }) {

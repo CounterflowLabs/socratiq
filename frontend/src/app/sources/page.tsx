@@ -125,6 +125,8 @@ export default function SourcesPage() {
         }
       />
 
+      {sources.length > 0 ? <StatsStrip sources={sources} /> : null}
+
       {picked.size > 0 ? (
         <div
           style={{
@@ -395,19 +397,9 @@ export default function SourcesPage() {
                       color: "var(--ink-3)",
                     }}
                   >
-                    <span
-                      className={`chip chip-mono ${
-                        presentation.category === "error"
-                          ? "chip-error"
-                          : presentation.category === "processing"
-                            ? "chip-warn"
-                            : "chip-sage"
-                      }`}
-                    >
-                      {presentation.badge}
-                    </span>
+                    <EmbedChip embed={source.embed} />
                     <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {presentation.supportingText}
+                      {source.embed?.reason ?? source.embed?.error ?? presentation.supportingText}
                     </span>
                   </div>
                 </div>
@@ -466,5 +458,105 @@ export default function SourcesPage() {
         }}
       />
     </div>
+  );
+}
+
+/* PRD §5.3 — top-of-page stats strip. No card frame, just four big
+   numbers with hairline dividers, derived from whatever the current
+   /sources page returned. */
+function StatsStrip({ sources }: { sources: SourceResponse[] }) {
+  const { t } = useT();
+  let ready = 0;
+  let running = 0;
+  let failed = 0;
+  let stale = 0;
+  for (const s of sources) {
+    const st = s.embed?.status;
+    if (st === "ready") ready++;
+    else if (st === "running" || st === "queued") running++;
+    else if (st === "failed") failed++;
+    else if (st === "stale") stale++;
+  }
+  const cells = [
+    { label: t("sources.statTotal"), value: sources.length, accent: "var(--ink)" },
+    { label: t("sources.statReady"), value: ready, accent: "var(--sage)" },
+    { label: t("sources.statRunning"), value: running, accent: "var(--accent)" },
+    { label: t("sources.statFailed"), value: failed + stale, accent: "var(--error)" },
+  ];
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(4, 1fr)",
+        borderTop: "1px solid var(--border)",
+        borderBottom: "1px solid var(--border)",
+        margin: "0 0 24px",
+      }}
+    >
+      {cells.map((c, i) => (
+        <div
+          key={c.label}
+          style={{
+            padding: "16px 12px",
+            borderLeft: i === 0 ? "none" : "1px solid var(--border-2)",
+          }}
+        >
+          <div className="eyebrow" style={{ marginBottom: 4 }}>
+            {c.label}
+          </div>
+          <div
+            className="display num"
+            style={{
+              fontSize: 28,
+              color: c.accent,
+              fontVariantNumeric: "tabular-nums",
+            }}
+          >
+            {c.value}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* 5-state embed chip. The badge color reflects the PRD §3 taxonomy. */
+function EmbedChip({ embed }: { embed: import("@/lib/api").SourceEmbed | null | undefined }) {
+  const { t } = useT();
+  if (!embed) return null;
+  const { status } = embed;
+  const map = {
+    ready: { label: t("sources.embedReady"), cls: "chip-sage", dot: "var(--sage)" },
+    running: { label: t("sources.embedRunning"), cls: "chip-accent", dot: "var(--accent)" },
+    queued: { label: t("sources.embedQueued"), cls: "", dot: "var(--ink-4)" },
+    failed: {
+      label: t("sources.embedFailed"),
+      cls: "",
+      dot: "var(--error)",
+    },
+    stale: { label: t("sources.embedStale"), cls: "chip-warn", dot: "var(--warn)" },
+  } as const;
+  const m = map[status];
+  return (
+    <span
+      className={`chip ${m.cls}`}
+      style={
+        status === "failed"
+          ? { background: "var(--error-soft)", color: "var(--error)" }
+          : undefined
+      }
+    >
+      <span
+        style={{
+          width: 6,
+          height: 6,
+          borderRadius: "50%",
+          background: m.dot,
+          boxShadow:
+            status === "running" ? "0 0 0 3px var(--accent-soft)" : undefined,
+        }}
+      />
+      {m.label}
+    </span>
   );
 }

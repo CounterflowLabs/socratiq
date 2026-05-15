@@ -37,6 +37,7 @@ import {
 } from "@/lib/api";
 import { useCoursesStore, useTasksStore } from "@/lib/stores";
 import { useT } from "@/lib/i18n";
+import { stageToPercent } from "@/app/tasks/page";
 import ReviewCard from "@/components/review-card";
 import SourcePipelineView from "@/components/materials/source-pipeline-view";
 
@@ -1025,6 +1026,29 @@ function Rail({
               <span className="mono" style={{ color: "var(--ink-3)" }}>
                 {tk.stage ?? tk.status}
               </span>
+              {tk.status === "running" ? (
+                <div
+                  aria-hidden
+                  style={{
+                    marginTop: 4,
+                    height: 3,
+                    borderRadius: 999,
+                    background: "var(--surface-2)",
+                    overflow: "hidden",
+                  }}
+                >
+                  <span
+                    style={{
+                      display: "block",
+                      width: `${stageToPercent(tk.type, tk.stage)}%`,
+                      height: "100%",
+                      background:
+                        tk.type === "embed" ? "var(--accent)" : "var(--sage)",
+                      transition: "width 240ms ease",
+                    }}
+                  />
+                </div>
+              ) : null}
             </div>
           </div>
         ))

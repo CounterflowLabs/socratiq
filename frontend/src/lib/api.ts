@@ -509,6 +509,56 @@ export interface CourseProgressResponse {
   tasks: SourceTaskProgress[];
 }
 
+// ─── Unified Tasks queue (PRD §5.5) ──────────────────
+
+export type TaskTypeUi = "embed" | "generate";
+export type TaskStatusUi = "running" | "queued" | "done" | "failed";
+
+export interface TaskListItem {
+  id: string;
+  type: TaskTypeUi;
+  raw_task_type: string;
+  status: TaskStatusUi;
+  stage?: string | null;
+  error?: string | null;
+  started_at: string;
+  updated_at: string;
+  finished_at?: string | null;
+  source_id?: string | null;
+  source_title?: string | null;
+  source_type?: string | null;
+  course_id?: string | null;
+  course_title?: string | null;
+  celery_task_id?: string | null;
+  cancel_requested: boolean;
+}
+
+export interface TaskListResponse {
+  items: TaskListItem[];
+  total: number;
+  skip: number;
+  limit: number;
+  counts_by_type: Record<string, number>;
+  counts_by_status: Record<string, number>;
+}
+
+export async function listTasks(params: {
+  type?: "all" | TaskTypeUi;
+  status?: "all" | TaskStatusUi;
+  skip?: number;
+  limit?: number;
+} = {}): Promise<TaskListResponse> {
+  const query = new URLSearchParams();
+  if (params.type) query.set("type", params.type);
+  if (params.status) query.set("status", params.status);
+  if (params.skip !== undefined) query.set("skip", String(params.skip));
+  if (params.limit !== undefined) query.set("limit", String(params.limit));
+  const qs = query.toString();
+  const res = await apiFetch(`${API_BASE}/tasks${qs ? `?${qs}` : ""}`);
+  if (!res.ok) throw await responseError(res);
+  return res.json();
+}
+
 export async function getSourceProgress(
   sourceId: string
 ): Promise<SourceProgressResponse> {

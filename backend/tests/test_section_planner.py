@@ -13,6 +13,7 @@ from app.services.section_planner import (
     SECTION_BUCKET_TOPIC_KEY,
     BucketAssignment,
     SectionPlanner,
+    _bucket_token_sizes,
     _build_chunk_inputs,
     _build_window_spans,
     _clamp_bucket_count,
@@ -23,6 +24,7 @@ from app.services.section_planner import (
     _merge_seam_buckets,
     _run_layer3_embedding_only,
     _should_short_circuit,
+    _split_oversized_buckets,
     _validate_and_normalize,
     has_section_buckets,
 )
@@ -916,3 +918,194 @@ class TestEmbeddingOnlyLayer:
         assert result.stats["tier_used"] == "fallback"
         # Each chunk gets its own bucket
         assert [a.bucket_id for a in result.assignments] == list(range(n))
+
+
+# --- token-budget split pass ----------------------------------------------
+
+
+def _sized_chunk(approx_tokens: int) -> RawContentChunk:
+    """Make a chunk whose raw_text roughly encodes to `approx_tokens` tokens.
+
+    cl100k_base tokenizes ASCII words separated by spaces at ~1.3-1.5 chars
+    per token; padding with repeated "word " gives a predictable size.
+    """
+    return RawContentChunk(
+        source_type="markdown",
+        raw_text=("word " * approx_tokens).strip(),
+        metadata={},
+    )
+
+
+class TestSplitOversizedBuckets:
+    def test_undersized_bucket_unchanged(self):
+        chunks = [_sized_chunk(100), _sized_chunk(100)]
+        assignments = [
+            BucketAssignment(bucket_id=0, bucket_topic="A"),
+            BucketAssignment(bucket_id=0, bucket_topic="A"),
+        ]
+        new, extra = _split_oversized_buckets(assignments, chunks, cap_tokens=1000)
+        assert new == assignments
+        assert extra == 0
+
+    def test_oversized_single_bucket_splits_into_parts(self):
+        # Build a bucket whose total clearly exceeds the cap (5 × 200 = 1000+).
+        chunks = [_sized_chunk(200) for _ in range(5)]
+        assignments = [
+            BucketAssignment(bucket_id=0, bucket_topic="Big Topic")
+            for _ in range(5)
+        ]
+        new, extra = _split_oversized_buckets(assignments, chunks, cap_tokens=400)
+        assert extra >= 1
+        # No sub-bucket may exceed the cap.
+        sizes = _bucket_token_sizes(new, chunks)
+        assert all(s <= 400 for s in sizes)
+        # Topics carry "(Part i/N)" suffix for the multi-part bucket.
+        topics = {a.bucket_topic for a in new}
+        assert any("Part" in (t or "") and "Big Topic" in (t or "") for t in topics)
+
+    def test_oversized_bucket_with_no_topic_keeps_none(self):
+        chunks = [_sized_chunk(200) for _ in range(4)]
+        assignments = [
+            BucketAssignment(bucket_id=0, bucket_topic=None) for _ in range(4)
+        ]
+        new, extra = _split_oversized_buckets(assignments, chunks, cap_tokens=300)
+        assert extra >= 1
+        # All new buckets keep topic=None — no (Part i/N) inserted on bare topics.
+        assert all(a.bucket_topic is None for a in new)
+
+    def test_other_buckets_left_alone(self):
+        # Bucket 0 oversize, bucket 1 small. Only 0 should split; 1 keeps its id.
+        chunks = [
+            _sized_chunk(300), _sized_chunk(300), _sized_chunk(300),  # bid=0
+            _sized_chunk(50),                                          # bid=1
+        ]
+        assignments = [
+            BucketAssignment(bucket_id=0, bucket_topic="Big"),
+            BucketAssignment(bucket_id=0, bucket_topic="Big"),
+            BucketAssignment(bucket_id=0, bucket_topic="Big"),
+            BucketAssignment(bucket_id=1, bucket_topic="Small"),
+        ]
+        new, extra = _split_oversized_buckets(assignments, chunks, cap_tokens=400)
+        assert extra >= 1
+        # The small-bucket chunk keeps bucket_id=1 and its topic.
+        assert new[-1].bucket_id == 1
+        assert new[-1].bucket_topic == "Small"
+
+    def test_chunk_boundaries_never_cross(self):
+        # Each chunk stays in exactly one bucket — split never re-orders or
+        # duplicates chunks.
+        chunks = [_sized_chunk(150) for _ in range(6)]
+        assignments = [
+            BucketAssignment(bucket_id=0, bucket_topic="T") for _ in range(6)
+        ]
+        new, _ = _split_oversized_buckets(assignments, chunks, cap_tokens=200)
+        # Same length, same order — assignments map 1:1 to original indices.
+        assert len(new) == 6
+        # First chunk's bucket id should remain 0 (part 1 preserves original id).
+        assert new[0].bucket_id == 0
+
+    def test_single_oversize_chunk_stays_its_own_bucket(self):
+        # A chunk that's already bigger than the cap can't be split further;
+        # it stays as a 1-chunk bucket and runtime LessonGenerator truncation
+        # is the safety net.
+        chunks = [_sized_chunk(1000)]  # >> cap
+        assignments = [BucketAssignment(bucket_id=0, bucket_topic="huge")]
+        new, extra = _split_oversized_buckets(assignments, chunks, cap_tokens=200)
+        assert extra == 0  # nothing to split — only one chunk
+        assert new[0].bucket_id == 0
+
+    def test_empty_assignments_returns_empty(self):
+        new, extra = _split_oversized_buckets([], [], cap_tokens=100)
+        assert new == []
+        assert extra == 0
+
+    def test_zero_cap_is_noop(self):
+        # cap_tokens<=0 disables the split (defensive — should never happen).
+        chunks = [_sized_chunk(100) for _ in range(3)]
+        assignments = [BucketAssignment(bucket_id=0, bucket_topic="x") for _ in range(3)]
+        new, extra = _split_oversized_buckets(assignments, chunks, cap_tokens=0)
+        assert new == assignments
+        assert extra == 0
+
+
+class TestBucketTokenSizes:
+    def test_per_bucket_sum_with_join_overhead(self):
+        chunks = [_sized_chunk(50), _sized_chunk(50), _sized_chunk(80)]
+        assignments = [
+            BucketAssignment(bucket_id=0, bucket_topic=None),
+            BucketAssignment(bucket_id=0, bucket_topic=None),
+            BucketAssignment(bucket_id=1, bucket_topic=None),
+        ]
+        sizes = _bucket_token_sizes(assignments, chunks)
+        # Two buckets, in bucket-id order.
+        assert len(sizes) == 2
+        # Bucket 0 has 2 chunks + 1 joiner token (~1); bucket 1 has 1 chunk.
+        assert sizes[0] > sizes[1]
+
+    def test_mismatched_lengths_returns_empty(self):
+        # Defensive — protects against caller bugs.
+        chunks = [_sized_chunk(50)]
+        assignments = [
+            BucketAssignment(bucket_id=0, bucket_topic=None),
+            BucketAssignment(bucket_id=1, bucket_topic=None),
+        ]
+        assert _bucket_token_sizes(assignments, chunks) == []
+
+
+# --- plan() integration: stats fields + split pass through tiers ----------
+
+
+class TestPlanFinalize:
+    @pytest.mark.asyncio
+    async def test_stats_include_token_budget_fields(self):
+        # Tiny input → short-circuit tier; stats must still carry the new keys.
+        chunks = [_text_chunk("alpha beta gamma")]
+        analyses = [_analyzed("a", "x", text="alpha beta gamma")]
+        planner = SectionPlanner(AsyncMock())
+        result = await planner.plan(
+            chunks=chunks,
+            analyses=analyses,
+            embeddings=[[1.0, 0.0]],
+            title="t",
+            lesson_input_token_cap=500,
+        )
+        assert "bucket_size_tokens_p50" in result.stats
+        assert "bucket_size_tokens_max" in result.stats
+        assert "buckets_split_for_size" in result.stats
+        assert result.stats["lesson_input_token_cap"] == 500
+
+    @pytest.mark.asyncio
+    async def test_oversized_short_circuit_bucket_gets_split(self):
+        # Short input (total < 2000 words) but its single bucket exceeds the
+        # cap — split pass runs even after short-circuit.
+        chunks = [_sized_chunk(300) for _ in range(3)]  # total ~900 tokens
+        analyses = [_analyzed(f"T{i}", f"s{i}", text=c.raw_text) for i, c in enumerate(chunks)]
+        planner = SectionPlanner(AsyncMock())
+        result = await planner.plan(
+            chunks=chunks,
+            analyses=analyses,
+            embeddings=[[1.0, 0.0]] * 3,
+            title="t",
+            lesson_input_token_cap=400,
+        )
+        # short_circuit tier still ran...
+        assert result.stats["short_circuit"] is True
+        # ...but the oversized single bucket was split.
+        assert result.stats["buckets_split_for_size"] >= 1
+        assert result.stats["bucket_size_tokens_max"] <= 400
+
+    @pytest.mark.asyncio
+    async def test_default_cap_used_when_caller_omits(self):
+        chunks = [_text_chunk("alpha")]
+        analyses = [_analyzed("a", "x", text="alpha")]
+        planner = SectionPlanner(AsyncMock())
+        result = await planner.plan(
+            chunks=chunks,
+            analyses=analyses,
+            embeddings=[[1.0, 0.0]],
+            title="t",
+            # lesson_input_token_cap omitted on purpose
+        )
+        # Stats expose whatever cap was used; sanity-check it's a positive int.
+        assert isinstance(result.stats["lesson_input_token_cap"], int)
+        assert result.stats["lesson_input_token_cap"] > 0

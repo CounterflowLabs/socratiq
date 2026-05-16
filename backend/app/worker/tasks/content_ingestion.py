@@ -410,11 +410,30 @@ async def _ingest_source_async(task, source_id: str, resources) -> dict:
             await _update_status(db, sid, "planning")
             task.update_state(state="PROGRESS", meta={"stage": "planning"})
 
+            from app.services.llm import TaskType, lesson_input_token_budget
             from app.services.section_planner import (
                 SECTION_BUCKET_KEY,
                 SECTION_BUCKET_TOPIC_KEY,
                 SectionPlanner,
             )
+
+            # Compute the per-bucket token cap from the same provider that
+            # LessonGenerator will use downstream (currently CONTENT_ANALYSIS
+            # routing — see services/course_generator.py:120). Provider
+            # resolution can fail if no chat route is configured; fall back
+            # to the planner's conservative default in that case.
+            try:
+                lesson_provider = await resources.model_router.get_provider(
+                    TaskType.CONTENT_ANALYSIS
+                )
+                lesson_input_cap: int | None = lesson_input_token_budget(lesson_provider)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Could not resolve lesson provider for budget calc: %s; "
+                    "planner will use conservative default cap",
+                    exc,
+                )
+                lesson_input_cap = None
 
             section_planner = SectionPlanner(resources.model_router)
             plan_result = await section_planner.plan(
@@ -422,6 +441,7 @@ async def _ingest_source_async(task, source_id: str, resources) -> dict:
                 analyses=analysis.chunks,
                 embeddings=chunk_embeddings,
                 title=source.title or "Untitled",
+                lesson_input_token_cap=lesson_input_cap,
             )
 
             # Persist per-chunk bucket assignments back into metadata_. UPDATE

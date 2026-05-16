@@ -28,6 +28,7 @@ from app.prompt_template import load_prompt
 from app.services.content_analyzer import AnalyzedChunk
 from app.services.llm.base import LLMError, LLMProvider, UnifiedMessage
 from app.services.llm.router import ModelRouter, TaskType
+from app.services.llm.token_budget import count_tokens
 from app.tools.extractors.base import RawContentChunk
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,17 @@ _EMBEDDING_BUCKET_TARGET_WORDS = 2750  # midpoint of 1500–4000
 _EMBEDDING_MIN_BUCKETS = 3
 _EMBEDDING_MAX_BUCKETS = 12
 
+# Conservative cap when the caller doesn't supply a real budget. Keeps unit
+# tests and ad-hoc scripts working without forcing every code path to wire a
+# provider through. Production callers (content_ingestion) MUST pass the
+# real budget computed from the LessonGenerator's provider.
+_DEFAULT_BUCKET_TOKEN_CAP = 8_000
+
+# tiktoken treats "\n\n" between joined chunks as ~1 token. Used when summing
+# bucket sizes — keeps the predicate consistent with what LessonGenerator
+# will actually feed into the model.
+_JOIN_TOKEN_OVERHEAD = 1
+
 
 @dataclass
 class BucketAssignment:
@@ -93,6 +105,7 @@ class SectionPlanner:
         analyses: list[AnalyzedChunk],
         embeddings: list[list[float]] | None,
         title: str,
+        lesson_input_token_cap: int | None = None,
     ) -> PlanResult:
         """Return one BucketAssignment per chunk, same order and length.
 
@@ -104,8 +117,17 @@ class SectionPlanner:
         inputs exceed the skeleton budget. Layer 3 catches any LLM failure
         when embeddings carry usable signal. Layer 4 is the unconditional
         floor — never raises out of the planner.
+
+        ``lesson_input_token_cap`` is the maximum tokens any single bucket's
+        joined text may contain — buckets above this are split along chunk
+        boundaries before being returned. When ``None`` we fall back to a
+        conservative default (``_DEFAULT_BUCKET_TOKEN_CAP``); production
+        callers should pass the real budget computed via
+        :func:`lesson_input_token_budget` against the provider that
+        :class:`LessonGenerator` will use.
         """
         started = time.perf_counter()
+        cap_tokens = lesson_input_token_cap or _DEFAULT_BUCKET_TOKEN_CAP
         n = len(chunks)
         if n == 0:
             return PlanResult(
@@ -115,6 +137,9 @@ class SectionPlanner:
                     assignments=[],
                     elapsed_ms=_elapsed_ms(started),
                     error="empty_input",
+                    bucket_token_sizes=[],
+                    buckets_split_for_size=0,
+                    lesson_input_token_cap=cap_tokens,
                 ),
             )
 
@@ -129,28 +154,26 @@ class SectionPlanner:
                 len(analyses),
                 len(embeddings_safe) if embeddings is not None else "None",
             )
-            return PlanResult(
-                assignments=_fallback_assignments(n),
-                stats=_build_stats(
-                    tier="fallback",
-                    assignments=_fallback_assignments(n),
-                    elapsed_ms=_elapsed_ms(started),
-                    error="length_mismatch",
-                ),
+            return _finalize(
+                raw_assignments=_fallback_assignments(n),
+                chunks=chunks,
+                cap_tokens=cap_tokens,
+                tier="fallback",
+                started=started,
+                error="length_mismatch",
             )
 
         size_unit, sizes = _detect_size_unit(chunks, analyses)
         if _should_short_circuit(size_unit, sizes):
             topic = (analyses[0].topic or title or None) if analyses else None
             assignments = [BucketAssignment(bucket_id=0, bucket_topic=topic) for _ in range(n)]
-            return PlanResult(
-                assignments=assignments,
-                stats=_build_stats(
-                    tier="skeleton",
-                    assignments=assignments,
-                    elapsed_ms=_elapsed_ms(started),
-                    short_circuit=True,
-                ),
+            return _finalize(
+                raw_assignments=assignments,
+                chunks=chunks,
+                cap_tokens=cap_tokens,
+                tier="skeleton",
+                started=started,
+                short_circuit=True,
             )
 
         # Boundary hints: prior-vs-current cosine distance, smoothed and
@@ -201,15 +224,14 @@ class SectionPlanner:
             total_output_tokens += tokens[1]
 
             if validated is not None:
-                return PlanResult(
-                    assignments=validated,
-                    stats=_build_stats(
-                        tier=tier,
-                        assignments=validated,
-                        elapsed_ms=_elapsed_ms(started),
-                        llm_input_tokens=total_input_tokens,
-                        llm_output_tokens=total_output_tokens,
-                    ),
+                return _finalize(
+                    raw_assignments=validated,
+                    chunks=chunks,
+                    cap_tokens=cap_tokens,
+                    tier=tier,
+                    started=started,
+                    llm_input_tokens=total_input_tokens,
+                    llm_output_tokens=total_output_tokens,
                 )
             llm_error = error
         else:
@@ -223,30 +245,27 @@ class SectionPlanner:
             n=n,
         )
         if embedding_result is not None:
-            return PlanResult(
-                assignments=embedding_result,
-                stats=_build_stats(
-                    tier="embedding_only",
-                    assignments=embedding_result,
-                    elapsed_ms=_elapsed_ms(started),
-                    llm_input_tokens=total_input_tokens,
-                    llm_output_tokens=total_output_tokens,
-                    error=llm_error,
-                ),
+            return _finalize(
+                raw_assignments=embedding_result,
+                chunks=chunks,
+                cap_tokens=cap_tokens,
+                tier="embedding_only",
+                started=started,
+                llm_input_tokens=total_input_tokens,
+                llm_output_tokens=total_output_tokens,
+                error=llm_error,
             )
 
         # --- Layer 4 per-chunk fallback ------------------------------------
-        fallback = _fallback_assignments(n)
-        return PlanResult(
-            assignments=fallback,
-            stats=_build_stats(
-                tier="fallback",
-                assignments=fallback,
-                elapsed_ms=_elapsed_ms(started),
-                llm_input_tokens=total_input_tokens,
-                llm_output_tokens=total_output_tokens,
-                error=llm_error or "embedding_only_unavailable",
-            ),
+        return _finalize(
+            raw_assignments=_fallback_assignments(n),
+            chunks=chunks,
+            cap_tokens=cap_tokens,
+            tier="fallback",
+            started=started,
+            llm_input_tokens=total_input_tokens,
+            llm_output_tokens=total_output_tokens,
+            error=llm_error or "embedding_only_unavailable",
         )
 
     async def _get_provider(self) -> LLMProvider:
@@ -585,6 +604,155 @@ def _clamp_bucket_count(
         )
         for a in new
     ]
+
+
+def _bucket_token_sizes(
+    assignments: list[BucketAssignment],
+    chunks: list[RawContentChunk],
+) -> list[int]:
+    """Per-bucket joined-text token counts, in bucket-id order.
+
+    Mirrors what LessonGenerator will actually feed into the model:
+    chunks belonging to the bucket joined with "\\n\\n" separators.
+    Used both by the split predicate and by stats reporting.
+    """
+    if len(assignments) != len(chunks):
+        return []
+    by_bucket: dict[int, list[int]] = {}
+    for idx, a in enumerate(assignments):
+        by_bucket.setdefault(a.bucket_id, []).append(idx)
+    sizes: list[int] = []
+    for bid in sorted(by_bucket.keys()):
+        chunk_indices = by_bucket[bid]
+        chunk_tokens = [count_tokens(chunks[i].raw_text or "") for i in chunk_indices]
+        joiners = _JOIN_TOKEN_OVERHEAD * max(0, len(chunk_tokens) - 1)
+        sizes.append(sum(chunk_tokens) + joiners)
+    return sizes
+
+
+def _split_oversized_buckets(
+    assignments: list[BucketAssignment],
+    chunks: list[RawContentChunk],
+    cap_tokens: int,
+) -> tuple[list[BucketAssignment], int]:
+    """Re-split any bucket whose joined text exceeds ``cap_tokens``.
+
+    Splits along chunk boundaries (never inside a chunk). When a bucket
+    is split into N parts, each part keeps the original topic with a
+    ``(Part i/N)`` suffix so the UI can render them as a coherent
+    sequence without UI changes.
+
+    Returns ``(new_assignments, extra_buckets_created)``. The extra count
+    is the number of buckets added beyond the input count and is reported
+    via stats so operators can spot systemic oversizing.
+
+    A single chunk that already exceeds ``cap_tokens`` becomes its own
+    bucket — there's no chunk-internal splitting because chunks are the
+    extractor's atomic unit. The downstream LessonGenerator will catch
+    that case via its own runtime budget check.
+    """
+    if not assignments or cap_tokens <= 0 or len(assignments) != len(chunks):
+        return assignments, 0
+
+    by_bucket: dict[int, list[int]] = {}
+    for idx, a in enumerate(assignments):
+        by_bucket.setdefault(a.bucket_id, []).append(idx)
+
+    # Token-count each chunk once; we may reference the same chunk's count
+    # multiple times when computing running totals.
+    chunk_tokens = [count_tokens(c.raw_text or "") for c in chunks]
+
+    new_assignments = list(assignments)
+    next_bid = max((a.bucket_id for a in assignments), default=-1) + 1
+    extra = 0
+
+    for bid in sorted(by_bucket.keys()):
+        chunk_indices = by_bucket[bid]
+        sizes = [chunk_tokens[i] for i in chunk_indices]
+        joiners = _JOIN_TOKEN_OVERHEAD * max(0, len(sizes) - 1)
+        total = sum(sizes) + joiners
+        if total <= cap_tokens:
+            continue
+
+        # Greedy chunk-boundary packing — accumulate chunks into the
+        # current sub-bucket until adding the next would overflow, then
+        # start a fresh sub-bucket. Each sub-bucket carries at least one
+        # chunk even if that chunk itself exceeds the cap.
+        sub_buckets: list[list[int]] = [[]]
+        running = 0
+        for idx, sz in zip(chunk_indices, sizes):
+            join_overhead = _JOIN_TOKEN_OVERHEAD if sub_buckets[-1] else 0
+            if sub_buckets[-1] and running + join_overhead + sz > cap_tokens:
+                sub_buckets.append([])
+                running = 0
+                join_overhead = 0
+            sub_buckets[-1].append(idx)
+            running += join_overhead + sz
+
+        n_parts = len(sub_buckets)
+        if n_parts <= 1:
+            # Bucket overflowed but only one sub-bucket was produced —
+            # happens when the bucket consists of a single oversize chunk.
+            # Nothing to split. LessonGenerator's runtime check will trim.
+            continue
+
+        original_topic = next(
+            (a.bucket_topic for a in assignments if a.bucket_id == bid),
+            None,
+        )
+        for part_i, sub in enumerate(sub_buckets):
+            new_bid = bid if part_i == 0 else next_bid
+            if part_i > 0:
+                next_bid += 1
+                extra += 1
+            new_topic = (
+                f"{original_topic} (Part {part_i + 1}/{n_parts})"
+                if original_topic
+                else None
+            )
+            for idx in sub:
+                new_assignments[idx] = BucketAssignment(
+                    bucket_id=new_bid, bucket_topic=new_topic,
+                )
+
+    return new_assignments, extra
+
+
+def _finalize(
+    *,
+    raw_assignments: list[BucketAssignment],
+    chunks: list[RawContentChunk],
+    cap_tokens: int,
+    tier: str,
+    started: float,
+    error: str | None = None,
+    short_circuit: bool = False,
+    llm_input_tokens: int = 0,
+    llm_output_tokens: int = 0,
+) -> PlanResult:
+    """Apply the size-cap split, compute stats, return the final PlanResult.
+
+    Centralized so every tier exit path (short-circuit, Layer 1/2, Layer
+    3, Layer 4) goes through the same finalize step — no path can bypass
+    the size-cap pass.
+    """
+    final, split_count = _split_oversized_buckets(raw_assignments, chunks, cap_tokens)
+    bucket_sizes = _bucket_token_sizes(final, chunks)
+    return PlanResult(
+        assignments=final,
+        stats=_build_stats(
+            tier=tier,
+            assignments=final,
+            elapsed_ms=_elapsed_ms(started),
+            error=error,
+            short_circuit=short_circuit,
+            llm_input_tokens=llm_input_tokens,
+            llm_output_tokens=llm_output_tokens,
+            bucket_token_sizes=bucket_sizes,
+            buckets_split_for_size=split_count,
+            lesson_input_token_cap=cap_tokens,
+        ),
+    )
 
 
 def _run_layer3_embedding_only(
@@ -936,6 +1104,9 @@ def _build_stats(
     short_circuit: bool = False,
     llm_input_tokens: int = 0,
     llm_output_tokens: int = 0,
+    bucket_token_sizes: list[int] | None = None,
+    buckets_split_for_size: int = 0,
+    lesson_input_token_cap: int = 0,
 ) -> dict:
     distinct = sorted({a.bucket_id for a in assignments})
     bucket_count = len(distinct)
@@ -955,6 +1126,9 @@ def _build_stats(
     topic_uniqueness = (
         len(set(bucket_topics)) / len(bucket_topics) if bucket_topics else 1.0
     )
+    sizes = bucket_token_sizes or []
+    sorted_sizes = sorted(sizes)
+    p50 = sorted_sizes[len(sorted_sizes) // 2] if sorted_sizes else 0
     return {
         "tier_used": tier,
         "planner_version": PLANNER_VERSION,
@@ -971,6 +1145,10 @@ def _build_stats(
         "llm_output_tokens": llm_output_tokens,
         "short_circuit": short_circuit,
         "error": error,
+        "bucket_size_tokens_p50": p50,
+        "bucket_size_tokens_max": max(sizes) if sizes else 0,
+        "buckets_split_for_size": buckets_split_for_size,
+        "lesson_input_token_cap": lesson_input_token_cap,
     }
 
 

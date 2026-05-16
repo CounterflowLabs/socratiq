@@ -8,6 +8,12 @@ from pathlib import Path
 from app.models.lesson import LessonContent
 from app.prompt_template import load_prompt
 from app.services.llm.base import LLMProvider, UnifiedMessage
+from app.services.llm.token_budget import (
+    count_tokens,
+    lesson_input_token_budget,
+    lesson_max_output_tokens,
+    truncate_to_tokens,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +35,13 @@ _ALLOWED_BLOCK_TYPES = {
 class LessonGenerator:
     def __init__(self, provider: LLMProvider):
         self._provider = provider
+        # Both budgets resolved once per instance — provider is fixed for the
+        # generator's lifetime. max_output is provider-aware (capable models
+        # like Claude / GPT-4o get 8k for dense source; small models stay at
+        # 4k to avoid late-output drift). Input budget is auto-derived against
+        # the same provider so the two stay aligned.
+        self._max_output_tokens = lesson_max_output_tokens(provider)
+        self._input_token_budget = lesson_input_token_budget(provider)
 
     async def generate(
         self,
@@ -42,10 +55,23 @@ class LessonGenerator:
         subtitles = "\n\n".join(subtitle_chunks)
         goal_prompt = f"\n\nLearning goal: {goal}" if goal else ""
 
+        # Defensive truncation. The upstream SectionPlanner is responsible
+        # for keeping bucket sizes within budget; if we hit this branch it
+        # means the planner emitted an oversized bucket, which should be
+        # investigated rather than silently accepted.
+        n_tokens = count_tokens(subtitles)
+        if n_tokens > self._input_token_budget:
+            logger.warning(
+                "Lesson input %d tokens exceeds budget %d for model=%s; "
+                "truncating tail. Upstream planner emitted oversized bucket.",
+                n_tokens, self._input_token_budget, self._provider.model_id(),
+            )
+            subtitles = truncate_to_tokens(subtitles, self._input_token_budget)
+
         prompt_text = _PROMPT.render(
             title=video_title,
             target_language=target_language,
-            subtitles=subtitles[:8000],
+            subtitles=subtitles,
             user_directive=user_directive,
         ) + goal_prompt
 
@@ -79,7 +105,7 @@ class LessonGenerator:
     async def _attempt(self, prompt_text: str) -> dict:
         response = await self._provider.chat(
             messages=[UnifiedMessage(role="user", content=prompt_text)],
-            max_tokens=4000,
+            max_tokens=self._max_output_tokens,
             temperature=0.3,
         )
         text = response.content[0].text if response.content else ""

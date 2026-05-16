@@ -3,6 +3,7 @@
 import json
 import logging
 import re
+import time
 import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -20,6 +21,7 @@ from app.services.llm.base import (
     UnifiedMessage,
 )
 from app.services.llm.router import ModelRouter, TaskType
+from app.services.llm.runtime import Tracer, get_default_tracer
 from app.services.profile import StudentProfile, load_profile
 
 logger = logging.getLogger(__name__)
@@ -45,12 +47,14 @@ class MentorAgent:
         db: AsyncSession,
         user_id: uuid.UUID,
         tools: list[AgentTool],
+        tracer: Tracer | None = None,
     ):
         self._router = model_router
         self._db = db
         self._user_id = user_id
         self._tools = {t.name: t for t in tools}
         self._tool_definitions = [t.to_tool_definition() for t in tools]
+        self._tracer = tracer or get_default_tracer()
 
     async def process(
         self,
@@ -93,12 +97,27 @@ class MentorAgent:
         # Get LLM provider
         provider = await self._router.get_provider(TaskType.MENTOR_CHAT)
 
+        turn_started = time.perf_counter()
+        provider_id = self._safe_model_id(provider)
+        self._tracer.emit(
+            "agent_turn_start",
+            phase="mentor",
+            user_id=str(self._user_id),
+            course_id=str(course_id) if course_id else None,
+            provider=provider_id,
+            tool_count=len(self._tools),
+            history_messages=len(conversation_history),
+        )
+
         # Agent loop
         loop_count = 0
+        total_tool_calls = 0
         full_assistant_text = ""
+        loop_status = "text_complete"
 
         while loop_count < self.MAX_TOOL_LOOPS:
             loop_count += 1
+            iter_started = time.perf_counter()
 
             # Accumulate streaming response
             current_text = ""
@@ -146,9 +165,22 @@ class MentorAgent:
                 elif chunk.type == "message_end":
                     yield chunk
 
+            self._tracer.emit(
+                "agent_loop_iter",
+                phase="mentor",
+                iteration=loop_count,
+                provider=provider_id,
+                text_chars=len(current_text),
+                reasoning_chars=len(current_reasoning_content),
+                tool_calls=len(tool_calls),
+                elapsed_ms=(time.perf_counter() - iter_started) * 1000.0,
+            )
+
             # If no tool calls, we're done
             if not tool_calls:
                 break
+
+            total_tool_calls += len(tool_calls)
 
             # Execute tool calls and build tool_result messages
             # First, add assistant response with tool_use blocks
@@ -171,8 +203,20 @@ class MentorAgent:
 
             # Execute each tool and add results
             for tc in tool_calls:
+                tool_started = time.perf_counter()
                 tool_result = await self._execute_tool(tc["name"], tc["input"])
+                tool_status = "error" if tool_result.startswith("Error") else "ok"
                 tool_result = self._extract_citations(tool_result)
+                self._tracer.emit(
+                    "agent_tool_result",
+                    phase="mentor.tool",
+                    iteration=loop_count,
+                    tool_name=tc["name"],
+                    tool_use_id=tc["id"],
+                    status=tool_status,
+                    result_chars=len(tool_result),
+                    elapsed_ms=(time.perf_counter() - tool_started) * 1000.0,
+                )
                 messages.append(UnifiedMessage(
                     role="tool_result",
                     content=[ContentBlock(
@@ -181,6 +225,21 @@ class MentorAgent:
                         tool_result_content=tool_result,
                     )],
                 ))
+        else:
+            # while-loop hit MAX_TOOL_LOOPS without breaking — likely a tool-use
+            # ping-pong. Surface in the trace; the user just sees the truncated
+            # response, but operators can spot the runaway in logs.
+            loop_status = "loop_limit_reached"
+
+        self._tracer.emit(
+            "agent_turn_end",
+            phase="mentor",
+            status=loop_status,
+            iterations=loop_count,
+            total_tool_calls=total_tool_calls,
+            response_chars=len(full_assistant_text),
+            elapsed_ms=(time.perf_counter() - turn_started) * 1000.0,
+        )
 
         # Async profile update (don't block the response)
         if full_assistant_text:
@@ -215,6 +274,13 @@ class MentorAgent:
         except Exception as e:
             logger.error(f"Tool '{tool_name}' execution error: {e}", exc_info=True)
             return f"Error executing tool '{tool_name}': {str(e)}"
+
+    @staticmethod
+    def _safe_model_id(provider: LLMProvider) -> str:
+        try:
+            return provider.model_id()
+        except Exception:  # noqa: BLE001
+            return type(provider).__name__
 
     async def _maybe_update_profile(self, assistant_text: str, user_message: str) -> None:
         """Asynchronously update student profile based on conversation.

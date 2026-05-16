@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("next/navigation", () => ({
@@ -54,5 +54,13 @@ describe("Setup Page", () => {
     const selector = screen.getByRole("combobox") as HTMLSelectElement;
     expect(selector.value).toBe("qwen3.6:latest");
     expect(screen.queryByRole("option", { name: "nomic-embed-text:latest" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /同时配置向量模型/ }));
+
+    const selectors = screen.getAllByRole("combobox") as HTMLSelectElement[];
+    expect(selectors).toHaveLength(2);
+    expect(selectors[0].value).toBe("qwen3.6:latest");
+    expect(selectors[1].value).toBe("nomic-embed-text:latest");
+    expect(screen.getByRole("option", { name: "nomic-embed-text:latest" })).toBeInTheDocument();
   });
 });

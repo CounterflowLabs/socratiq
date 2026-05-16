@@ -628,18 +628,33 @@ export default function SetupPage() {
             {useOllamaEmbedding && (
               <div className="mb-4">
                 <label className="block text-xs text-gray-600 mb-1.5">
-                  向量模型 ID
+                  选择向量模型
                 </label>
-                <input
-                  type="text"
-                  value={ollamaEmbeddingModelId}
-                  onChange={(e) => setOllamaEmbeddingModelId(e.target.value)}
-                  placeholder="nomic-embed-text"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
+                {ollamaEmbeddingModels.length > 0 ? (
+                  <select
+                    value={ollamaEmbeddingModelId}
+                    onChange={(e) => setOllamaEmbeddingModelId(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    {ollamaEmbeddingModels.map((model) => (
+                      <option key={model} value={model}>
+                        {model}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    value={ollamaEmbeddingModelId}
+                    onChange={(e) => setOllamaEmbeddingModelId(e.target.value)}
+                    placeholder="nomic-embed-text"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                )}
                 <p className="text-xs text-gray-400 mt-1">
-                  推荐：<code className="font-mono">nomic-embed-text</code>。如未安装，请先运行{" "}
-                  <code className="font-mono">ollama pull nomic-embed-text</code>
+                  {ollamaEmbeddingModels.length > 0
+                    ? "从本机 Ollama 已安装的向量模型中选择。"
+                    : "推荐：nomic-embed-text。如未安装，请先运行 ollama pull nomic-embed-text"}
                 </p>
               </div>
             )}

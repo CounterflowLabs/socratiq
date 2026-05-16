@@ -5,7 +5,8 @@ import logging
 import re
 from pathlib import Path
 
-from app.models.lesson import LessonContent
+from app.models.lesson import LessonContent, LessonSourceChunk
+from app.models.research import ResearchCard
 from app.prompt_template import load_prompt
 from app.services.llm.base import LLMError, LLMProvider, UnifiedMessage
 from app.services.llm.runtime import (
@@ -65,28 +66,51 @@ class LessonGenerator:
         target_language: str,
         user_directive: str = "",
         goal: str | None = None,
+        source_chunks: list[LessonSourceChunk] | None = None,
+        research_cards: list[ResearchCard] | None = None,
+        previous_section_title: str | None = None,
+        next_section_title: str | None = None,
     ) -> LessonContent:
         """Convert subtitle chunks into a block-based lesson."""
-        subtitles = "\n\n".join(subtitle_chunks)
+        source_format = "structured_json" if source_chunks else "plain_text"
+        if source_chunks:
+            source_payload = json.dumps(
+                [chunk.model_dump(exclude_none=True) for chunk in source_chunks],
+                ensure_ascii=False,
+            )
+        else:
+            source_payload = "\n\n".join(subtitle_chunks)
         goal_prompt = f"\n\nLearning goal: {goal}" if goal else ""
 
         # Defensive truncation. The upstream SectionPlanner is responsible
         # for keeping bucket sizes within budget; if we hit this branch it
         # means the planner emitted an oversized bucket, which should be
         # investigated rather than silently accepted.
-        n_tokens = count_tokens(subtitles)
+        n_tokens = count_tokens(source_payload)
         if n_tokens > self._input_token_budget:
             logger.warning(
                 "Lesson input %d tokens exceeds budget %d for model=%s; "
                 "truncating tail. Upstream planner emitted oversized bucket.",
                 n_tokens, self._input_token_budget, self._provider.model_id(),
             )
-            subtitles = truncate_to_tokens(subtitles, self._input_token_budget)
+            source_payload = truncate_to_tokens(
+                source_payload, self._input_token_budget
+            )
 
         prompt_text = _PROMPT.render(
             title=video_title,
             target_language=target_language,
-            subtitles=subtitles,
+            source_format=source_format,
+            source_chunks=source_payload,
+            previous_section_title=previous_section_title or "",
+            next_section_title=next_section_title or "",
+            research_cards=json.dumps(
+                [
+                    card.model_dump(exclude_none=True)
+                    for card in (research_cards or [])
+                ],
+                ensure_ascii=False,
+            ),
             user_directive=user_directive,
         ) + goal_prompt
 

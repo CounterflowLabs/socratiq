@@ -28,6 +28,11 @@ from app.prompt_template import load_prompt
 from app.services.content_analyzer import AnalyzedChunk
 from app.services.llm.base import LLMError, LLMProvider, UnifiedMessage
 from app.services.llm.router import ModelRouter, TaskType
+from app.services.llm.runtime import (
+    AgentRuntime,
+    LLMValidationError,
+    ValidationFailed,
+)
 from app.services.llm.token_budget import count_tokens
 from app.tools.extractors.base import RawContentChunk
 
@@ -97,6 +102,15 @@ class SectionPlanner:
 
     def __init__(self, model_router: ModelRouter):
         self._router = model_router
+        self._runtime = AgentRuntime(router=model_router)
+        # STRUCTURE_PLANNING is the dedicated tier; EVALUATION is the legacy
+        # fallback for deployments that haven't provisioned the new route
+        # (matches the historical _get_provider behavior). Resolving via the
+        # runtime means the same chain is now visible in trace events.
+        self._provider_chain = (
+            TaskType.STRUCTURE_PLANNING,
+            [TaskType.EVALUATION],
+        )
 
     async def plan(
         self,
@@ -271,9 +285,11 @@ class SectionPlanner:
     async def _get_provider(self) -> LLMProvider:
         """Resolve STRUCTURE_PLANNING with a one-step fallback to EVALUATION.
 
-        Until operators provision a dedicated STRUCTURE_PLANNING route, lean
-        on the fast/cheap tier that EVALUATION already points at. Both
-        misses surface as LLMError so the caller can degrade gracefully.
+        Pre-resolved once per ``plan()`` call so helpers (Layer 1, windowed
+        Layer 2, seam stitch) all share the same provider without churning
+        the router cache. The runtime's own provider-fallback chain is
+        intentionally NOT used here — keeping resolution out of the per-call
+        path means trace events stay focused on the work, not lookup churn.
         """
         try:
             return await self._router.get_provider(TaskType.STRUCTURE_PLANNING)
@@ -286,6 +302,8 @@ class SectionPlanner:
         chunk_inputs: list[dict],
         title: str,
         expected_n: int,
+        *,
+        phase: str = "section_planner.layer1",
     ) -> tuple[list[BucketAssignment] | None, str | None, tuple[int, int]]:
         """Single-pass skeleton. Returns (assignments | None, error | None, (in_toks, out_toks))."""
         serialized = json.dumps(chunk_inputs, ensure_ascii=False)
@@ -295,27 +313,45 @@ class SectionPlanner:
             UnifiedMessage(role="user", content="Chunks (JSON):\n" + serialized),
         ]
 
+        def _validate(text: str) -> list[BucketAssignment]:
+            parsed = _parse_response_json(text)
+            if parsed is None:
+                raise ValidationFailed(
+                    "json_parse_failed",
+                    hint="Reply with a single JSON object: `{\"buckets\": [...], \"assignments\": [...]}`.",
+                )
+            validated = _validate_and_normalize(parsed, expected_n)
+            if validated is None:
+                raise ValidationFailed(
+                    "validation_failed",
+                    hint=(
+                        f"Return exactly {expected_n} assignments with monotonically "
+                        "increasing bucket_ids starting at 0."
+                    ),
+                )
+            return validated
+
+        # max_validation_retries=0 — SectionPlanner's own degradation cascade
+        # (Layer 1 → Layer 3 → Layer 4) replaces the runtime's within-layer
+        # retry. A bad Layer 1 response should escalate to the next tier
+        # rather than burn another STRUCTURE_PLANNING call.
         try:
-            response = await provider.chat(messages, max_tokens=4096, temperature=0.2)
-        except Exception as exc:  # noqa: BLE001
+            result = await self._runtime.call(
+                messages,
+                primary=provider,
+                max_tokens=4096,
+                temperature=0.2,
+                phase=phase,
+                validator=_validate,
+                max_validation_retries=0,
+            )
+        except LLMValidationError as exc:
+            return None, exc.reason, (exc.input_tokens, exc.output_tokens)
+        except LLMError as exc:
             logger.warning("SectionPlanner: Layer 1 LLM call failed: %s", exc)
             return None, f"llm_error:{type(exc).__name__}", (0, 0)
 
-        response_text = "".join(
-            b.text or "" for b in response.content if b.type == "text"
-        )
-        in_toks = response.usage.input_tokens if response.usage else 0
-        out_toks = response.usage.output_tokens if response.usage else 0
-
-        parsed = _parse_response_json(response_text)
-        if parsed is None:
-            return None, "json_parse_failed", (in_toks, out_toks)
-
-        validated = _validate_and_normalize(parsed, expected_n)
-        if validated is None:
-            return None, "validation_failed", (in_toks, out_toks)
-
-        return validated, None, (in_toks, out_toks)
+        return result.parsed, None, (result.input_tokens, result.output_tokens)
 
     async def _run_layer2_windowed(
         self,
@@ -343,7 +379,8 @@ class SectionPlanner:
                 provider, chunk_inputs, title, expected_n
             )
 
-        async def _gen_window(span: tuple[int, int]):
+        async def _gen_window(idx_span: tuple[int, tuple[int, int]]):
+            w_idx, span = idx_span
             start, end = span
             # Renumber the per-window idx so the prompt's monotonicity rule
             # is local to this window. The validator also operates on this
@@ -352,11 +389,13 @@ class SectionPlanner:
                 {**ci, "idx": j} for j, ci in enumerate(chunk_inputs[start:end])
             ]
             return await self._run_layer1_skeleton(
-                provider, window_inputs, title, expected_n=end - start
+                provider, window_inputs, title,
+                expected_n=end - start,
+                phase=f"section_planner.layer2.window[{w_idx + 1}/{len(windows)}]",
             )
 
         window_results = await asyncio.gather(
-            *(_gen_window(span) for span in windows),
+            *(_gen_window((i, span)) for i, span in enumerate(windows)),
             return_exceptions=False,
         )
 
@@ -491,9 +530,10 @@ class SectionPlanner:
     ) -> tuple[bool, int, int]:
         """Ask the LLM whether the two adjacent buckets describe one theme.
 
-        Returns (merge_decision, in_tokens, out_tokens). On any failure the
-        decision defaults to ``False`` (keep boundary) — false-split is the
-        cheaper mistake than false-merge.
+        Returns (merge_decision, in_tokens, out_tokens). On any failure
+        (transport error, unparseable JSON, missing key) the decision
+        defaults to ``False`` (keep boundary) — false-split is the cheaper
+        mistake than false-merge.
         """
         sa = "\n".join(f"    - {s}" for s in summaries_a) or "    - (none)"
         sb = "\n".join(f"    - {s}" for s in summaries_b) or "    - (none)"
@@ -505,19 +545,33 @@ class SectionPlanner:
             summaries_b=sb,
         )
         messages = [UnifiedMessage(role="system", content=prompt)]
+
+        def _validate(text: str) -> bool:
+            parsed = _parse_response_json(text)
+            if not isinstance(parsed, dict):
+                raise ValidationFailed(
+                    "stitch_response_not_object",
+                    hint="Reply with a JSON object containing a `merge` boolean.",
+                )
+            return bool(parsed.get("merge"))
+
         try:
-            response = await provider.chat(messages, max_tokens=200, temperature=0.0)
-        except Exception as exc:  # noqa: BLE001
+            result = await self._runtime.call(
+                messages,
+                primary=provider,
+                max_tokens=200,
+                temperature=0.0,
+                phase="section_planner.stitch_seam",
+                validator=_validate,
+                max_validation_retries=0,
+            )
+        except LLMValidationError as exc:
+            return False, exc.input_tokens, exc.output_tokens
+        except LLMError as exc:
             logger.warning("SectionPlanner: stitch LLM call failed: %s", exc)
             return False, 0, 0
-        text = "".join(b.text or "" for b in response.content if b.type == "text")
-        in_toks = response.usage.input_tokens if response.usage else 0
-        out_toks = response.usage.output_tokens if response.usage else 0
-        parsed = _parse_response_json(text)
-        if not isinstance(parsed, dict):
-            return False, in_toks, out_toks
-        decision = parsed.get("merge")
-        return bool(decision), in_toks, out_toks
+
+        return bool(result.parsed), result.input_tokens, result.output_tokens
 
 
 # --- helpers ---------------------------------------------------------------

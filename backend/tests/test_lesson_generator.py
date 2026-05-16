@@ -198,8 +198,8 @@ class TestLessonGenerator:
 
     @pytest.mark.asyncio
     async def test_retries_once_when_first_attempt_unparseable(self):
-        """When the first response is garbage, we get one retry with a
-        stricter directive appended."""
+        """When the first response is garbage, we get one retry whose
+        message list ends with the stricter directive."""
         good_payload = {
             "title": "Good",
             "summary": "S",
@@ -218,8 +218,12 @@ class TestLessonGenerator:
 
         assert mock_provider.chat.call_count == 2
         assert result.title == "Good"
-        retry_prompt = mock_provider.chat.call_args_list[1].kwargs["messages"][0].content
-        assert "previous response failed to parse" in retry_prompt
+        # AgentRuntime delivers the corrective directive as a trailing user
+        # message (after replaying the model's bad response), not by
+        # mutating the original prompt.
+        retry_msgs = mock_provider.chat.call_args_list[1].kwargs["messages"]
+        assert retry_msgs[-1].role == "user"
+        assert "previous response failed to parse" in retry_msgs[-1].content
 
     @pytest.mark.asyncio
     async def test_raises_when_both_attempts_unparseable(self):

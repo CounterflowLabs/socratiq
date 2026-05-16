@@ -7,7 +7,12 @@ from pathlib import Path
 
 from app.models.lesson import LessonContent
 from app.prompt_template import load_prompt
-from app.services.llm.base import LLMProvider, UnifiedMessage
+from app.services.llm.base import LLMError, LLMProvider, UnifiedMessage
+from app.services.llm.runtime import (
+    AgentRuntime,
+    LLMValidationError,
+    ValidationFailed,
+)
 from app.services.llm.token_budget import (
     count_tokens,
     lesson_input_token_budget,
@@ -32,9 +37,19 @@ _ALLOWED_BLOCK_TYPES = {
 }
 
 
+_RETRY_DIRECTIVE = (
+    "IMPORTANT: your previous response failed to parse as JSON. "
+    "Reply with ONLY a single valid JSON object. Escape every newline as "
+    "`\\n` and every double-quote as `\\\"` inside string values. The very "
+    "last character of your response must be `}`. Keep the lesson short — "
+    "4 to 6 blocks is plenty."
+)
+
+
 class LessonGenerator:
     def __init__(self, provider: LLMProvider):
         self._provider = provider
+        self._runtime = AgentRuntime()
         # Both budgets resolved once per instance — provider is fixed for the
         # generator's lifetime. max_output is provider-aware (capable models
         # like Claude / GPT-4o get 8k for dense source; small models stay at
@@ -75,41 +90,58 @@ class LessonGenerator:
             user_directive=user_directive,
         ) + goal_prompt
 
-        # First attempt — any LLM error (timeout, network, parse failure) drops
-        # us into the retry path; a second failure raises so the caller can
-        # mark the section as errored rather than receive a fake lesson.
+        # JSON parse + block filtering both happen inside the validator so a
+        # bad first response triggers exactly one corrective retry against
+        # the same provider. A second failure (validation or transport) is
+        # surfaced as ``LessonGenerationError`` so the caller can mark the
+        # section as errored rather than receive a fake lesson.
         try:
-            data = await self._attempt(prompt_text)
-            return self._build_content(data, video_title)
-        except Exception as first_err:  # noqa: BLE001
-            logger.warning(
-                "Lesson generation first attempt failed (%s); retrying with stricter directive",
-                first_err,
+            result = await self._runtime.call(
+                [UnifiedMessage(role="user", content=prompt_text)],
+                primary=self._provider,
+                # Same-provider retry on transport error; the directive only
+                # gets appended on validator failures, so a network blip
+                # retries with the original prompt — safer than the old
+                # behavior which always lied to the model with a JSON-only
+                # directive even when the cause was a timeout.
+                fallbacks=[self._provider],
+                max_tokens=self._max_output_tokens,
+                temperature=0.3,
+                phase="lesson_generator.generate",
+                validator=lambda text: self._validate_lesson(text, video_title),
+                max_validation_retries=1,
+                retry_directive=_RETRY_DIRECTIVE,
             )
+        except LLMValidationError as exc:
+            logger.error("Lesson generation failed after retry: %s", exc)
+            raise LessonGenerationError(str(exc)) from exc
+        except LLMError as exc:
+            logger.error("Lesson generation failed (transport): %s", exc)
+            raise LessonGenerationError(str(exc)) from exc
 
-        retry_prompt = (
-            prompt_text
-            + "\n\nIMPORTANT: your previous response failed to parse as JSON. "
-            "Reply with ONLY a single valid JSON object. Escape every newline as "
-            "`\\n` and every double-quote as `\\\"` inside string values. The very "
-            "last character of your response must be `}`. Keep the lesson short — "
-            "4 to 6 blocks is plenty."
-        )
+        return result.parsed  # LessonContent
+
+    def _validate_lesson(self, text: str, video_title: str) -> LessonContent:
+        """AgentRuntime validator: parse JSON + build LessonContent.
+
+        Raises ``ValidationFailed`` on JSON parse failure or on the
+        valid-JSON-but-no-usable-blocks case so the runtime issues a
+        corrective retry with ``_RETRY_DIRECTIVE``.
+        """
         try:
-            data = await self._attempt(retry_prompt)
+            data = _parse_lesson_json(text)
+        except _LessonGenError as exc:
+            raise ValidationFailed(
+                f"json_parse_failed: {exc}",
+                hint="Reply with ONLY a single valid JSON object.",
+            ) from exc
+        try:
             return self._build_content(data, video_title)
-        except Exception as second_err:  # noqa: BLE001
-            logger.error("Lesson generation failed after retry: %s", second_err)
-            raise LessonGenerationError(str(second_err)) from second_err
-
-    async def _attempt(self, prompt_text: str) -> dict:
-        response = await self._provider.chat(
-            messages=[UnifiedMessage(role="user", content=prompt_text)],
-            max_tokens=self._max_output_tokens,
-            temperature=0.3,
-        )
-        text = response.content[0].text if response.content else ""
-        return _parse_lesson_json(text)
+        except _LessonGenError as exc:
+            raise ValidationFailed(
+                f"no_usable_blocks: {exc}",
+                hint="Include at least one block whose `type` is one of the allowed block types.",
+            ) from exc
 
     def _build_content(self, data: dict, video_title: str) -> LessonContent:
         if not data.get("title"):

@@ -10,6 +10,11 @@ from pydantic import BaseModel, Field
 from app.prompt_template import load_prompt
 from app.services.llm.base import LLMProvider, UnifiedMessage
 from app.services.llm.router import ModelRouter, TaskType
+from app.services.llm.runtime import (
+    AgentRuntime,
+    LLMValidationError,
+    ValidationFailed,
+)
 from app.tools.extractors.base import RawContentChunk
 
 logger = logging.getLogger(__name__)
@@ -57,6 +62,7 @@ class ContentAnalyzer:
 
     def __init__(self, model_router: ModelRouter):
         self._router = model_router
+        self._runtime = AgentRuntime(router=model_router)
 
     async def analyze(
         self,
@@ -66,18 +72,17 @@ class ContentAnalyzer:
         user_directive: str = "",
     ) -> AnalysisResult:
         """Analyze extracted content chunks."""
-        provider = await self._router.get_provider(TaskType.CONTENT_ANALYSIS)
         system_prompt = _PROMPT.render(user_directive=user_directive)
 
         total_text = "\n\n---\n\n".join(c.raw_text for c in chunks)
 
         if len(total_text) < 8000:
-            return await self._analyze_single(provider, system_prompt, title, chunks, source_type)
+            return await self._analyze_single(system_prompt, title, chunks, source_type)
         else:
-            return await self._analyze_batched(provider, system_prompt, title, chunks, source_type)
+            return await self._analyze_batched(system_prompt, title, chunks, source_type)
 
     async def _analyze_single(
-        self, provider: LLMProvider, system_prompt: str, title: str,
+        self, system_prompt: str, title: str,
         chunks: list[RawContentChunk], source_type: str,
     ) -> AnalysisResult:
         content_text = self._format_chunks_for_llm(chunks, source_type)
@@ -88,12 +93,27 @@ class ContentAnalyzer:
                 content=f'Analyze the following content from a {source_type} source titled "{title}":\n\n{content_text}',
             ),
         ]
-        response = await provider.chat(messages, max_tokens=4096, temperature=0.3)
-        response_text = "".join(b.text or "" for b in response.content if b.type == "text")
-        return self._parse_analysis_response(response_text, title, chunks)
+
+        # Validator parses JSON + builds the structured result. On JSON parse
+        # failure the runtime gets one corrective retry; on exhaustion we fall
+        # back to a degenerate result rather than raising — keeps the upstream
+        # ingestion pipeline robust to a single bad LLM response.
+        try:
+            result = await self._runtime.call(
+                messages,
+                primary=TaskType.CONTENT_ANALYSIS,
+                max_tokens=4096,
+                temperature=0.3,
+                phase="content_analyzer.single",
+                validator=lambda text: _build_analysis_from_text(text, title, chunks),
+            )
+            return result.parsed  # type: ignore[no-any-return]
+        except LLMValidationError:
+            logger.warning("ContentAnalyzer: validator exhausted, using degenerate fallback")
+            return _degenerate_analysis_result(title, chunks)
 
     async def _analyze_batched(
-        self, provider: LLMProvider, system_prompt: str, title: str,
+        self, system_prompt: str, title: str,
         chunks: list[RawContentChunk], source_type: str,
     ) -> AnalysisResult:
         BATCH_CHAR_LIMIT = 6000
@@ -123,9 +143,22 @@ class ContentAnalyzer:
                     content=f'Analyze part {i + 1}/{len(batches)} of a {source_type} source titled "{title}":\n\n{content_text}',
                 ),
             ]
-            response = await provider.chat(messages, max_tokens=4096, temperature=0.3)
-            response_text = "".join(b.text or "" for b in response.content if b.type == "text")
-            batch_results.append(self._parse_analysis_response(response_text, title, batch))
+            try:
+                result = await self._runtime.call(
+                    messages,
+                    primary=TaskType.CONTENT_ANALYSIS,
+                    max_tokens=4096,
+                    temperature=0.3,
+                    phase=f"content_analyzer.batch[{i + 1}/{len(batches)}]",
+                    validator=lambda text, b=batch: _build_analysis_from_text(text, title, b),
+                )
+                batch_results.append(result.parsed)
+            except LLMValidationError:
+                logger.warning(
+                    "ContentAnalyzer: batch %d/%d validator exhausted, using fallback",
+                    i + 1, len(batches),
+                )
+                batch_results.append(_degenerate_analysis_result(title, batch))
 
         return self._merge_batch_results(title, batch_results)
 
@@ -147,69 +180,10 @@ class ContentAnalyzer:
             parts.append(f"{header}\n{chunk.raw_text}")
         return "\n\n".join(parts)
 
-    @staticmethod
-    def _parse_analysis_response(
-        response_text: str, title: str, chunks: list[RawContentChunk],
-    ) -> AnalysisResult:
-        text = response_text.strip()
-        if text.startswith("```json"):
-            text = text[7:]
-        if text.startswith("```"):
-            text = text[3:]
-        if text.endswith("```"):
-            text = text[:-3]
-        text = text.strip()
-
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError:
-            logger.warning("Failed to parse LLM analysis response as JSON, using fallback")
-            return AnalysisResult(
-                source_title=title,
-                overall_summary=f"Content from: {title}",
-                overall_difficulty=3,
-                concepts=[],
-                chunks=[
-                    AnalyzedChunk(
-                        topic=f"Section {i + 1}",
-                        summary=c.raw_text[:200],
-                        raw_text=c.raw_text,
-                        concepts=[],
-                        difficulty=3,
-                        metadata=c.metadata,
-                    )
-                    for i, c in enumerate(chunks)
-                ],
-            )
-
-        concepts = [ExtractedConcept(**c) for c in data.get("concepts", [])]
-        analyzed_chunks = []
-        for i, chunk_data in enumerate(data.get("chunks", [])):
-            raw_text = chunks[i].raw_text if i < len(chunks) else ""
-            metadata = chunks[i].metadata if i < len(chunks) else {}
-            analyzed_chunks.append(
-                AnalyzedChunk(
-                    topic=chunk_data.get("topic", f"Section {i + 1}"),
-                    summary=chunk_data.get("summary", ""),
-                    raw_text=raw_text,
-                    concepts=chunk_data.get("concepts", []),
-                    difficulty=chunk_data.get("difficulty", 3),
-                    key_terms=chunk_data.get("key_terms", []),
-                    has_code=chunk_data.get("has_code", False),
-                    has_formula=chunk_data.get("has_formula", False),
-                    metadata=metadata,
-                )
-            )
-
-        return AnalysisResult(
-            source_title=data.get("source_title", title),
-            overall_summary=data.get("overall_summary", ""),
-            overall_difficulty=data.get("overall_difficulty", 3),
-            concepts=concepts,
-            chunks=analyzed_chunks,
-            suggested_prerequisites=data.get("suggested_prerequisites", []),
-            estimated_study_minutes=data.get("estimated_study_minutes", 0),
-        )
+    # NB: ``_parse_analysis_response`` was split into the module-level
+    # ``_build_analysis_from_text`` (validator-friendly, raises
+    # ``ValidationFailed`` on bad JSON) and ``_degenerate_analysis_result``
+    # (the soft fallback used when the runtime exhausts retries).
 
     @staticmethod
     def _merge_batch_results(title: str, results: list[AnalysisResult]) -> AnalysisResult:
@@ -250,3 +224,98 @@ class ContentAnalyzer:
             suggested_prerequisites=list(all_prereqs),
             estimated_study_minutes=total_minutes,
         )
+
+
+# --- parsing helpers -------------------------------------------------------
+
+
+def _strip_json_fences(text: str) -> str:
+    text = text.strip()
+    if text.startswith("```json"):
+        text = text[7:]
+    if text.startswith("```"):
+        text = text[3:]
+    if text.endswith("```"):
+        text = text[:-3]
+    return text.strip()
+
+
+def _build_analysis_from_text(
+    response_text: str, title: str, chunks: list[RawContentChunk]
+) -> AnalysisResult:
+    """Parse a single LLM response into an ``AnalysisResult``.
+
+    Used as an ``AgentRuntime`` validator. Raises ``ValidationFailed`` on
+    JSON parse failure so the runtime can issue a corrective retry. The
+    caller falls back to ``_degenerate_analysis_result`` on retry exhaustion.
+    """
+    text = _strip_json_fences(response_text)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValidationFailed(
+            f"invalid_json: {exc}",
+            hint="Reply with a single JSON object only — no prose, no fences.",
+        ) from exc
+
+    if not isinstance(data, dict):
+        raise ValidationFailed(
+            "response was valid JSON but not an object",
+            hint="Wrap the analysis fields in a top-level `{...}` object.",
+        )
+
+    concepts = [ExtractedConcept(**c) for c in data.get("concepts", [])]
+    analyzed_chunks = []
+    for i, chunk_data in enumerate(data.get("chunks", [])):
+        raw_text = chunks[i].raw_text if i < len(chunks) else ""
+        metadata = chunks[i].metadata if i < len(chunks) else {}
+        analyzed_chunks.append(
+            AnalyzedChunk(
+                topic=chunk_data.get("topic", f"Section {i + 1}"),
+                summary=chunk_data.get("summary", ""),
+                raw_text=raw_text,
+                concepts=chunk_data.get("concepts", []),
+                difficulty=chunk_data.get("difficulty", 3),
+                key_terms=chunk_data.get("key_terms", []),
+                has_code=chunk_data.get("has_code", False),
+                has_formula=chunk_data.get("has_formula", False),
+                metadata=metadata,
+            )
+        )
+
+    return AnalysisResult(
+        source_title=data.get("source_title", title),
+        overall_summary=data.get("overall_summary", ""),
+        overall_difficulty=data.get("overall_difficulty", 3),
+        concepts=concepts,
+        chunks=analyzed_chunks,
+        suggested_prerequisites=data.get("suggested_prerequisites", []),
+        estimated_study_minutes=data.get("estimated_study_minutes", 0),
+    )
+
+
+def _degenerate_analysis_result(
+    title: str, chunks: list[RawContentChunk]
+) -> AnalysisResult:
+    """Soft fallback when the LLM never returns valid JSON.
+
+    Preserves the pre-runtime behavior of ``_parse_analysis_response`` —
+    upstream ingestion gets a usable result instead of an exception.
+    """
+    return AnalysisResult(
+        source_title=title,
+        overall_summary=f"Content from: {title}",
+        overall_difficulty=3,
+        concepts=[],
+        chunks=[
+            AnalyzedChunk(
+                topic=f"Section {i + 1}",
+                summary=c.raw_text[:200],
+                raw_text=c.raw_text,
+                concepts=[],
+                difficulty=3,
+                metadata=c.metadata,
+            )
+            for i, c in enumerate(chunks)
+        ],
+    )

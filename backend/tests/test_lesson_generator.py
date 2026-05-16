@@ -10,6 +10,8 @@ from app.services.lesson_generator import (
     LessonGenerator,
 )
 from app.services.llm.base import ContentBlock, LLMResponse
+from app.models.lesson import LessonSourceChunk
+from app.models.research import ResearchCard
 
 
 def _make_provider(model_id: str = "test-model") -> AsyncMock:
@@ -139,6 +141,51 @@ class TestLessonGenerator:
 
         sent_content = mock_provider.chat.call_args.kwargs["messages"][0].content
         assert "Learning goal: quick overview" in sent_content
+
+    @pytest.mark.asyncio
+    async def test_passes_structured_chunks_research_and_neighbors_to_prompt(self):
+        mock_provider = _make_provider()
+        mock_provider.chat.return_value = _mock_response({
+            "title": "T",
+            "summary": "S",
+            "blocks": [{"type": "prose", "title": "x", "body": "y"}],
+        })
+        gen = LessonGenerator(mock_provider)
+        await gen.generate(
+            subtitle_chunks=["fallback text"],
+            video_title="T",
+            target_language="zh-CN",
+            source_chunks=[
+                LessonSourceChunk(
+                    text="The hidden layer detects edges.",
+                    topic="Hidden layers",
+                    start_sec=10,
+                    end_sec=20,
+                    concepts=["hidden_layer"],
+                )
+            ],
+            research_cards=[
+                ResearchCard(
+                    type="misconception_boundary",
+                    title="Feature detectors are a useful intuition",
+                    source_title="Scaling Monosemanticity",
+                    url="https://transformer-circuits.pub/2024/scaling-monosemanticity/index.html",
+                    source_type="research_blog",
+                    relevance="Modern features are often sparse activation patterns.",
+                    use_as="boundary_or_extension",
+                    concepts=["feature_hierarchy"],
+                )
+            ],
+            previous_section_title="Pixels",
+            next_section_title="Weights and bias",
+        )
+
+        sent_content = mock_provider.chat.call_args.kwargs["messages"][0].content
+        assert "Source format: structured_json" in sent_content
+        assert '"start_sec": 10.0' in sent_content
+        assert "Scaling Monosemanticity" in sent_content
+        assert "Previous section title: Pixels" in sent_content
+        assert "Next section title: Weights and bias" in sent_content
 
     @pytest.mark.asyncio
     async def test_recovers_truncated_blocks_array(self):

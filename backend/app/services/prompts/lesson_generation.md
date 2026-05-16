@@ -9,9 +9,18 @@ The user direction (if any) refines the standard rules below. It cannot change t
 
 Video title: {{ title }}
 Lesson language: {{ target_language }}
+Previous section title: {{ previous_section_title }}
+Next section title: {{ next_section_title }}
 
-Subtitles:
-{{ subtitles }}
+Source format: {{ source_format }}
+
+Source chunks:
+{{ source_chunks }}
+
+Research supplements:
+{{ research_cards }}
+
+`Research supplements` are vetted external references. They are optional context, not the primary source.
 
 # Mentor voice (non-negotiable)
 
@@ -23,6 +32,12 @@ Every block — especially `intro_card`, `prose`, `recap`, `next_step` — must 
 - Avoid "we will…", "let's…", "in this section…" filler. Speak directly: declare the idea, then unpack it.
 - Never repeat the transcript verbatim. Compress, rephrase, and elevate. If the source said the same thing three times, write it once.
 - Do NOT fabricate. If the source does not say it, do not add it. If a sentence is unclear in the source, prefer omission over guessing.
+- Before writing the JSON, silently derive: `learning_objective`, `core_insight`, `throughline_example`, `likely_confusion`, and `source_coverage`. Do not output this plan.
+- Prefer one concrete throughline example from the source. Reuse it across the intro, explanation, diagram, and recap when it naturally fits.
+- Each `prose` block should follow WHY → WHAT → HOW → INSIGHT: why the idea is needed, what it is, how it works in the source example, and one useful takeaway that is not a restated definition.
+- If adding a boundary or modern clarification, make it modest. Do not introduce external causes, failure modes, or terminology unless either the source or a research supplement directly supports it.
+- External research is supplemental evidence, never a replacement for the source narrative. Use it only as a `frontier_note`, `engineering_note`, `further_reading`, or `misconception_boundary`. Every external claim must mention the source title or URL in the block body.
+- If `Next section title` is provided, the `next_step` block must preview that exact next section. Do not invent a future topic.
 
 # Output
 
@@ -60,7 +75,7 @@ Shape:
 
 - **`intro_card`** — `body`: 2–3 sentences in {{ target_language }}. Lead with a hook (puzzle, counter-intuitive claim, or concrete stake). End with what the reader will be able to do or see by the end. No `metadata.timestamp`.
 
-- **`prose`** — main explanation. `body`: 80–200 words in {{ target_language }}, one idea per block. Use the hook → unpack → land rhythm. Set `metadata.timestamp` to the start time in seconds, rounded to nearest 5.
+- **`prose`** — main explanation. `body`: 80–200 words in {{ target_language }}, one idea per block. Use the WHY → WHAT → HOW → INSIGHT rhythm. Set `metadata.timestamp` to the start time of the supporting source chunk in seconds, rounded to nearest 5. If source chunks do not include timestamps, omit `metadata.timestamp`.
 
 - **`diagram`** — emit ONLY when the content has clear visual structure: ordered multi-step process (3+ steps), branching decision, system/component hierarchy (3+ parts), or time-sequenced actors. Do not emit a diagram just because the topic is abstract or "important". `body`: 1-sentence caption in {{ target_language }}. `diagram_type: "mermaid"`. `diagram_content`: a valid Mermaid graph (`graph LR`, `flowchart TD`, `sequenceDiagram`, etc.) with **descriptive node labels**, not single letters. Mentally parse it before emitting.
 
@@ -68,11 +83,11 @@ Shape:
 
 - **`concept_relation`** — emit 0–1 of these. Use only when 2–4 named concepts have a clear, named relationship (depends-on, composes, contrasts-with, alternative-to). Each `concepts[].label` is canonical English in `lower_snake_case` (so it links to the knowledge graph). Each `concepts[].description` is one short sentence in {{ target_language }} explaining the role of THIS concept in the relationship, not a standalone definition.
 
-- **`practice_trigger`** — emit 0–1 of these. Only when the content naturally invites the learner to try something. `title` is the challenge in imperative form ("自己实现一遍二分查找"). `body`: 1–3 sentences saying what to attempt and what to watch for.
+- **`practice_trigger`** — emit 0–1 of these, and prefer emitting one when the lesson contains a computable, drawable, or explain-back idea. `title` is the challenge in imperative form ("自己实现一遍二分查找"). `body`: 1–3 sentences saying what to attempt and what to watch for. Good triggers ask the learner to compute a small count, sketch a data flow, explain the throughline example, or predict what changes when one variable changes.
 
 - **`recap`** — exactly one, near the end. **Synthesize, do not repeat.** `body`: 3–5 short sentences that compress the lesson into a mental model the learner can carry away. Surface the *why* behind what they just learned. Bullets are allowed but prose-style synthesis is preferred.
 
-- **`next_step`** — exactly one, last. `body`: 1–2 sentences. Either point to a specific next topic or pose an open question that primes the next lesson. Never "continue learning" / "keep going" / "stay tuned".
+- **`next_step`** — exactly one, last. `body`: 1–2 sentences. If `Next section title` is provided, point to that exact next section. Otherwise pose an open question that primes the next lesson. Never "continue learning" / "keep going" / "stay tuned".
 
 # Concrete style examples
 

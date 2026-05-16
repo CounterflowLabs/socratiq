@@ -5,6 +5,18 @@ from pydantic import BaseModel, Field
 from app.models.lesson_blocks import LessonBlock
 
 
+class LessonSourceChunk(BaseModel):
+    """Structured source chunk supplied to lesson generation."""
+
+    text: str
+    topic: str | None = None
+    summary: str | None = None
+    start_sec: float | None = None
+    end_sec: float | None = None
+    concepts: list[str] = Field(default_factory=list)
+    key_terms: list[str] = Field(default_factory=list)
+
+
 class CodeSnippet(BaseModel):
     language: str = "python"
     code: str

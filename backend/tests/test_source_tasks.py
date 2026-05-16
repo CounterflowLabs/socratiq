@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import select
 
 from app.db.models.content_chunk import ContentChunk
+from app.db.models.course import Section
 from app.db.models.source import Source
 from app.db.models.source_task import SourceTask
 from app.services.source_tasks import (
@@ -201,6 +202,137 @@ async def test_course_generator_reports_section_progress(
         "success",
     ]
     assert {item["title"] for item in final_progress["items"]} == {"输入层", "隐藏层"}
+
+
+@pytest.mark.asyncio
+async def test_course_generator_sorts_bucket_chunks_by_source_time(
+    monkeypatch, db_session, demo_user
+):
+    source = Source(
+        type="bilibili",
+        url="https://www.bilibili.com/video/BV-time",
+        title="Timed Source",
+        status="ready",
+        metadata_={},
+        created_by=demo_user.id,
+    )
+    db_session.add(source)
+    await db_session.flush()
+    db_session.add_all(
+        [
+            ContentChunk(
+                source_id=source.id,
+                text="sigmoid transcript",
+                metadata_={
+                    "topic": "Sigmoid",
+                    "start_time": 612.0,
+                    "end_time": 673.0,
+                    "section_bucket": 1,
+                    "section_bucket_topic": "Weights and activation",
+                    "concepts": ["activation_function"],
+                },
+            ),
+            ContentChunk(
+                source_id=source.id,
+                text="edge transcript",
+                metadata_={
+                    "topic": "Edges",
+                    "start_time": 490.0,
+                    "end_time": 552.0,
+                    "section_bucket": 1,
+                    "section_bucket_topic": "Weights and activation",
+                    "concepts": ["weighted_sum"],
+                },
+            ),
+            ContentChunk(
+                source_id=source.id,
+                text="matrix transcript",
+                metadata_={
+                    "topic": "Matrix",
+                    "start_time": 794.0,
+                    "end_time": 856.0,
+                    "section_bucket": 2,
+                    "section_bucket_topic": "Matrix view",
+                    "concepts": ["matrix_vector_multiplication"],
+                },
+            ),
+        ]
+    )
+    await db_session.flush()
+
+    captured: list[dict] = []
+
+    class FakeLesson:
+        def __init__(self, title: str):
+            self._title = title
+
+        def model_dump(self):
+            return {
+                "title": self._title,
+                "summary": "summary",
+                "sections": [],
+                "blocks": [
+                    {"type": "recap", "title": "r", "body": "summary"},
+                ],
+            }
+
+    class FakeLessonGenerator:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def generate(self, *, video_title, **kwargs):
+            captured.append({"video_title": video_title, **kwargs})
+            return FakeLesson(str(video_title))
+
+    class FakeLabGenerator:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+    from app.services import course_generator as course_generator_module
+
+    monkeypatch.setattr(
+        course_generator_module,
+        "LessonGenerator",
+        FakeLessonGenerator,
+    )
+    monkeypatch.setattr(course_generator_module, "LabGenerator", FakeLabGenerator)
+
+    provider = SimpleNamespace(
+        chat=AsyncMock(
+            return_value=SimpleNamespace(
+                content=[SimpleNamespace(type="text", text="description")]
+            )
+        ),
+        model_id=lambda: "test-model",
+    )
+    router = SimpleNamespace(get_provider=AsyncMock(return_value=provider))
+
+    course = await CourseGenerator(router).generate(
+        db=db_session,
+        source_ids=[source.id],
+        target_language="zh-CN",
+        user_id=demo_user.id,
+        skip_ready_check=True,
+    )
+
+    sections = (
+        await db_session.execute(
+            select(Section).where(Section.course_id == course.id).order_by(Section.order_index)
+        )
+    ).scalars().all()
+
+    assert [(s.source_start, s.source_end) for s in sections] == [
+        ("490s", "673s"),
+        ("794s", "856s"),
+    ]
+    first_call_chunks = captured[0]["source_chunks"]
+    assert [chunk.start_sec for chunk in first_call_chunks] == [490.0, 612.0]
+    assert captured[0]["next_section_title"] == "Matrix view"
+    assert captured[1]["previous_section_title"] == "Weights and activation"
+    assert captured[0]["research_cards"]
+    assert sections[0].content["research_cards"][0]["source_title"] == (
+        "KAN: Kolmogorov-Arnold Networks"
+    )
 
 
 def test_generate_course_task_ignores_legacy_goal_kwarg(monkeypatch):

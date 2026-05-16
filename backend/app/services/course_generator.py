@@ -26,12 +26,13 @@ from app.config import get_settings
 from app.db.models.content_chunk import ContentChunk as ContentChunkModel
 from app.db.models.course import Course, CourseSource, Section
 from app.db.models.source import Source
-from app.models.lesson import CodeSnippet
+from app.models.lesson import CodeSnippet, LessonSourceChunk
 from app.prompt_template import load_prompt
 from app.services.lab_generator import LabGenerator
 from app.services.lesson_generator import LessonGenerationError, LessonGenerator
 from app.services.llm.base import UnifiedMessage
 from app.services.llm.router import ModelRouter, TaskType
+from app.services.research_enrichment import ResearchEnrichmentService
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +104,7 @@ class CourseGenerator:
                 .where(ContentChunkModel.source_id == source.id)
                 .order_by(ContentChunkModel.created_at)
             )
-            rows = result.scalars().all()
+            rows = sorted(result.scalars().all(), key=self._chunk_order_key)
             chunks_by_source[source.id] = rows
             all_chunks.extend(rows)
 
@@ -116,6 +117,7 @@ class CourseGenerator:
         provider = await self._router.get_provider(TaskType.CONTENT_ANALYSIS)
         lesson_gen = LessonGenerator(provider)
         lab_gen = LabGenerator(provider)
+        research_enrichment = ResearchEnrichmentService()
         settings = get_settings()
         # Auto-tune chunk-level concurrency: local providers (ollama,
         # localhost-pointed) serialize anyway, so fanning out N parallel
@@ -135,6 +137,7 @@ class CourseGenerator:
                 chunks=chunks_by_source[source.id],
                 lesson_gen=lesson_gen,
                 lab_gen=lab_gen,
+                research_enrichment=research_enrichment,
                 sem=sem,
                 target_language=target_language,
                 user_directive=user_directive,
@@ -186,6 +189,7 @@ class CourseGenerator:
         chunks: list[ContentChunkModel],
         lesson_gen: LessonGenerator,
         lab_gen: LabGenerator,
+        research_enrichment: ResearchEnrichmentService,
         sem: asyncio.Semaphore,
         target_language: str,
         user_directive: str,
@@ -334,7 +338,9 @@ class CourseGenerator:
             section_progress_mode = "bucket"
             sorted_buckets = sorted(bucket_groups.keys())
             for order_index, bucket_id in enumerate(sorted_buckets):
-                bucket_chunks = bucket_groups[bucket_id]
+                bucket_chunks = sorted(
+                    bucket_groups[bucket_id], key=self._chunk_order_key
+                )
                 first_meta = bucket_chunks[0].metadata_ or {}
                 bucket_title = (
                     first_meta.get("section_bucket_topic")
@@ -348,6 +354,30 @@ class CourseGenerator:
                     title=str(bucket_title),
                 )
             await _emit_section_progress()
+            bucket_titles = {
+                bucket_id: str(
+                    (
+                        sorted(
+                            bucket_groups[bucket_id],
+                            key=self._chunk_order_key,
+                        )[0].metadata_
+                        or {}
+                    ).get(
+                        "section_bucket_topic"
+                    )
+                    or (
+                        sorted(
+                            bucket_groups[bucket_id],
+                            key=self._chunk_order_key,
+                        )[0].metadata_
+                        or {}
+                    ).get("topic")
+                    or source.title
+                    or f"Section {idx + 1}"
+                )
+                for idx, bucket_id in enumerate(sorted_buckets)
+            }
+            bucket_index = {bucket_id: idx for idx, bucket_id in enumerate(sorted_buckets)}
 
             async def _gen_one_bucket_lesson(
                 bucket_id: int, bucket_chunks: list[ContentChunkModel]
@@ -366,12 +396,30 @@ class CourseGenerator:
                         or source.title
                         or "Untitled"
                     )
+                    neighbor_index = bucket_index[bucket_id]
+                    previous_title = (
+                        bucket_titles[sorted_buckets[neighbor_index - 1]]
+                        if neighbor_index > 0
+                        else None
+                    )
+                    next_title = (
+                        bucket_titles[sorted_buckets[neighbor_index + 1]]
+                        if neighbor_index < len(sorted_buckets) - 1
+                        else None
+                    )
                     try:
                         lesson = await lesson_gen.generate(
                             subtitle_chunks=[c.text for c in bucket_chunks],
                             video_title=bucket_title,
                             target_language=target_language,
                             user_directive=user_directive,
+                            source_chunks=self._lesson_source_chunks(bucket_chunks),
+                            research_cards=research_enrichment.enrich(
+                                section_title=str(bucket_title),
+                                chunks=bucket_chunks,
+                            ),
+                            previous_section_title=previous_title,
+                            next_section_title=next_title,
                         )
                         await _set_section_progress(progress_key, "success")
                         return bucket_id, lesson, None
@@ -384,7 +432,10 @@ class CourseGenerator:
 
             bucket_results = await asyncio.gather(
                 *(
-                    _gen_one_bucket_lesson(b, bucket_groups[b])
+                    _gen_one_bucket_lesson(
+                        b,
+                        sorted(bucket_groups[b], key=self._chunk_order_key),
+                    )
                     for b in sorted_buckets
                 )
             )
@@ -409,8 +460,21 @@ class CourseGenerator:
                     title=str(chunk_title),
                 )
             await _emit_section_progress()
+            chunk_titles = []
+            for order_index, chunk in enumerate(chunks):
+                cmeta = chunk.metadata_ or {}
+                chunk_titles.append(
+                    str(
+                        cmeta.get("topic")
+                        or cmeta.get("page_title")
+                        or source.title
+                        or f"Section {order_index + 1}"
+                    )
+                )
 
-            async def _gen_one_chunk_lesson(chunk: ContentChunkModel):
+            async def _gen_one_chunk_lesson(
+                order_index: int, chunk: ContentChunkModel
+            ):
                 async with sem:
                     progress_key = f"chunk:{chunk.id}"
                     await _set_section_progress(progress_key, "running")
@@ -429,6 +493,21 @@ class CourseGenerator:
                             video_title=chunk_title,
                             target_language=target_language,
                             user_directive=user_directive,
+                            source_chunks=self._lesson_source_chunks([chunk]),
+                            research_cards=research_enrichment.enrich(
+                                section_title=str(chunk_title),
+                                chunks=[chunk],
+                            ),
+                            previous_section_title=(
+                                chunk_titles[order_index - 1]
+                                if order_index > 0
+                                else None
+                            ),
+                            next_section_title=(
+                                chunk_titles[order_index + 1]
+                                if order_index < len(chunk_titles) - 1
+                                else None
+                            ),
                         )
                         await _set_section_progress(progress_key, "success")
                         return chunk.id, lesson, None
@@ -440,7 +519,7 @@ class CourseGenerator:
                         return chunk.id, None, str(e)[:500]
 
             chunk_results = await asyncio.gather(
-                *(_gen_one_chunk_lesson(c) for c in chunks)
+                *(_gen_one_chunk_lesson(i, c) for i, c in enumerate(chunks))
             )
             for cid, lsn, err in chunk_results:
                 if lsn is not None:
@@ -450,16 +529,20 @@ class CourseGenerator:
         else:
             section_progress_mode = "page"
             sorted_pages = sorted(page_groups.keys())
+            page_title_by_index: dict[int, str] = {}
             for order_index, page_idx in enumerate(sorted_pages):
-                page_chunks = page_groups[page_idx]
+                page_chunks = sorted(page_groups[page_idx], key=self._chunk_order_key)
+                page_groups[page_idx] = page_chunks
                 first_meta = page_chunks[0].metadata_ or {}
                 page_title = first_meta.get("page_title") or source.title or f"Section {order_index + 1}"
+                page_title_by_index[page_idx] = str(page_title)
                 _append_section_progress_item(
                     f"page:{page_idx}",
                     order_index=order_index,
                     title=str(page_title),
                 )
             await _emit_section_progress()
+            page_index = {page_idx: idx for idx, page_idx in enumerate(sorted_pages)}
 
             # Run lesson generation in parallel across pages
             async def _gen_one_lesson(page_idx: int, page_chunks: list[ContentChunkModel]):
@@ -472,12 +555,30 @@ class CourseGenerator:
                     page_title = (
                         first_meta.get("page_title") or source.title or "Untitled"
                     )
+                    neighbor_index = page_index[page_idx]
+                    previous_title = (
+                        page_title_by_index[sorted_pages[neighbor_index - 1]]
+                        if neighbor_index > 0
+                        else None
+                    )
+                    next_title = (
+                        page_title_by_index[sorted_pages[neighbor_index + 1]]
+                        if neighbor_index < len(sorted_pages) - 1
+                        else None
+                    )
                     try:
                         lesson = await lesson_gen.generate(
                             subtitle_chunks=[c.text for c in page_chunks],
                             video_title=page_title,
                             target_language=target_language,
                             user_directive=user_directive,
+                            source_chunks=self._lesson_source_chunks(page_chunks),
+                            research_cards=research_enrichment.enrich(
+                                section_title=str(page_title),
+                                chunks=page_chunks,
+                            ),
+                            previous_section_title=previous_title,
+                            next_section_title=next_title,
                         )
                         await _set_section_progress(progress_key, "success")
                         return page_idx, lesson, None
@@ -589,6 +690,7 @@ class CourseGenerator:
         from app.db.models.lab import Lab
 
         all_chunks = [c for cs in chunks_by_source.values() for c in cs]
+        research_enrichment = ResearchEnrichmentService()
         has_page_index = any(
             (c.metadata_ or {}).get("page_index") is not None for c in all_chunks
         )
@@ -606,6 +708,7 @@ class CourseGenerator:
             for (source_id, page_idx), group_chunks in sorted(
                 page_groups.items(), key=lambda kv: (str(kv[0][0]), kv[0][1])
             ):
+                group_chunks = sorted(group_chunks, key=self._chunk_order_key)
                 first_meta = group_chunks[0].metadata_ or {}
                 assets = per_source_assets.get(source_id) or _SourceAssets.empty()
                 lesson = assets.lesson_for(page_idx)
@@ -626,6 +729,13 @@ class CourseGenerator:
                     "has_code": any((c.metadata_ or {}).get("has_code") for c in group_chunks),
                     "lab_mode": assets.lab_mode,
                     "graph_card": graph,
+                    "research_cards": [
+                        card.model_dump(exclude_none=True)
+                        for card in research_enrichment.enrich(
+                            section_title=str(section_title),
+                            chunks=group_chunks,
+                        )
+                    ],
                 }
                 if lesson:
                     section_content["lesson"] = lesson
@@ -673,14 +783,15 @@ class CourseGenerator:
             # monotonic across the chunk sequence (defensive).
             def _bucket_sort_key(item):
                 (source_id, bid), group = item
-                first_created = min(c.created_at for c in group)
-                return (str(source_id), first_created, bid)
+                first_chunk = min(group, key=self._chunk_order_key)
+                return (str(source_id), self._chunk_order_key(first_chunk), bid)
 
             section_order = 0
             attached_lab_sources: set[UUID] = set()
             for (source_id, bid), group_chunks in sorted(
                 bucket_groups.items(), key=_bucket_sort_key
             ):
+                group_chunks = sorted(group_chunks, key=self._chunk_order_key)
                 first_meta = group_chunks[0].metadata_ or {}
                 last_meta = group_chunks[-1].metadata_ or {}
                 assets = per_source_assets.get(source_id) or _SourceAssets.empty()
@@ -702,6 +813,13 @@ class CourseGenerator:
                     "has_code": any((c.metadata_ or {}).get("has_code") for c in group_chunks),
                     "lab_mode": assets.lab_mode,
                     "graph_card": graph,
+                    "research_cards": [
+                        card.model_dump(exclude_none=True)
+                        for card in research_enrichment.enrich(
+                            section_title=str(section_title),
+                            chunks=group_chunks,
+                        )
+                    ],
                 }
                 if lesson:
                     section_content["lesson"] = lesson
@@ -761,6 +879,13 @@ class CourseGenerator:
                     "has_code": metadata.get("has_code", False),
                     "lab_mode": assets.lab_mode,
                     "graph_card": graph,
+                    "research_cards": [
+                        card.model_dump(exclude_none=True)
+                        for card in research_enrichment.enrich(
+                            section_title=str(section_title),
+                            chunks=[chunk],
+                        )
+                    ],
                 }
                 if lesson:
                     section_content["lesson"] = lesson
@@ -814,15 +939,68 @@ class CourseGenerator:
         logger.info("Created lab '%s' for section %s", lab.title, section_id)
 
     @staticmethod
+    def _lesson_source_chunks(
+        chunks: list[ContentChunkModel],
+    ) -> list[LessonSourceChunk]:
+        items: list[LessonSourceChunk] = []
+        for chunk in sorted(chunks, key=CourseGenerator._chunk_order_key):
+            metadata = chunk.metadata_ or {}
+            concepts = metadata.get("concepts", [])
+            key_terms = metadata.get("key_terms", [])
+            items.append(
+                LessonSourceChunk(
+                    text=chunk.text,
+                    topic=metadata.get("topic") if isinstance(metadata.get("topic"), str) else None,
+                    summary=metadata.get("summary") if isinstance(metadata.get("summary"), str) else None,
+                    start_sec=CourseGenerator._coerce_float(metadata.get("start_time")),
+                    end_sec=CourseGenerator._coerce_float(metadata.get("end_time")),
+                    concepts=[str(c) for c in concepts] if isinstance(concepts, list) else [],
+                    key_terms=[str(k) for k in key_terms] if isinstance(key_terms, list) else [],
+                )
+            )
+        return items
+
+    @staticmethod
+    def _chunk_order_key(chunk: ContentChunkModel) -> tuple:
+        metadata = chunk.metadata_ or {}
+        page_idx = CourseGenerator._coerce_float(metadata.get("page_index"))
+        start = CourseGenerator._coerce_float(metadata.get("start_time"))
+        page_start = CourseGenerator._coerce_float(metadata.get("page_start"))
+        created_at = getattr(chunk, "created_at", None)
+        created_key = created_at.isoformat() if created_at is not None else ""
+        if start is not None:
+            return (0, page_idx if page_idx is not None else 0, start, created_key, str(chunk.id))
+        if page_start is not None:
+            return (1, page_start, created_key, str(chunk.id))
+        if page_idx is not None:
+            return (2, page_idx, created_key, str(chunk.id))
+        return (3, created_key, str(chunk.id))
+
+    @staticmethod
     def _format_source_ref(metadata: dict, ref_type: str) -> str | None:
         if "start_time" in metadata and ref_type == "start":
-            return f"{metadata['start_time']:.0f}s"
+            start = CourseGenerator._coerce_float(metadata.get("start_time"))
+            return f"{start:.0f}s" if start is not None else None
         if "end_time" in metadata and ref_type == "end":
-            return f"{metadata['end_time']:.0f}s"
+            end = CourseGenerator._coerce_float(metadata.get("end_time"))
+            return f"{end:.0f}s" if end is not None else None
         if "page_start" in metadata and ref_type == "start":
             return f"p{metadata['page_start']}"
         if "page_end" in metadata and ref_type == "end":
             return f"p{metadata['page_end']}"
+        return None
+
+    @staticmethod
+    def _coerce_float(value: object) -> float | None:
+        if isinstance(value, bool) or value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            try:
+                return float(value)
+            except ValueError:
+                return None
         return None
 
     async def _generate_description(

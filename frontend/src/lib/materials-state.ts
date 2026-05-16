@@ -92,6 +92,19 @@ export function deriveMaterialEmbed(source: SourceResponse): SourceEmbed | null 
     };
   }
 
+  const hasUsableCourse =
+    Boolean(source.latest_course_id) &&
+    source.latest_course_task?.status !== "failure" &&
+    !isTaskActive(source.latest_course_task);
+  if (hasUsableCourse && source.embed?.status === "stale") {
+    return {
+      ...source.embed,
+      status: "ready",
+      reason: null,
+      error: null,
+    };
+  }
+
   return source.embed;
 }
 

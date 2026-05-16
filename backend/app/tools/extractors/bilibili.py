@@ -208,7 +208,22 @@ class BilibiliExtractor(ContentExtractor):
                 api_base_url=self._whisper_api_base_url,
                 api_model=self._whisper_api_model,
             )
-            segments = await whisper.transcribe(source)
+            try:
+                segments = await whisper.transcribe(source)
+            except Exception as exc:
+                raise ExtractionError(
+                    "B站视频没有可用字幕，系统尝试下载音频用于语音转写，但音频下载失败。"
+                    "这通常是当前网络无法稳定访问 B站视频 CDN，或容器代理未生效。"
+                    "请稍后重试、切换网络/代理，或换一个带字幕的视频。",
+                    source_type="bilibili",
+                    details={
+                        "bvid": bvid,
+                        "cid": cid,
+                        "page_index": page_index,
+                        "fallback": "whisper",
+                        "cause": str(exc),
+                    },
+                ) from exc
             subtitle_source = "whisper"
             chunks = group_segments(
                 segments=segments, source_type="bilibili",

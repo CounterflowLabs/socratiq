@@ -117,6 +117,34 @@ const TASK_TYPE_LABELS: Record<string, string> = {
   course_generation: "课程生成",
 };
 
+const TASK_STAGE_DETAILS: Record<string, Record<string, string[]>> = {
+  source_processing: {
+    pending: ["创建资料记录", "等待处理队列"],
+    extracting: ["读取来源信息", "获取字幕或音频", "整理原始片段"],
+    analyzing: ["识别主题线索", "拆分学习切片", "估算难度与时长"],
+    storing: ["保存资料摘要", "写入切片内容", "关联来源元数据"],
+    embedding: ["生成切片向量", "生成概念向量", "写入检索库"],
+    ready: ["资料处理完成", "课程生成已接力"],
+    error: ["记录失败原因", "等待重试"],
+    cancelled: ["停止后台任务", "保留已完成记录"],
+  },
+  course_generation: {
+    pending: ["创建课程任务", "等待生成队列"],
+    planning: ["读取资料切片", "确定课程结构", "安排章节顺序"],
+    assembling_course: ["确认章节顺序", "生成章节课文", "装配练习与学习入口"],
+    generating_lessons: ["生成章节课文", "补齐示例与概念", "保存章节草稿"],
+    generating_labs: ["生成练习任务", "准备评测信息", "绑定章节入口"],
+    ready: ["课程已写入", "学习入口已开放"],
+    error: ["记录失败原因", "等待重试"],
+    cancelled: ["停止生成任务", "保留已完成记录"],
+  },
+};
+
+const TASK_STAGE_FLOW: Record<string, string[]> = {
+  source_processing: ["pending", "extracting", "analyzing", "storing", "embedding", "ready"],
+  course_generation: ["pending", "planning", "assembling_course", "ready"],
+};
+
 function getSourceOrigin(source: SourceResponse): { label: string; href?: string } {
   const originalFilename = source.metadata_?.original_filename;
   if (typeof originalFilename === "string" && originalFilename.trim()) {
@@ -393,6 +421,178 @@ function getSectionAssemblyProgress(
     active: typeof raw.active === "string" ? raw.active : null,
     items,
   };
+}
+
+function isTaskDetailVisible(task?: SourceTaskSummary | null): task is SourceTaskSummary {
+  return Boolean(task && (isTaskActiveStatus(task) || task.status === "failure"));
+}
+
+function getTaskStageFlow(taskType: string): string[] {
+  return TASK_STAGE_FLOW[taskType] ?? ["pending", "processing", "ready"];
+}
+
+function normalizeTaskStage(task: SourceTaskSummary): string {
+  if (task.status === "failure") return task.stage ?? "error";
+  if (task.status === "cancelled") return "cancelled";
+  return task.stage ?? task.status;
+}
+
+function getTaskStageState(
+  task: SourceTaskSummary,
+  stage: string,
+  index: number,
+  currentIndex: number,
+): LifecycleState {
+  if (task.status === "failure" && index === currentIndex) return "error";
+  if (task.status === "cancelled" && index === currentIndex) return "cancelled";
+  if (index < currentIndex) return "done";
+  if (index === currentIndex) return "current";
+  return "pending";
+}
+
+function getStageDetails(taskType: string, stage: string, task: SourceTaskSummary): string[] {
+  if (task.status === "failure" && task.error_summary && stage === normalizeTaskStage(task)) {
+    return [task.error_summary];
+  }
+
+  return TASK_STAGE_DETAILS[taskType]?.[stage] ?? [getStageLabel(stage) ?? stage];
+}
+
+function TaskStageDetailPanel({ source }: { source: SourceResponse }) {
+  const tasks = [source.latest_processing_task, source.latest_course_task].filter(
+    isTaskDetailVisible,
+  );
+
+  if (tasks.length === 0) {
+    return null;
+  }
+
+  return (
+    <section
+      className="rounded-2xl p-4"
+      style={{
+        background: "var(--surface)",
+        border: "1px solid var(--border)",
+      }}
+    >
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h3 className="text-sm font-semibold" style={{ color: "var(--ink)" }}>
+            当前步骤
+          </h3>
+          <p className="mt-1 text-xs" style={{ color: "var(--ink-3)" }}>
+            {tasks.length > 1 ? "多个任务正在推进。" : getTaskSummary(tasks[0])}
+          </p>
+        </div>
+        <span className="text-xs" style={{ color: "var(--ink-4)" }}>
+          {tasks.length} 个任务
+        </span>
+      </div>
+
+      <div className="mt-3 space-y-3">
+        {tasks.map((task) => (
+          <TaskStageDetailGroup key={task.id ?? task.task_type} task={task} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function TaskStageDetailGroup({ task }: { task: SourceTaskSummary }) {
+  const flow = getTaskStageFlow(task.task_type);
+  const currentStage = normalizeTaskStage(task);
+  const rawIndex = flow.indexOf(currentStage);
+  const currentIndex = rawIndex >= 0 ? rawIndex : 0;
+  const visibleFlow = rawIndex >= 0 ? flow : [currentStage, ...flow];
+
+  return (
+    <div
+      className="rounded-xl px-3 py-3"
+      style={{
+        background: "var(--surface-2)",
+        border: "1px solid var(--border)",
+      }}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium" style={{ color: "var(--ink)" }}>
+              {getTaskLabel(task)}
+            </span>
+            <span className="chip">
+              {getTaskStatusLabel(task.status)}
+            </span>
+          </div>
+          <p className="mt-0.5 truncate text-xs" style={{ color: "var(--ink-3)" }}>
+            {getStageLabel(currentStage) ?? currentStage}
+          </p>
+        </div>
+      </div>
+
+      <ol className="mt-3 space-y-3">
+        {visibleFlow.map((stage, index) => {
+          const state = getTaskStageState(task, stage, index, currentIndex);
+          const details = getStageDetails(task.task_type, stage, task);
+
+          return (
+            <li key={stage} className="flex gap-3">
+              <div className="flex flex-col items-center">
+                <span
+                  className="inline-flex h-6 w-6 items-center justify-center rounded-full"
+                  style={{
+                    background:
+                      state === "done"
+                        ? "var(--sage-soft)"
+                        : state === "current"
+                          ? "var(--accent-soft)"
+                          : state === "error"
+                            ? "var(--error-soft)"
+                            : "var(--surface)",
+                    color:
+                      state === "done"
+                        ? "var(--sage-ink)"
+                        : state === "current"
+                          ? "var(--accent-ink)"
+                          : state === "error"
+                            ? "var(--error)"
+                            : "var(--ink-3)",
+                    border: "1px solid var(--border)",
+                  }}
+                >
+                  <LifecycleIcon state={state} />
+                </span>
+                {index < visibleFlow.length - 1 ? (
+                  <span
+                    className="mt-1 h-full min-h-7 w-px"
+                    style={{ background: "var(--border)" }}
+                  />
+                ) : null}
+              </div>
+              <div className="min-w-0 flex-1 pb-1">
+                <p className="text-sm font-medium" style={{ color: "var(--ink)" }}>
+                  {getStageLabel(stage) ?? stage}
+                </p>
+                <ul className="mt-1 grid gap-1 sm:grid-cols-2">
+                  {details.map((detail) => (
+                    <li
+                      key={detail}
+                      className="rounded-md px-2 py-1 text-[11px]"
+                      style={{
+                        background: "var(--surface)",
+                        color: "var(--ink-3)",
+                      }}
+                    >
+                      {detail}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
 }
 
 function TaskRow({
@@ -1032,6 +1232,7 @@ export default function SourceDetailDrawer({
                   onCancel={() => void handleCourseTaskAction("cancel")}
                   onRetry={() => void handleCourseTaskAction("retry")}
                 />
+                <TaskStageDetailPanel source={source} />
                 <SectionAssemblyPanel task={source.latest_course_task} />
 
                 <section

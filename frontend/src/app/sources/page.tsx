@@ -660,6 +660,13 @@ function RowAction({
       </span>
     );
   }
+  if (source.latest_course_id && status === "ready") {
+    return (
+      <span className="btn btn-ghost btn-icon btn-sm" aria-hidden>
+        <IcMore size={14} />
+      </span>
+    );
+  }
   if (status === "ready") {
     return (
       <button

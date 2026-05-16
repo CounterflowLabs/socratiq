@@ -106,6 +106,25 @@ describe("deriveMaterialPresentation", () => {
     expect(result.primaryAction).toBe("view-details");
   });
 
+  it("does not let stale embedding hide an already generated course", () => {
+    const source = makeSource({
+      latest_course_id: "course-123",
+      course_count: 1,
+      embed: {
+        status: "stale",
+        reason: "embed model upgraded",
+      },
+      latest_course_task: {
+        task_type: "course_generation",
+        status: "success",
+        stage: "ready",
+      },
+    });
+
+    expect(deriveMaterialPresentation(source).badge).toBe("已生成课程");
+    expect(deriveMaterialEmbed(source)?.status).toBe("ready");
+  });
+
   it("prioritizes active source processing over queued course generation", () => {
     const result = deriveMaterialPresentation(
       makeSource({

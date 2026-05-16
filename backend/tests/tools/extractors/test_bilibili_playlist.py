@@ -3,6 +3,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from app.tools.extractors.base import ExtractionError
 from app.tools.extractors.bilibili import BilibiliExtractor
 
 
@@ -217,3 +218,33 @@ class TestBilibiliPlaylist:
         assert mock_ws.transcribe.call_count == 2
         assert result.metadata["subtitle_source"] == "whisper"
         assert result.metadata["is_playlist"] is True
+
+    @pytest.mark.asyncio
+    async def test_whisper_download_failure_raises_bilibili_error(self):
+        """ASR fallback failures should show a Bilibili-specific user message."""
+        ext = BilibiliExtractor(whisper_mode="api")
+
+        mock_video = AsyncMock()
+        mock_video.get_info = AsyncMock(
+            return_value=_make_info(SINGLE_PAGE, "No Subtitle Video")
+        )
+        mock_video.get_subtitle = AsyncMock(return_value={"subtitles": []})
+
+        with patch("app.tools.extractors.bilibili.video.Video", return_value=mock_video):
+            with patch("app.tools.extractors.asr.WhisperService") as MockWhisper:
+                mock_ws = AsyncMock()
+                mock_ws.transcribe = AsyncMock(
+                    side_effect=RuntimeError(
+                        "yt-dlp audio download failed (exit 1): SSL EOF"
+                    )
+                )
+                MockWhisper.return_value = mock_ws
+
+                with pytest.raises(ExtractionError) as exc_info:
+                    await ext.extract("https://www.bilibili.com/video/BV1xx411c7XW")
+
+        assert "B站视频没有可用字幕" in str(exc_info.value)
+        assert "音频下载失败" in str(exc_info.value)
+        assert exc_info.value.source_type == "bilibili"
+        assert exc_info.value.details["fallback"] == "whisper"
+        assert "yt-dlp audio download failed" in exc_info.value.details["cause"]

@@ -190,6 +190,46 @@ describe("/sources page", () => {
     expect(screen.queryByText("embed model upgraded")).not.toBeInTheDocument();
   });
 
+  it("shows a generated course as complete even when embedding is stale", async () => {
+    globalThis.fetch = mockFetchSequence([
+      {
+        items: [
+          makeSource({
+            id: "src-stale-course-ready",
+            title: "Generated Course Material",
+            embed: {
+              status: "stale",
+              model: "old-model",
+              reason: "embed model upgraded",
+            },
+            latest_course_id: "course-ready",
+            course_count: 1,
+            latest_course_task: {
+              id: "task-row-ready",
+              task_type: "course_generation",
+              status: "success",
+              stage: "ready",
+            },
+          }),
+        ],
+        total: 1,
+        skip: 0,
+        limit: 20,
+      },
+    ]) as unknown as typeof fetch;
+
+    const Page = (await import("@/app/sources/page")).default;
+    render(<Page />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Generated Course Material")).toBeInTheDocument();
+      expect(screen.getByText("已生成 1 门课程")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText("需重新处理")).not.toBeInTheDocument();
+    expect(screen.queryByText("embed model upgraded")).not.toBeInTheDocument();
+  });
+
   it("does not show enter-course CTA when the derived state is failed", async () => {
     globalThis.fetch = mockFetchSequence([
       {

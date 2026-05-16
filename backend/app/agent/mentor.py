@@ -10,7 +10,7 @@ from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.tools.base import AgentTool
+from app.agent.tools.base import AgentTool, is_tool_error, tool_error
 from app.agent.prompts.mentor import build_system_prompt
 from app.prompt_template import load_prompt
 from app.services.llm.base import (
@@ -205,7 +205,7 @@ class MentorAgent:
             for tc in tool_calls:
                 tool_started = time.perf_counter()
                 tool_result = await self._execute_tool(tc["name"], tc["input"])
-                tool_status = "error" if tool_result.startswith("Error") else "ok"
+                tool_status = "error" if is_tool_error(tool_result) else "ok"
                 tool_result = self._extract_citations(tool_result)
                 self._tracer.emit(
                     "agent_tool_result",
@@ -266,14 +266,28 @@ class MentorAgent:
         """Execute a tool and return its result string."""
         tool = self._tools.get(tool_name)
         if not tool:
-            return f"Error: Unknown tool '{tool_name}'"
+            return tool_error(
+                message=f"No tool named {tool_name!r}",
+                reason="unknown_tool",
+                suggestion=(
+                    "Available tools: " + ", ".join(self._tools)
+                    + ". Pick one of these by exact name."
+                ),
+            )
 
         try:
-            result = await tool.execute(**params)
-            return result
+            return await tool.execute(**params)
         except Exception as e:
             logger.error(f"Tool '{tool_name}' execution error: {e}", exc_info=True)
-            return f"Error executing tool '{tool_name}': {str(e)}"
+            return tool_error(
+                message=f"{tool_name} crashed: {e}",
+                reason="tool_exception",
+                suggestion=(
+                    "This is a backend error, not a wrong call. Don't retry the same "
+                    "call immediately — try a different approach (different parameters, "
+                    "a different tool, or just answer from your own knowledge)."
+                ),
+            )
 
     @staticmethod
     def _safe_model_id(provider: LLMProvider) -> str:

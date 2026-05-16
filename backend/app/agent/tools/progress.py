@@ -6,7 +6,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.tools.base import AgentTool
+from app.agent.tools.base import AgentTool, tool_error
 from app.db.models.learning_record import LearningRecord
 
 
@@ -30,9 +30,26 @@ class ProgressTrackTool(AgentTool):
     @property
     def description(self) -> str:
         return (
-            "Track or query student learning progress. "
-            "Use action='record' to log a learning event (e.g. section completed, exercise attempted). "
-            "Use action='query' to check what the student has covered in a course."
+            "Read or write the student's per-course learning event log. Two "
+            "actions: `record` appends an event (section_complete, "
+            "exercise_attempt, video_watch, chat); `query` returns the most "
+            "recent ~50 events for a course.\n\n"
+            "## Use when (record)\n"
+            "- The student just finished a section — record `section_complete`\n"
+            "- The student just attempted an exercise (independent of grading) — record `exercise_attempt`\n"
+            "- The student watched a video segment to completion — record `video_watch`\n\n"
+            "## Use when (query)\n"
+            "- Deciding what to teach next and need to know what's already covered\n"
+            "- The student asks \"where was I?\" or \"what have I done so far?\"\n"
+            "- About to recommend a section and want to check it isn't already complete\n\n"
+            "## Don't use when\n"
+            "- Recording a chat exchange — every turn already triggers profile updates; this would be noise\n"
+            "- Recording a `breakthrough` or `aha_moment` — that goes through `episodic_memory`, not here\n"
+            "- Querying without a `course_id` when you do know the course — narrows the result and is much more useful\n\n"
+            "## Example of misuse\n"
+            "Student: \"Got it.\"\n"
+            "Mentor: [calls track_progress action=record record_type=chat]\n"
+            "→ wrong; \"Got it\" is a one-line acknowledgment, not a learning event worth logging."
         )
 
     @property
@@ -77,8 +94,11 @@ class ProgressTrackTool(AgentTool):
             return await self._record(course_id, section_id, record_type, data)
         elif action == "query":
             return await self._query(course_id)
-        else:
-            return f"Unknown action: {action}"
+        return tool_error(
+            message=f"Unknown action: {action!r}",
+            reason="invalid_action",
+            suggestion="Pass action='record' to log an event, or action='query' to read the event log.",
+        )
 
     async def _record(
         self,
@@ -88,15 +108,29 @@ class ProgressTrackTool(AgentTool):
         data: dict | None,
     ) -> str:
         if not record_type:
-            return "Error: record_type is required for action='record'"
+            return tool_error(
+                message="record_type is required for action='record'",
+                reason="missing_record_type",
+                suggestion=(
+                    "Pass record_type as one of: section_complete, exercise_attempt, "
+                    "video_watch, chat — pick the one that best describes the event."
+                ),
+            )
 
-        record = LearningRecord(
-            user_id=self._user_id,
-            course_id=uuid.UUID(course_id) if course_id else None,
-            section_id=uuid.UUID(section_id) if section_id else None,
-            type=record_type,
-            data=data or {},
-        )
+        try:
+            record = LearningRecord(
+                user_id=self._user_id,
+                course_id=uuid.UUID(course_id) if course_id else None,
+                section_id=uuid.UUID(section_id) if section_id else None,
+                type=record_type,
+                data=data or {},
+            )
+        except ValueError as exc:
+            return tool_error(
+                message=f"Invalid UUID in course_id or section_id: {exc}",
+                reason="invalid_uuid",
+                suggestion="course_id and section_id must be valid UUID strings — read them from a tool result, not synthesized.",
+            )
         self._db.add(record)
         await self._db.flush()
         return f"Recorded learning event: {record_type}"

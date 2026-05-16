@@ -7,7 +7,7 @@ import uuid
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.tools.base import AgentTool
+from app.agent.tools.base import AgentTool, tool_error
 from app.db.models.course import Section
 from app.db.models.exercise import Exercise
 from app.db.models.exercise_submission import ExerciseSubmission
@@ -33,8 +33,21 @@ class ExerciseGenerateTool(AgentTool):
     @property
     def description(self) -> str:
         return (
-            "Generate practice exercises for a course section. "
-            "Analyzes the section content and creates questions of the specified types."
+            "Generate 1-5 fresh practice exercises for a specific course section. "
+            "Reads the section's content, asks the LLM to write `mcq`, `code`, or "
+            "`open` questions, and persists them to the exercise bank.\n\n"
+            "## Use when\n"
+            "- The student finished a section and wants practice — generate then offer them\n"
+            "- You diagnosed a weak spot tied to a specific section and want a targeted drill\n"
+            "- The section's existing exercise bank doesn't cover the angle you want to test\n\n"
+            "## Don't use when\n"
+            "- You just want to ASK the student a Socratic question inline — don't generate, just ask\n"
+            "- The section already has plenty of unattempted exercises — query first, generate only if needed\n"
+            "- The student is mid-flow on a concept — don't interrupt with exercise generation\n\n"
+            "## Example of misuse\n"
+            "Student: \"Can you give me a quick check on this?\"\n"
+            "Mentor: [calls generate_exercises count=5]\n"
+            "→ wrong; \"quick check\" wants one inline question, not 5 persisted exercises. Just ask the question."
         )
 
     @property
@@ -70,13 +83,21 @@ class ExerciseGenerateTool(AgentTool):
         try:
             section_uuid = uuid.UUID(section_id_str)
         except ValueError:
-            return json.dumps({"error": f"Invalid section_id: {section_id_str}"})
+            return tool_error(
+                message=f"Invalid section_id (not a UUID): {section_id_str!r}",
+                reason="invalid_uuid",
+                suggestion="section_id must be a UUID string returned by an earlier tool call — don't synthesize one.",
+            )
 
         # Fetch the section
         result = await self._db.execute(select(Section).where(Section.id == section_uuid))
         section = result.scalar_one_or_none()
         if not section:
-            return json.dumps({"error": f"Section {section_id_str} not found"})
+            return tool_error(
+                message=f"Section {section_id_str} not found",
+                reason="section_not_found",
+                suggestion="The section_id may belong to a different course or have been deleted. Verify against the course outline before retrying.",
+            )
 
         # Build content string from section data
         content_parts = [f"Title: {section.title}"]
@@ -98,7 +119,11 @@ class ExerciseGenerateTool(AgentTool):
         exercises_data = await service.generate_from_content(content, count, types)
 
         if not exercises_data:
-            return json.dumps({"error": "LLM failed to generate exercises", "generated": 0})
+            return tool_error(
+                message="LLM failed to generate any exercises for this section",
+                reason="generation_empty",
+                suggestion="The section content may be too thin to generate exercises from. Tell the student the section needs more material before drilling on it.",
+            )
 
         # Persist to DB
         saved = []
@@ -140,8 +165,22 @@ class ExerciseEvalTool(AgentTool):
     @property
     def description(self) -> str:
         return (
-            "Evaluate a student's answer to an exercise. "
-            "Saves the submission, grades it, and updates spaced repetition schedules."
+            "Grade a student's answer to a specific exercise from the bank. "
+            "Persists the submission, runs LLM-based grading, returns "
+            "score+feedback, and updates spaced-repetition schedules for the "
+            "exercise's concepts.\n\n"
+            "## Use when\n"
+            "- The student typed an answer to an exercise you (or a previous tool call) showed them\n"
+            "- The student wants their answer reviewed for correctness/feedback\n\n"
+            "## Don't use when\n"
+            "- The student answered an inline Socratic question (not from the exercise bank) — those don't have an exercise_id and shouldn't go through grading\n"
+            "- You only need to give feedback verbally without persisting — just answer in chat\n"
+            "- You don't have a real exercise_id from a prior `generate_exercises` call or section query\n\n"
+            "## Example of misuse\n"
+            "Mentor: \"What's the time complexity of binary search?\" (inline Socratic)\n"
+            "Student: \"O(log n)\"\n"
+            "Mentor: [calls evaluate_exercise with a made-up exercise_id]\n"
+            "→ wrong; this was an inline question, not a bank exercise. Just acknowledge in chat."
         )
 
     @property
@@ -168,12 +207,20 @@ class ExerciseEvalTool(AgentTool):
         try:
             exercise_uuid = uuid.UUID(exercise_id_str)
         except ValueError:
-            return json.dumps({"error": f"Invalid exercise_id: {exercise_id_str}"})
+            return tool_error(
+                message=f"Invalid exercise_id (not a UUID): {exercise_id_str!r}",
+                reason="invalid_uuid",
+                suggestion="exercise_id must be a UUID string returned by an earlier tool call (e.g. generate_exercises) — don't synthesize one.",
+            )
 
         # Fetch exercise
         exercise = await self._db.get(Exercise, exercise_uuid)
         if not exercise:
-            return json.dumps({"error": f"Exercise {exercise_id_str} not found"})
+            return tool_error(
+                message=f"Exercise {exercise_id_str} not found",
+                reason="exercise_not_found",
+                suggestion="The exercise_id may belong to a different student/course or have been deleted. Verify the id was returned from a recent tool call before retrying.",
+            )
 
         # Determine attempt number
         count_result = await self._db.execute(

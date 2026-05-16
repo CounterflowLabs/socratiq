@@ -4,7 +4,7 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.tools.base import AgentTool
+from app.agent.tools.base import AgentTool, tool_error
 from app.services.profile import load_profile
 
 
@@ -26,9 +26,23 @@ class ProfileReadTool(AgentTool):
     @property
     def description(self) -> str:
         return (
-            "Read the current student profile including learning style, competency levels, "
-            "weak spots, strong spots, learning history, and mentor strategy. "
-            "Use this to personalize your teaching approach."
+            "Read the persistent student profile: name, learning_style "
+            "(pace, prefers_examples, prefers_code_first, attention_span), "
+            "competency (weak_spots, strong_spots, domain mastery), learning "
+            "history, and mentor_strategy (current personality + push level).\n\n"
+            "## Use when\n"
+            "- Starting a new topic and want to choose between code-first vs concept-first explanation\n"
+            "- About to push the student harder and want to check their `response_to_challenge` and `push_level`\n"
+            "- The student touched on a topic that may intersect a `weak_spot` you should be more thorough on\n"
+            "- You need to verify your assumptions about the student before committing to an explanation strategy\n\n"
+            "## Don't use when\n"
+            "- The relevant profile fact is already in this turn's system prompt — it's already injected, don't re-fetch\n"
+            "- You're calling at the start of every turn defensively — only call when you have a specific decision to make\n"
+            "- You want learning event history (\"did they finish section 5?\") — that's `track_progress`, not profile\n\n"
+            "## Example of misuse\n"
+            "[turn 1]\n"
+            "Mentor: [calls read_student_profile section=all]\n"
+            "→ wrong; the system prompt already includes the profile summary. Re-reading just burns tokens."
         )
 
     @property
@@ -46,14 +60,22 @@ class ProfileReadTool(AgentTool):
             "required": [],
         }
 
+    _VALID_SECTIONS = ("all", "competency", "learning_style", "history", "mentor_strategy")
+
     async def execute(self, section: str = "all") -> str:
         profile = await load_profile(self._db, self._user_id)
         if section == "all":
             return profile.model_dump_json(indent=2)
-        elif hasattr(profile, section):
+        if hasattr(profile, section):
             attr = getattr(profile, section)
             if hasattr(attr, "model_dump_json"):
                 return attr.model_dump_json(indent=2)
             return str(attr)
-        else:
-            return f"Unknown profile section: {section}"
+        return tool_error(
+            message=f"Unknown profile section: {section!r}",
+            reason="invalid_section",
+            suggestion=(
+                "Valid section values are: " + ", ".join(self._VALID_SECTIONS)
+                + ". Pass section='all' if unsure."
+            ),
+        )

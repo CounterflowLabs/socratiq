@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.tools.base import AgentTool
+from app.agent.tools.base import AgentTool, tool_error
 from app.db.models.episodic_memory import EpisodicMemory
 from app.db.models.metacognitive_record import MetacognitiveRecord
 from app.services.llm.base import LLMProvider
@@ -35,9 +35,26 @@ class EpisodicMemoryTool(AgentTool):
     @property
     def description(self) -> str:
         return (
-            "Record key learning events or recall past learning experiences. "
-            "Use 'record' to save noteworthy moments (stuck, breakthrough, preference) "
-            "and 'recall' to find relevant past experiences."
+            "Long-term memory of THIS student's learning events. Two actions: "
+            "`record` saves a noteworthy moment for future sessions; `recall` "
+            "retrieves past events to inform the current explanation.\n\n"
+            "## Use when (record)\n"
+            "- The student just had a clear breakthrough (\"oh! I get it now\") — record an `aha_moment`\n"
+            "- The student got stuck on a concept that prerequisites/profile didn't predict — record a `stuck` event\n"
+            "- The student stated a preference that should persist (\"I learn better with diagrams\") — record a `preference`\n"
+            "- The student made the same mistake type twice — record a `mistake`\n\n"
+            "## Use when (recall)\n"
+            "- About to explain a concept and want to check if a prior `aha_moment` analogy worked\n"
+            "- The student seems stuck and you want to see if they've been stuck on this exact thing before\n"
+            "- Personalizing the opening of a new topic with a callback to past progress\n\n"
+            "## Don't use when\n"
+            "- Recording trivia (\"student answered correctly\") — that goes through `track_progress`, not here. This is for emotionally-loaded or pedagogically-load-bearing moments only\n"
+            "- Recalling at the start of every turn \"just in case\" — only call when you have a specific hypothesis to check\n"
+            "- The fact is in the student profile (`learning_style`, `weak_spots`) — read profile instead, it's faster\n\n"
+            "## Example of misuse\n"
+            "Student: \"I think I understand now.\"\n"
+            "Mentor: [calls episodic_memory record event_type=aha_moment]\n"
+            "→ premature; \"I think\" isn't a clear breakthrough. Verify with one more question first."
         )
 
     @property
@@ -89,7 +106,11 @@ class EpisodicMemoryTool(AgentTool):
             return await self._record(content, params)
         elif action == "recall":
             return await self._recall(params)
-        return json.dumps({"error": f"Unknown action: {action}"})
+        return tool_error(
+            message=f"Unknown action: {action!r}",
+            reason="invalid_action",
+            suggestion="Pass action='record' to save an event, or action='recall' to search past events.",
+        )
 
     async def _record(self, content: str, params: dict) -> str:
         """Record an episodic memory event."""
@@ -167,8 +188,21 @@ class MetacognitiveReflectTool(AgentTool):
     @property
     def description(self) -> str:
         return (
-            "Record observations about which teaching strategies work well "
-            "or poorly for this student."
+            "Record an observation about whether a specific teaching strategy "
+            "(code_first, analogy, visual, step_by_step, socratic, direct) just "
+            "worked or fell flat for this student. Used to adapt future pedagogy.\n\n"
+            "## Use when\n"
+            "- You just used a strategy and have direct evidence of effectiveness (student got it / didn't get it)\n"
+            "- You're noting a CONTRAST: \"the analogy worked where the formal definition didn't\" — record both\n"
+            "- The strategy result surprises you given the student's profile (worth saving so the next session updates the model)\n\n"
+            "## Don't use when\n"
+            "- You're guessing at effectiveness without evidence — wait for the student's response first\n"
+            "- The signal is ambiguous (\"hmm, ok\") — only record on clear positive/negative\n"
+            "- You're tempted to record at the end of every turn — this is a sparse signal, not a heartbeat\n\n"
+            "## Example of misuse\n"
+            "[no student response yet]\n"
+            "Mentor: [calls metacognitive_reflect strategy=analogy effectiveness=0.8]\n"
+            "→ wrong; you haven't seen the analogy land yet. Wait for the student's reply, then judge."
         )
 
     @property

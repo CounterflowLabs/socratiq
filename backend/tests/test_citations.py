@@ -155,7 +155,14 @@ async def test_knowledge_tool_emits_citations_block():
 
 @pytest.mark.asyncio
 async def test_knowledge_tool_no_results():
-    """KnowledgeSearchTool returns plain message when no results found."""
+    """KnowledgeSearchTool returns a structured tool_error payload when empty.
+
+    The new shape carries `error`, `reason`, and `suggestion` so the agent
+    loop can plan a recovery instead of just stuffing the empty result back
+    into the model context.
+    """
+    import json
+
     mock_rag = AsyncMock(spec=RAGService)
     mock_rag.search.return_value = []
 
@@ -163,7 +170,10 @@ async def test_knowledge_tool_no_results():
     tool = KnowledgeSearchTool(db=mock_db, rag_service=mock_rag)
 
     output = await tool.execute(query="something obscure")
-    assert "No relevant content found" in output
+    payload = json.loads(output)
+    assert payload["reason"] == "no_results"
+    assert "something obscure" in payload["error"]
+    assert payload["suggestion"]  # non-empty
     assert "CITATIONS" not in output
 
 

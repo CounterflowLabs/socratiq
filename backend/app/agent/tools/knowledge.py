@@ -5,7 +5,7 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.tools.base import AgentTool
+from app.agent.tools.base import AgentTool, tool_error
 from app.services.rag import RAGService
 
 
@@ -29,10 +29,23 @@ class KnowledgeSearchTool(AgentTool):
     @property
     def description(self) -> str:
         return (
-            "Search the course knowledge base for relevant content. "
-            "Use this when the student asks about a concept, needs an explanation, "
-            "or when you need to reference specific content from the learning materials. "
-            "Returns relevant text passages with source references (timestamps, page numbers)."
+            "Search the course knowledge base (ingested transcripts, PDFs, articles) "
+            "for passages relevant to a query. Returns text passages with source "
+            "references (video timestamps, PDF pages).\n\n"
+            "## Use when\n"
+            "- Student references a course-internal entity (\"section 3\", \"the lab on X\", \"the video about Y\")\n"
+            "- Student asks \"what does the source/video/PDF say about Z?\"\n"
+            "- About to make a factual claim about specific course content not already in this turn's context\n"
+            "- Student's question is clearly about THIS course's framing of a topic, not the topic in general\n\n"
+            "## Don't use when\n"
+            "- General domain knowledge question (\"what is binary search?\", \"how does gradient descent work?\") — answer from your own knowledge\n"
+            "- The fact you need is already grounded in a tool result earlier in this turn — don't re-fetch\n"
+            "- The student is asking a meta-question about Socratiq itself, their progress, or their profile\n"
+            "- You're about to ask a Socratic leading question — fetch only if the question itself needs course content\n\n"
+            "## Example of misuse\n"
+            "Student: \"What is recursion?\"\n"
+            "Mentor: [calls search_knowledge with query=\"recursion\"]\n"
+            "→ wrong; recursion is general CS knowledge. Answer directly, then if the student wants to see how the course treats it, then search."
         )
 
     @property
@@ -42,11 +55,16 @@ class KnowledgeSearchTool(AgentTool):
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "The search query. Use natural language describing the concept or topic to search for.",
+                    "description": (
+                        "Natural-language search query. Phrase it as the concept or "
+                        "topic, not as a question. Good: \"attention mechanism in "
+                        "transformers\". Avoid: \"what is attention?\" — strip the "
+                        "interrogative wrapper."
+                    ),
                 },
                 "top_k": {
                     "type": "integer",
-                    "description": "Number of results to return (default 5, max 10).",
+                    "description": "Number of passages to return. Default 5, max 10. Use 3 for narrow lookups, 8-10 for broad survey.",
                     "default": 5,
                 },
             },
@@ -62,7 +80,16 @@ class KnowledgeSearchTool(AgentTool):
             top_k=top_k,
         )
         if not results:
-            return "No relevant content found in the knowledge base."
+            return tool_error(
+                message=f"No passages found for query: {query!r}",
+                reason="no_results",
+                suggestion=(
+                    "The course material may not cover this topic, or the query "
+                    "phrasing may not match the source language. Try a broader or "
+                    "differently-phrased query, or answer from your own knowledge "
+                    "and tell the student this isn't in the course materials."
+                ),
+            )
 
         # Format results for the LLM
         formatted = []

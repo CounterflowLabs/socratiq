@@ -26,6 +26,34 @@ router = APIRouter(prefix="/api/v1/setup", tags=["setup"])
 _bilibili_qr_sessions: dict[str, object] = {}
 logger = logging.getLogger(__name__)
 
+_OLLAMA_EMBEDDING_MODEL_MARKERS = (
+    "embed",
+    "embedding",
+    "bge",
+    "e5-",
+    "e5:",
+    "minilm",
+    "nomic-embed",
+    "snowflake-arctic-embed",
+)
+
+
+def _is_ollama_embedding_model(model_name: str) -> bool:
+    """Best-effort classifier for Ollama models that cannot answer chat prompts."""
+    normalized = model_name.strip().lower()
+    return any(marker in normalized for marker in _OLLAMA_EMBEDDING_MODEL_MARKERS)
+
+
+def _split_ollama_models(model_names: list[str]) -> tuple[list[str], list[str]]:
+    chat_models: list[str] = []
+    embedding_models: list[str] = []
+    for model_name in model_names:
+        if _is_ollama_embedding_model(model_name):
+            embedding_models.append(model_name)
+        else:
+            chat_models.append(model_name)
+    return chat_models, embedding_models
+
 
 @router.get("/status")
 async def setup_status(db: AsyncSession = Depends(get_db)):
@@ -36,6 +64,7 @@ async def setup_status(db: AsyncSession = Depends(get_db)):
     # Try to detect Ollama
     ollama_available = False
     ollama_models = []
+    ollama_embedding_models = []
     ollama_base_url = None
     for base_url in ["http://localhost:11434", "http://host.docker.internal:11434"]:
         try:
@@ -45,7 +74,12 @@ async def setup_status(db: AsyncSession = Depends(get_db)):
                     ollama_available = True
                     ollama_base_url = f"{base_url}/v1"
                     data = resp.json()
-                    ollama_models = [m["name"] for m in data.get("models", [])]
+                    model_names = [
+                        m["name"]
+                        for m in data.get("models", [])
+                        if isinstance(m, dict) and isinstance(m.get("name"), str)
+                    ]
+                    ollama_models, ollama_embedding_models = _split_ollama_models(model_names)
                     break
         except Exception:
             continue
@@ -63,6 +97,7 @@ async def setup_status(db: AsyncSession = Depends(get_db)):
         "has_models": has_models,
         "ollama_available": ollama_available,
         "ollama_models": ollama_models,
+        "ollama_embedding_models": ollama_embedding_models,
         "ollama_base_url": ollama_base_url,
         "codex_available": codex_status["available"],
         "codex_logged_in": codex_status["logged_in"],

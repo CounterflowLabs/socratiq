@@ -1002,6 +1002,7 @@ export async function getSetupStatus(): Promise<{
   has_models: boolean;
   ollama_available: boolean;
   ollama_models: string[];
+  ollama_embedding_models?: string[];
   ollama_base_url?: string;
   codex_available: boolean;
   codex_logged_in: boolean;

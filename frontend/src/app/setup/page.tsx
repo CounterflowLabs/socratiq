@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   SocratiqMark as Brain,
@@ -65,10 +65,41 @@ function getManualDefaultModelId(provider: ManualProviderPreset): string {
   return DEEPSEEK_DEFAULT_CHAT_MODEL;
 }
 
+const OLLAMA_EMBEDDING_MODEL_MARKERS = [
+  "embed",
+  "embedding",
+  "bge",
+  "e5-",
+  "e5:",
+  "minilm",
+  "nomic-embed",
+  "snowflake-arctic-embed",
+];
+
+function isOllamaEmbeddingModel(modelName: string): boolean {
+  const normalized = modelName.trim().toLowerCase();
+  return OLLAMA_EMBEDDING_MODEL_MARKERS.some((marker) => normalized.includes(marker));
+}
+
+function splitOllamaModels(modelNames: string[]) {
+  return modelNames.reduce(
+    (acc, modelName) => {
+      if (isOllamaEmbeddingModel(modelName)) {
+        acc.embedding.push(modelName);
+      } else {
+        acc.chat.push(modelName);
+      }
+      return acc;
+    },
+    { chat: [] as string[], embedding: [] as string[] },
+  );
+}
+
 export default function SetupPage() {
   const router = useRouter();
   const [step, setStep] = useState<Step>("loading");
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
+  const [ollamaEmbeddingModels, setOllamaEmbeddingModels] = useState<string[]>([]);
   const [selectedOllamaModel, setSelectedOllamaModel] = useState("");
   const [ollamaBaseUrl, setOllamaBaseUrl] = useState("http://localhost:11434/v1");
   const [useOllamaEmbedding, setUseOllamaEmbedding] = useState(false);
@@ -145,7 +176,7 @@ export default function SetupPage() {
     setTimeout(() => router.replace("/settings"), 1800);
   }
 
-  function applySetupStatus(status: Awaited<ReturnType<typeof getSetupStatus>>) {
+  const applySetupStatus = useCallback((status: Awaited<ReturnType<typeof getSetupStatus>>) => {
     setCodexAvailable(status.codex_available);
     setCodexLoggedIn(status.codex_logged_in);
     setCodexStatusMessage(status.codex_status_message || "");
@@ -158,24 +189,34 @@ export default function SetupPage() {
           : status.codex_models[0].id
       );
     }
-  }
+  }, []);
 
-  async function refreshSetupStatus() {
+  const refreshSetupStatus = useCallback(async () => {
     const status = await getSetupStatus();
     applySetupStatus(status);
     return status;
-  }
+  }, [applySetupStatus]);
 
   useEffect(() => {
     refreshSetupStatus()
       .then((status) => {
         if (status.ollama_available) {
-          setOllamaModels(status.ollama_models);
+          const split = splitOllamaModels(status.ollama_models);
+          const embeddingModels = Array.from(
+            new Set([...(status.ollama_embedding_models ?? []), ...split.embedding]),
+          );
+          setOllamaModels(split.chat);
+          setOllamaEmbeddingModels(embeddingModels);
           if (status.ollama_base_url) {
             setOllamaBaseUrl(status.ollama_base_url);
           }
-          if (status.ollama_models.length > 0) {
-            setSelectedOllamaModel(status.ollama_models[0]);
+          if (split.chat.length > 0) {
+            setSelectedOllamaModel(split.chat[0]);
+          } else {
+            setSelectedOllamaModel("");
+          }
+          if (embeddingModels.length > 0) {
+            setOllamaEmbeddingModelId(embeddingModels[0]);
           }
           setStep("ollama");
         } else {
@@ -185,7 +226,7 @@ export default function SetupPage() {
       .catch(() => {
         setStep("manual");
       });
-  }, []);
+  }, [refreshSetupStatus]);
 
   useEffect(() => {
     if (!codexLoginSession?.session_id) return;
@@ -207,7 +248,7 @@ export default function SetupPage() {
     }, 1500);
 
     return () => window.clearTimeout(timer);
-  }, [codexLoginSession]);
+  }, [codexLoginSession, refreshSetupStatus]);
 
   async function handleOllamaSetup() {
     if (!selectedOllamaModel) return;
@@ -556,7 +597,12 @@ export default function SetupPage() {
               </>
             ) : (
               <div className="mb-4 px-3 py-2 rounded-lg bg-amber-50 text-amber-700 text-xs">
-                Ollama 已运行，但未找到已下载的模型。请先运行 <code className="font-mono">ollama pull qwen2.5</code> 下载一个模型。
+                Ollama 已运行，但未找到可用于聊天的模型。请先运行 <code className="font-mono">ollama pull qwen2.5</code> 下载一个聊天模型。
+                {ollamaEmbeddingModels.length > 0 ? (
+                  <span className="mt-1 block">
+                    已检测到向量模型：<code className="font-mono">{ollamaEmbeddingModels.join(", ")}</code>
+                  </span>
+                ) : null}
               </div>
             )}
 

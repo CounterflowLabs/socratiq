@@ -4,9 +4,19 @@ from cryptography.fernet import Fernet
 import pytest
 
 from app.config import get_settings
+from app.api.routes.setup import _split_ollama_models
 from app.db.models.bilibili_credential import BilibiliCredential
 from app.db.models.whisper_config import WhisperConfig
 from app.services.llm.encryption import encrypt_api_key
+
+
+def test_split_ollama_models_keeps_embedding_models_out_of_chat_list():
+    chat_models, embedding_models = _split_ollama_models(
+        ["nomic-embed-text:latest", "qwen3.6:latest", "bge-m3:latest"]
+    )
+
+    assert chat_models == ["qwen3.6:latest"]
+    assert embedding_models == ["nomic-embed-text:latest", "bge-m3:latest"]
 
 
 @pytest.mark.asyncio

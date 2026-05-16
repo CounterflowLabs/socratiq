@@ -8,6 +8,9 @@ from sqlalchemy import select
 
 from app.db.models.content_chunk import ContentChunk
 from app.db.models.course import Course, Section
+from app.db.models.exercise import Exercise
+from app.db.models.learning_record import LearningRecord
+from app.db.models.section_progress import SectionProgress
 from app.db.models.source import Source
 from app.db.models.user import User
 from app.services.section_override import (
@@ -217,6 +220,61 @@ class TestMerge:
             await merge_with_next(
                 db_session, section_id=uuid.uuid4(), user_id=owner.id
             )
+
+    @pytest.mark.asyncio
+    async def test_merge_cleans_referencing_rows(self, db_session, owner):
+        """next_section's exercises/progress/learning_records must not block delete.
+
+        Without this cleanup the section delete trips a FK violation as soon as
+        the user has read the lesson or generated exercises on the trailing
+        section. See section_override.merge_with_next.
+        """
+        _, sections, _ = await _make_course_with_sections(
+            db_session, owner.id, chunks_per_section=[1, 1]
+        )
+        # Exercise on next_section — should be deleted.
+        ex = Exercise(
+            section_id=sections[1].id,
+            type="mcq",
+            question="q",
+            difficulty=1,
+        )
+        # SectionProgress on next_section — should be deleted.
+        prog = SectionProgress(
+            user_id=owner.id, section_id=sections[1].id, lesson_read=True
+        )
+        # LearningRecord on next_section — should be reassigned to surviving.
+        rec = LearningRecord(
+            user_id=owner.id,
+            section_id=sections[1].id,
+            type="lesson_view",
+            data={},
+        )
+        db_session.add_all([ex, prog, rec])
+        await db_session.flush()
+
+        await merge_with_next(
+            db_session, section_id=sections[0].id, user_id=owner.id
+        )
+
+        # Exercise gone.
+        ex_check = await db_session.execute(
+            select(Exercise).where(Exercise.id == ex.id)
+        )
+        assert ex_check.scalar_one_or_none() is None
+
+        # SectionProgress gone.
+        prog_check = await db_session.execute(
+            select(SectionProgress).where(SectionProgress.id == prog.id)
+        )
+        assert prog_check.scalar_one_or_none() is None
+
+        # LearningRecord reassigned to surviving section, not deleted.
+        rec_check = await db_session.execute(
+            select(LearningRecord).where(LearningRecord.id == rec.id)
+        )
+        rec_row = rec_check.scalar_one()
+        assert rec_row.section_id == sections[0].id
 
 
 # --- split ----------------------------------------------------------------

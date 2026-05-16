@@ -26,7 +26,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.content_chunk import ContentChunk
 from app.db.models.course import Course, Section
+from app.db.models.exercise import Exercise
 from app.db.models.lab import Lab
+from app.db.models.learning_record import LearningRecord
+from app.db.models.section_progress import SectionProgress
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +147,27 @@ async def merge_with_next(
     section.content = merged_content
     section.source_end = next_section.source_end or section.source_end
 
+    # Clean up rows that reference next_section before the section row goes
+    # away (FKs are unconstrained — without these, the section delete trips a
+    # constraint violation as soon as the user has read the lesson, generated
+    # exercises, or recorded any learning event on the discarded section).
+    #
+    # Exercises and section_progress were scoped to the old bucket boundary,
+    # so they're stale and dropped. LearningRecord preserves user history, so
+    # we reassign those events to the surviving section instead of deleting.
+    await db.execute(
+        update(LearningRecord)
+        .where(LearningRecord.section_id == next_section.id)
+        .values(section_id=section.id)
+    )
+    await db.execute(
+        delete(SectionProgress).where(
+            SectionProgress.section_id == next_section.id
+        )
+    )
+    await db.execute(
+        delete(Exercise).where(Exercise.section_id == next_section.id)
+    )
     # Delete labs on the discarded section (the surviving lab, if any, stays).
     await db.execute(
         delete(Lab).where(Lab.section_id == next_section.id)

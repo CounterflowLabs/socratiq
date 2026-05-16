@@ -13,6 +13,7 @@ import CourseOutline, { type LessonWaypoint } from "@/components/learn/course-ou
 import LearnShell from "@/components/learn/learn-shell";
 import StudyAside, { type AsidePanelId } from "@/components/learn/study-aside";
 import LessonRenderer from "@/components/lesson/lesson-renderer";
+import ConfirmDialog from "@/components/ui/confirm-dialog";
 import {
   clearCourseRegeneration,
   estimateTranslation,
@@ -227,6 +228,14 @@ function LearnPageInner() {
     { chunk_id: string; translated_text: string | null }[]
   >([]);
   const [translationError, setTranslationError] = useState<string | null>(null);
+
+  // Section merge UX: keep the section being merged + an in-flight flag, so
+  // the dialog can render before the network call and stay disabled while
+  // the call runs. `mergeError` holds a styled error message for the failure
+  // case (replaces the native window.alert).
+  const [mergeTarget, setMergeTarget] = useState<SectionResponse | null>(null);
+  const [mergeBusy, setMergeBusy] = useState(false);
+  const [mergeError, setMergeError] = useState<string | null>(null);
 
   const progressRecorded = useRef(false);
   const lessonScrollRef = useRef<HTMLDivElement>(null);
@@ -695,25 +704,7 @@ function LearnPageInner() {
             onCollapse={() => setOutlineOpen(false)}
             onMergeWithNext={async (sec) => {
               if (!courseId) return;
-              if (
-                !window.confirm(
-                  `将「${sec.title}」与下一节合并？合并后会保留当前节的标题与课文，下一节的内容会被并入。`,
-                )
-              ) {
-                return;
-              }
-              try {
-                await mergeSectionWithNext(sec.id);
-                const fresh = await getCourse(courseId);
-                setCourse(fresh);
-                // Keep the merged section as the active one when possible.
-                const stillThere = fresh.sections.find((s) => s.id === sec.id);
-                setSection(stillThere ?? fresh.sections[0] ?? null);
-              } catch (err) {
-                window.alert(
-                  err instanceof Error ? err.message : "合并失败，请稍后重试",
-                );
-              }
+              setMergeTarget(sec);
             }}
             onSplit={async (sec) => {
               if (!courseId) return;
@@ -755,6 +746,51 @@ function LearnPageInner() {
             onPanelChange={(panel) => { asidePanelPreference.current = panel; setActiveAsidePanel(panel); }}
           />
         }
+      />
+      <ConfirmDialog
+        open={mergeTarget !== null}
+        title="合并章节"
+        description={
+          mergeTarget
+            ? `将「${mergeTarget.title}」与下一节合并？合并后会保留当前节的标题与课文，下一节的内容会被并入。`
+            : ""
+        }
+        confirmLabel={mergeBusy ? "合并中…" : "合并"}
+        busy={mergeBusy}
+        onCancel={() => {
+          if (mergeBusy) return;
+          setMergeTarget(null);
+        }}
+        onConfirm={async () => {
+          if (!mergeTarget || !courseId) return;
+          setMergeBusy(true);
+          const target = mergeTarget;
+          try {
+            await mergeSectionWithNext(target.id);
+            const fresh = await getCourse(courseId);
+            setCourse(fresh);
+            // Keep the merged section as the active one when possible.
+            const stillThere = fresh.sections.find((s) => s.id === target.id);
+            setSection(stillThere ?? fresh.sections[0] ?? null);
+            setMergeTarget(null);
+          } catch (err) {
+            setMergeError(
+              err instanceof Error ? err.message : "合并失败，请稍后重试",
+            );
+            setMergeTarget(null);
+          } finally {
+            setMergeBusy(false);
+          }
+        }}
+      />
+      <ConfirmDialog
+        open={mergeError !== null}
+        tone="alert"
+        title="合并失败"
+        description={mergeError ?? ""}
+        confirmLabel="知道了"
+        onConfirm={() => setMergeError(null)}
+        onCancel={() => setMergeError(null)}
       />
     </>
   );

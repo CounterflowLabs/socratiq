@@ -43,6 +43,11 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/1
       - CELERY_RESULT_BACKEND=redis://redis:6379/2
       - CODEX_HOME=/codex-home
+      # OpenTelemetry — empty by default; set via `docker compose --profile apm`
+      # which also brings up the otel-lgtm service below.
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      - OTEL_SERVICE_NAME=socratiq-backend
+      - OTEL_RESOURCE_ATTRIBUTES=deployment.environment=${ENVIRONMENT:-dev}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -67,10 +72,35 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/1
       - CELERY_RESULT_BACKEND=redis://redis:6379/2
       - CODEX_HOME=/codex-home
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      - OTEL_SERVICE_NAME=socratiq-worker
+      - OTEL_RESOURCE_ATTRIBUTES=deployment.environment=${ENVIRONMENT:-dev}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - codexhome:/codex-home
+
+  # Grafana LGTM stack in a single container (Loki + Grafana + Tempo + Mimir).
+  # Brought up only with `docker compose --profile apm up`. When active, set:
+  #   export OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-lgtm:4317
+  # in your shell (or .env) before running `docker compose up` so the backend
+  # and worker export to it. Otherwise OTel stays disabled (no-op).
+  #
+  # Grafana UI:           http://localhost:3001
+  # OTLP gRPC ingest:     :4317 (in-network), exposed on host :4317
+  # OTLP HTTP ingest:     :4318
+  otel-lgtm:
+    image: grafana/otel-lgtm:latest
+    profiles: ["apm"]
+    ports:
+      - "3001:3000"
+      - "4317:4317"
+      - "4318:4318"
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+    volumes:
+      - otel-lgtm-data:/data
 
   frontend:
     build: ./frontend
@@ -85,3 +115,4 @@ volumes:
   pgdata:
   redisdata:
   codexhome:
+  otel-lgtm-data:

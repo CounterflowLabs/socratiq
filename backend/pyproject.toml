@@ -51,6 +51,17 @@ dependencies = [
     # Observability
     "structlog>=24.0",
     "sentry-sdk[fastapi]>=2.0",
+
+    # OpenTelemetry (opt-in via OTEL_EXPORTER_OTLP_ENDPOINT — see
+    # app/services/observability/bootstrap.py). All packages stay quiet when
+    # the env var is unset; install footprint is ~6MB.
+    "opentelemetry-api>=1.27",
+    "opentelemetry-sdk>=1.27",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.27",
+    "opentelemetry-instrumentation-fastapi>=0.48b0",
+    "opentelemetry-instrumentation-asyncpg>=0.48b0",
+    "opentelemetry-instrumentation-celery>=0.48b0",
+    "opentelemetry-instrumentation-httpx>=0.48b0",
 ]
 
 [project.optional-dependencies]
@@ -74,4 +85,5 @@ include = ["app*"]
 [dependency-groups]
 dev = [
     "pytest-asyncio>=1.3.0",
+    "opentelemetry-test-utils>=0.48b0",
 ]

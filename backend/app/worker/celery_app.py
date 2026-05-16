@@ -1,5 +1,14 @@
 """Celery application configuration."""
 
+# Install OpenTelemetry before Celery imports register signal handlers — the
+# CeleryInstrumentor hooks into the same signal system. Services
+# (SectionPlanner, ContentAnalyzer, LessonGenerator, LabGenerator,
+# CourseGenerator) are constructed inside task bodies, so they all see the
+# swapped tracer.
+from app.services.observability.bootstrap import init_otel
+
+init_otel(service_name="socratiq-worker")
+
 from celery import Celery
 
 from app.config import get_settings

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Awaitable, Callable
@@ -32,6 +33,7 @@ from app.services.lab_generator import LabGenerator
 from app.services.lesson_generator import LessonGenerationError, LessonGenerator
 from app.services.llm.base import UnifiedMessage
 from app.services.llm.router import ModelRouter, TaskType
+from app.services.llm.runtime import Tracer, get_default_tracer
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +57,9 @@ def _provider_is_local(provider) -> bool:
 class CourseGenerator:
     """Generates structured courses from analyzed sources."""
 
-    def __init__(self, model_router: ModelRouter):
+    def __init__(self, model_router: ModelRouter, tracer: Tracer | None = None):
         self._router = model_router
+        self._tracer = tracer or get_default_tracer()
 
     async def generate(
         self,
@@ -76,100 +79,130 @@ class CourseGenerator:
         bails out cooperatively. The Celery wrapper supplies a callback
         that polls the ``source_tasks.cancel_requested`` flag.
         """
-        # 1. Validate sources
-        sources: list[Source] = []
-        for sid in source_ids:
-            source = await db.get(Source, sid)
-            if not source:
-                raise ValueError(f"Source {sid} not found")
-            if not skip_ready_check and source.status != "ready":
-                raise ValueError(f"Source {sid} is not ready (status={source.status})")
-            sources.append(source)
-
-        # 2. Determine course title
-        if not title:
-            if len(sources) == 1:
-                title = sources[0].title or "Untitled Course"
-            else:
-                title = f"Course from {len(sources)} sources"
-
-        # 3. Create Course
-        course = Course(title=title, description="", created_by=user_id)
-        db.add(course)
-        await db.flush()
-
-        # 4. Link sources
-        for source in sources:
-            db.add(CourseSource(course_id=course.id, source_id=source.id))
-
-        # 5. Load content chunks for these sources
-        chunks_by_source: dict[UUID, list[ContentChunkModel]] = {}
-        all_chunks: list[ContentChunkModel] = []
-        for source in sources:
-            result = await db.execute(
-                select(ContentChunkModel)
-                .where(ContentChunkModel.source_id == source.id)
-                .order_by(ContentChunkModel.created_at)
-            )
-            rows = result.scalars().all()
-            chunks_by_source[source.id] = rows
-            all_chunks.extend(rows)
-
-        # 6. Generate teaching assets per source (lesson + lab + graph per page)
-        provider = await self._router.get_provider(TaskType.CONTENT_ANALYSIS)
-        lesson_gen = LessonGenerator(provider)
-        lab_gen = LabGenerator(provider)
-        settings = get_settings()
-        # Auto-tune chunk-level concurrency: local providers (ollama,
-        # localhost-pointed) serialize anyway, so fanning out N parallel
-        # calls just queues them server-side AND eats N retry budgets if
-        # one stalls. Cloud providers benefit from the parallelism.
-        configured = getattr(settings, "llm_max_concurrency", 4)
-        sem = asyncio.Semaphore(
-            1 if _provider_is_local(provider) else configured
-        )
-
+        started = time.perf_counter()
         per_source_assets: dict[UUID, _SourceAssets] = {}
-        for source in sources:
-            if cancel_check is not None:
-                await cancel_check()
-            assets = await self._generate_assets_for_source(
-                source=source,
-                chunks=chunks_by_source[source.id],
-                lesson_gen=lesson_gen,
-                lab_gen=lab_gen,
-                sem=sem,
-                target_language=target_language,
-                user_directive=user_directive,
-                cancel_check=cancel_check,
+        course: Course | None = None
+        section_count = 0
+        status = "ok"
+        try:
+            # 1. Validate sources
+            sources: list[Source] = []
+            for sid in source_ids:
+                source = await db.get(Source, sid)
+                if not source:
+                    raise ValueError(f"Source {sid} not found")
+                if not skip_ready_check and source.status != "ready":
+                    raise ValueError(
+                        f"Source {sid} is not ready (status={source.status})"
+                    )
+                sources.append(source)
+
+            # 2. Determine course title
+            if not title:
+                if len(sources) == 1:
+                    title = sources[0].title or "Untitled Course"
+                else:
+                    title = f"Course from {len(sources)} sources"
+
+            # 3. Create Course
+            course = Course(title=title, description="", created_by=user_id)
+            db.add(course)
+            await db.flush()
+
+            # 4. Link sources
+            for source in sources:
+                db.add(CourseSource(course_id=course.id, source_id=source.id))
+
+            # 5. Load content chunks for these sources
+            chunks_by_source: dict[UUID, list[ContentChunkModel]] = {}
+            all_chunks: list[ContentChunkModel] = []
+            for source in sources:
+                result = await db.execute(
+                    select(ContentChunkModel)
+                    .where(ContentChunkModel.source_id == source.id)
+                    .order_by(ContentChunkModel.created_at)
+                )
+                rows = result.scalars().all()
+                chunks_by_source[source.id] = rows
+                all_chunks.extend(rows)
+
+            # 6. Generate teaching assets per source (lesson + lab + graph per page)
+            provider = await self._router.get_provider(TaskType.CONTENT_ANALYSIS)
+            lesson_gen = LessonGenerator(provider)
+            lab_gen = LabGenerator(provider)
+            settings = get_settings()
+            # Auto-tune chunk-level concurrency: local providers (ollama,
+            # localhost-pointed) serialize anyway, so fanning out N parallel
+            # calls just queues them server-side AND eats N retry budgets if
+            # one stalls. Cloud providers benefit from the parallelism.
+            configured = getattr(settings, "llm_max_concurrency", 4)
+            sem = asyncio.Semaphore(
+                1 if _provider_is_local(provider) else configured
             )
-            per_source_assets[source.id] = assets
 
-        # 7. Create Sections (one per (source, page) group)
-        await self._build_sections(
-            db=db,
-            course=course,
-            sources=sources,
-            chunks_by_source=chunks_by_source,
-            per_source_assets=per_source_assets,
-        )
+            for source in sources:
+                if cancel_check is not None:
+                    await cancel_check()
+                assets = await self._generate_assets_for_source(
+                    source=source,
+                    chunks=chunks_by_source[source.id],
+                    lesson_gen=lesson_gen,
+                    lab_gen=lab_gen,
+                    sem=sem,
+                    target_language=target_language,
+                    user_directive=user_directive,
+                    cancel_check=cancel_check,
+                )
+                per_source_assets[source.id] = assets
 
-        # 8. Generate course description via LLM
-        course.description = await self._generate_description(
-            course_title=title,
-            section_count=len(all_chunks),
-            sources=sources,
-            target_language=target_language,
-        )
+            # 7. Create Sections (one per (source, page) group)
+            await self._build_sections(
+                db=db,
+                course=course,
+                sources=sources,
+                chunks_by_source=chunks_by_source,
+                per_source_assets=per_source_assets,
+            )
 
-        await db.flush()
-        logger.info(
-            "Generated course '%s' (%d sources, %d chunks)",
-            title,
-            len(sources),
-            len(all_chunks),
-        )
-        return course
+            # 8. Generate course description via LLM
+            course.description = await self._generate_description(
+                course_title=title,
+                section_count=len(all_chunks),
+                sources=sources,
+                target_language=target_language,
+            )
+
+            await db.flush()
+            section_count = len(all_chunks)
+            logger.info(
+                "Generated course '%s' (%d sources, %d chunks)",
+                title,
+                len(sources),
+                len(all_chunks),
+            )
+            outcomes = _aggregate_outcomes(per_source_assets)
+            if outcomes["lesson_failed"] > 0 or outcomes["lab_failed"] > 0:
+                status = "partial"
+            return course
+        except Exception:
+            status = "failed"
+            raise
+        finally:
+            outcomes = _aggregate_outcomes(per_source_assets)
+            self._tracer.emit(
+                "course_generation.course_finalized",
+                phase="course_generation.finalize",
+                course_id=str(course.id) if course is not None else None,
+                source_count=len(source_ids),
+                section_count=section_count,
+                lesson_ok=outcomes["lesson_ok"],
+                lesson_failed=outcomes["lesson_failed"],
+                lab_ok=outcomes["lab_ok"],
+                lab_skipped=outcomes["lab_skipped"],
+                lab_failed=outcomes["lab_failed"],
+                elapsed_ms=(time.perf_counter() - started) * 1000.0,
+                status=status,
+            )
 
     async def _generate_assets_for_source(
         self,
@@ -822,3 +855,48 @@ class _SourceAssets:
         return self.error_by_bucket_id.get(bucket_id) or self.error_by_bucket_id.get(
             str(bucket_id)
         )
+
+
+def _aggregate_outcomes(
+    per_source_assets: dict[UUID, "_SourceAssets"],
+) -> dict[str, int]:
+    """Roll lesson/lab outcomes across all sources into a flat tally.
+
+    The three keying schemes (page / chunk / bucket) cover the per-source
+    generator's three modes; only one is populated for any given source, so
+    summing across all three is safe — there are no double counts.
+
+    Lab "failed" stays at 0 today because failures bubble up the call
+    stack rather than landing in a per-mode error dict. Slot reserved
+    so the counter shape doesn't need to change when we wrap lab gen.
+    """
+    lesson_ok = 0
+    lesson_failed = 0
+    lab_ok = 0
+    lab_skipped = 0
+    lab_failed = 0
+    for assets in per_source_assets.values():
+        lesson_ok += (
+            len(assets.lesson_by_page)
+            + len(assets.lesson_by_chunk_id)
+            + len(assets.lesson_by_bucket_id)
+        )
+        lesson_failed += (
+            len(assets.error_by_page)
+            + len(assets.error_by_chunk_id)
+            + len(assets.error_by_bucket_id)
+        )
+        for lab in list(assets.labs_by_page.values()) + list(
+            assets.labs_by_bucket_id.values()
+        ):
+            if lab is None:
+                lab_skipped += 1
+            else:
+                lab_ok += 1
+    return {
+        "lesson_ok": lesson_ok,
+        "lesson_failed": lesson_failed,
+        "lab_ok": lab_ok,
+        "lab_skipped": lab_skipped,
+        "lab_failed": lab_failed,
+    }

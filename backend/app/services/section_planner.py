@@ -31,7 +31,9 @@ from app.services.llm.router import ModelRouter, TaskType
 from app.services.llm.runtime import (
     AgentRuntime,
     LLMValidationError,
+    Tracer,
     ValidationFailed,
+    get_default_tracer,
 )
 from app.services.llm.token_budget import count_tokens
 from app.tools.extractors.base import RawContentChunk
@@ -100,9 +102,12 @@ class PlanResult:
 class SectionPlanner:
     """Plans bucket assignments for a sequence of analyzed chunks."""
 
-    def __init__(self, model_router: ModelRouter):
+    def __init__(self, model_router: ModelRouter, tracer: Tracer | None = None):
         self._router = model_router
-        self._runtime = AgentRuntime(router=model_router)
+        self._tracer = tracer or get_default_tracer()
+        # Share the same tracer with the runtime so phase events and the
+        # plan_finalized rollup land on the same span tree.
+        self._runtime = AgentRuntime(router=model_router, tracer=self._tracer)
         # STRUCTURE_PLANNING is the dedicated tier; EVALUATION is the legacy
         # fallback for deployments that haven't provisioned the new route
         # (matches the historical _get_provider behavior). Resolving via the
@@ -111,6 +116,29 @@ class SectionPlanner:
             TaskType.STRUCTURE_PLANNING,
             [TaskType.EVALUATION],
         )
+
+    def _emit_finalized(self, result: PlanResult) -> PlanResult:
+        """Emit the plan-level summary event covering every tier.
+
+        SectionPlanner Layers 3 (embedding-only) and 4 (per-chunk fallback)
+        never call ``runtime.call``, so without this event they'd be
+        invisible to OTel — the only signal that the planner degraded would
+        be the absence of the Layer 1/2 phase spans.
+        """
+        stats = result.stats
+        self._tracer.emit(
+            "section_planner.plan_finalized",
+            phase="section_planner.plan",
+            tier_used=stats.get("tier_used"),
+            bucket_count=stats.get("bucket_count"),
+            short_circuit=bool(stats.get("short_circuit")),
+            buckets_split_for_size=stats.get("buckets_split_for_size", 0),
+            llm_input_tokens=stats.get("llm_input_tokens", 0),
+            llm_output_tokens=stats.get("llm_output_tokens", 0),
+            elapsed_ms=stats.get("planning_duration_ms", 0),
+            error=stats.get("error"),
+        )
+        return result
 
     async def plan(
         self,
@@ -144,17 +172,19 @@ class SectionPlanner:
         cap_tokens = lesson_input_token_cap or _DEFAULT_BUCKET_TOKEN_CAP
         n = len(chunks)
         if n == 0:
-            return PlanResult(
-                assignments=[],
-                stats=_build_stats(
-                    tier="fallback",
+            return self._emit_finalized(
+                PlanResult(
                     assignments=[],
-                    elapsed_ms=_elapsed_ms(started),
-                    error="empty_input",
-                    bucket_token_sizes=[],
-                    buckets_split_for_size=0,
-                    lesson_input_token_cap=cap_tokens,
-                ),
+                    stats=_build_stats(
+                        tier="fallback",
+                        assignments=[],
+                        elapsed_ms=_elapsed_ms(started),
+                        error="empty_input",
+                        bucket_token_sizes=[],
+                        buckets_split_for_size=0,
+                        lesson_input_token_cap=cap_tokens,
+                    ),
+                )
             )
 
         # Length contract — analyses must line up with chunks. Embeddings
@@ -168,26 +198,30 @@ class SectionPlanner:
                 len(analyses),
                 len(embeddings_safe) if embeddings is not None else "None",
             )
-            return _finalize(
-                raw_assignments=_fallback_assignments(n),
-                chunks=chunks,
-                cap_tokens=cap_tokens,
-                tier="fallback",
-                started=started,
-                error="length_mismatch",
+            return self._emit_finalized(
+                _finalize(
+                    raw_assignments=_fallback_assignments(n),
+                    chunks=chunks,
+                    cap_tokens=cap_tokens,
+                    tier="fallback",
+                    started=started,
+                    error="length_mismatch",
+                )
             )
 
         size_unit, sizes = _detect_size_unit(chunks, analyses)
         if _should_short_circuit(size_unit, sizes):
             topic = (analyses[0].topic or title or None) if analyses else None
             assignments = [BucketAssignment(bucket_id=0, bucket_topic=topic) for _ in range(n)]
-            return _finalize(
-                raw_assignments=assignments,
-                chunks=chunks,
-                cap_tokens=cap_tokens,
-                tier="skeleton",
-                started=started,
-                short_circuit=True,
+            return self._emit_finalized(
+                _finalize(
+                    raw_assignments=assignments,
+                    chunks=chunks,
+                    cap_tokens=cap_tokens,
+                    tier="skeleton",
+                    started=started,
+                    short_circuit=True,
+                )
             )
 
         # Boundary hints: prior-vs-current cosine distance, smoothed and
@@ -238,14 +272,16 @@ class SectionPlanner:
             total_output_tokens += tokens[1]
 
             if validated is not None:
-                return _finalize(
-                    raw_assignments=validated,
-                    chunks=chunks,
-                    cap_tokens=cap_tokens,
-                    tier=tier,
-                    started=started,
-                    llm_input_tokens=total_input_tokens,
-                    llm_output_tokens=total_output_tokens,
+                return self._emit_finalized(
+                    _finalize(
+                        raw_assignments=validated,
+                        chunks=chunks,
+                        cap_tokens=cap_tokens,
+                        tier=tier,
+                        started=started,
+                        llm_input_tokens=total_input_tokens,
+                        llm_output_tokens=total_output_tokens,
+                    )
                 )
             llm_error = error
         else:
@@ -259,27 +295,31 @@ class SectionPlanner:
             n=n,
         )
         if embedding_result is not None:
-            return _finalize(
-                raw_assignments=embedding_result,
-                chunks=chunks,
-                cap_tokens=cap_tokens,
-                tier="embedding_only",
-                started=started,
-                llm_input_tokens=total_input_tokens,
-                llm_output_tokens=total_output_tokens,
-                error=llm_error,
+            return self._emit_finalized(
+                _finalize(
+                    raw_assignments=embedding_result,
+                    chunks=chunks,
+                    cap_tokens=cap_tokens,
+                    tier="embedding_only",
+                    started=started,
+                    llm_input_tokens=total_input_tokens,
+                    llm_output_tokens=total_output_tokens,
+                    error=llm_error,
+                )
             )
 
         # --- Layer 4 per-chunk fallback ------------------------------------
-        return _finalize(
-            raw_assignments=_fallback_assignments(n),
-            chunks=chunks,
-            cap_tokens=cap_tokens,
-            tier="fallback",
-            started=started,
-            llm_input_tokens=total_input_tokens,
-            llm_output_tokens=total_output_tokens,
-            error=llm_error or "embedding_only_unavailable",
+        return self._emit_finalized(
+            _finalize(
+                raw_assignments=_fallback_assignments(n),
+                chunks=chunks,
+                cap_tokens=cap_tokens,
+                tier="fallback",
+                started=started,
+                llm_input_tokens=total_input_tokens,
+                llm_output_tokens=total_output_tokens,
+                error=llm_error or "embedding_only_unavailable",
+            )
         )
 
     async def _get_provider(self) -> LLMProvider:

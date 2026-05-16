@@ -294,7 +294,8 @@ async def test_generate_course_marks_task_success_with_course_id(
             return_value=SimpleNamespace(
                 content=[SimpleNamespace(type="text", text="Short course description.")]
             )
-        )
+        ),
+        model_id=lambda: "test-model",
     )
     fake_resources = SimpleNamespace(
         settings=SimpleNamespace(),
@@ -425,7 +426,8 @@ async def test_generate_course_legacy_metadata_without_asset_plan_still_creates_
             return_value=SimpleNamespace(
                 content=[SimpleNamespace(type="text", text="Legacy course description.")]
             )
-        )
+        ),
+        model_id=lambda: "test-model",
     )
     fake_resources = SimpleNamespace(
         settings=SimpleNamespace(),

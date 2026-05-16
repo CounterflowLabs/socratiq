@@ -654,7 +654,8 @@ async def test_course_generation_reuses_source_metadata_without_regenerating(
             return_value=SimpleNamespace(
                 content=[SimpleNamespace(type="text", text="Persisted course description.")]
             )
-        )
+        ),
+        model_id=lambda: "test-model",
     )
     fake_resources = SimpleNamespace(
         settings=SimpleNamespace(),

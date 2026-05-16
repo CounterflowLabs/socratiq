@@ -50,7 +50,11 @@ services:
 
   worker:
     build: ./backend
-    command: celery -A app.worker.celery_app worker --loglevel=info
+    # Listens on both queues. Concurrency 4 by default; for local-only
+    # setups (Ollama) the in-process semaphore in CourseGenerator clamps
+    # chunk-level fanout to 1, so the worker concurrency only matters for
+    # task-level parallelism (eg. lesson regeneration alongside ingest).
+    command: celery -A app.worker.celery_app worker --loglevel=info -Q embed_queue,generate_queue,celery --concurrency=4
     depends_on:
       db:
         condition: service_healthy

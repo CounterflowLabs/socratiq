@@ -14,7 +14,13 @@ import {
 import {
   deleteSource,
   generateCourseForSource,
+  getSourceProgress,
+  listSourceChunks,
+  listSourceCitations,
   retrySource,
+  type SourceCitationCourse,
+  type SourceChunkBrief,
+  type SourceProgressResponse,
   type SourceResponse,
   type SourceTaskSummary,
 } from "@/lib/api";
@@ -178,29 +184,50 @@ export default function SourceDetailDrawer({
 
   const presentation = deriveMaterialPresentation(source);
 
-  return (
-    <>
-      {open && (
-        <button
-          aria-label="关闭资料详情"
-          className="fixed inset-0 z-40 bg-black/20 backdrop-blur-sm"
-          onClick={onClose}
-          type="button"
-        />
-      )}
+  if (!open) {
+    // Mount nothing when closed so we don't run the lazy data fetches in
+    // the sub-sections below. Re-opening starts fresh — desired behavior
+    // for the "preview latest data" feel.
+    return null;
+  }
 
-      <aside
-        aria-hidden={!open}
-        className={`fixed right-0 top-0 z-50 h-full w-full max-w-md border-l shadow-2xl transition-transform duration-200 ${
-          open ? "translate-x-0" : "translate-x-full"
-        }`}
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="资料详情"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6"
+      onClick={(e) => {
+        // Click on the backdrop (not the dialog itself) closes.
+        if (e.target === e.currentTarget) onClose();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") onClose();
+      }}
+      style={{
+        background: "rgba(26, 22, 17, 0.45)",
+        backdropFilter: "blur(2px)",
+      }}
+    >
+      <div
+        className="relative flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl shadow-2xl"
         style={{
-          maxWidth: "min(28rem, calc(100vw - 1rem))",
           background: "var(--surface-alt)",
-          borderColor: "var(--border)",
+          border: "1px solid var(--border)",
+          animation: "soc-modal-in 180ms ease-out",
         }}
+        onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex h-full flex-col">
+        <style>{`
+          @keyframes soc-modal-in {
+            from { opacity: 0; transform: translateY(8px) scale(0.98); }
+            to   { opacity: 1; transform: translateY(0) scale(1); }
+          }
+        `}</style>
+        {/* No inner flex wrapper — the outer is already flex-col; an
+            extra `h-full` here would resolve against an auto-height
+            parent and collapse, breaking the body's overflow-y-auto. */}
+        <>
           <div className="flex items-start justify-between border-b border-gray-200 bg-white px-5 py-4">
             <div className="min-w-0">
               <div className="flex items-center gap-2 text-sm text-gray-500">
@@ -221,7 +248,7 @@ export default function SourceDetailDrawer({
             </button>
           </div>
 
-          <div className="flex-1 space-y-6 overflow-y-auto p-5">
+          <div className="flex-1 min-h-0 space-y-6 overflow-y-auto p-5">
             <section>
               <h3 className="text-sm font-semibold text-gray-900">当前状态</h3>
               <div className="mt-3 rounded-2xl border border-blue-100 bg-blue-50 p-4">
@@ -259,6 +286,13 @@ export default function SourceDetailDrawer({
                 </div>
               </dl>
             </section>
+
+            <SectionPlannerSection metadata={source.metadata_} />
+
+            {/* PRD §11 Phase E — lazy-loaded chunks / citations / history. */}
+            {open && source.id ? <ChunksSection sourceId={source.id} /> : null}
+            {open && source.id ? <CitationsSection sourceId={source.id} /> : null}
+            {open && source.id ? <HistorySection sourceId={source.id} /> : null}
           </div>
 
           <div className="border-t border-gray-200 bg-white p-5 space-y-3">
@@ -379,8 +413,422 @@ export default function SourceDetailDrawer({
               </button>
             )}
           </div>
+        </>
+      </div>
+    </div>
+  );
+}
+
+/* PRD §11 Phase E — Chunks tab content. Lazy-loads on mount, paginates
+   client-side with a "show more" button. Embeddings deliberately
+   omitted (they bloat the wire by ~3KB per chunk). */
+function ChunksSection({ sourceId }: { sourceId: string }) {
+  const [data, setData] = useState<{
+    items: SourceChunkBrief[];
+    total: number;
+  } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [skip, setSkip] = useState(0);
+  const PAGE = 5;
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    listSourceChunks(sourceId, { skip: 0, limit: PAGE })
+      .then((res) => {
+        if (cancelled) return;
+        setData({ items: res.items, total: res.total });
+        setSkip(res.items.length);
+      })
+      .catch(() => {
+        if (!cancelled) setData({ items: [], total: 0 });
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sourceId]);
+
+  const loadMore = async () => {
+    setLoading(true);
+    const res = await listSourceChunks(sourceId, { skip, limit: PAGE });
+    setData((prev) =>
+      prev ? { items: [...prev.items, ...res.items], total: res.total } : { items: res.items, total: res.total },
+    );
+    setSkip((s) => s + res.items.length);
+    setLoading(false);
+  };
+
+  return (
+    <section>
+      <h3 className="text-sm font-semibold text-gray-900">
+        切片预览
+        {data ? <span className="ml-2 text-xs text-gray-400">{data.total}</span> : null}
+      </h3>
+      <div className="mt-3 space-y-2">
+        {data?.items.length === 0 && !loading ? (
+          <p className="text-xs text-gray-500">暂无切片</p>
+        ) : null}
+        {data?.items.map((c, idx) => (
+          <div
+            key={c.id}
+            className="rounded-xl border border-gray-200 bg-white p-3 text-xs"
+          >
+            <div className="mb-1 flex items-center justify-between text-[10px] text-gray-400">
+              <span className="mono">#{idx + 1}</span>
+              <span className="mono">{c.length} chars</span>
+            </div>
+            <p className="line-clamp-3 text-gray-700">{c.text}</p>
+          </div>
+        ))}
+        {data && skip < data.total ? (
+          <button
+            type="button"
+            className="text-xs text-blue-600 hover:underline disabled:opacity-50"
+            disabled={loading}
+            onClick={loadMore}
+          >
+            {loading ? "加载中…" : `继续加载 (${data.total - skip} 余)`}
+          </button>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+/* Courses generated from this source — surfaces every version so the
+   user can jump to an older regenerate without going through the
+   course-detail page's version chip. The latest version is the one
+   the Library row's Sparkle CTA jumps to. */
+function CitationsSection({ sourceId }: { sourceId: string }) {
+  const [data, setData] = useState<{
+    items: SourceCitationCourse[];
+    total: number;
+  } | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    listSourceCitations(sourceId)
+      .then((res) => {
+        if (!cancelled) setData(res);
+      })
+      .catch(() => {
+        if (!cancelled) setData({ items: [], total: 0 });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sourceId]);
+  if (!data) return null;
+  if (data.items.length === 0) return null;
+  return (
+    <section>
+      <h3 className="text-sm font-semibold text-gray-900">
+        该资料生成的课程
+        <span className="ml-2 text-xs text-gray-400">{data.total}</span>
+      </h3>
+      <ul className="mt-3 space-y-2">
+        {data.items.map((course) => (
+          <li
+            key={course.course_id}
+            className="rounded-xl border border-gray-200 bg-white p-3"
+            style={
+              course.is_latest
+                ? { borderColor: "var(--accent)", background: "var(--accent-soft)" }
+                : undefined
+            }
+          >
+            <div className="flex items-center gap-2">
+              <span
+                className="mono"
+                style={{
+                  fontSize: 10,
+                  padding: "2px 6px",
+                  borderRadius: 999,
+                  background: course.is_latest
+                    ? "var(--accent)"
+                    : "var(--surface-2)",
+                  color: course.is_latest ? "white" : "var(--ink-2)",
+                  fontVariantNumeric: "tabular-nums",
+                  flexShrink: 0,
+                }}
+              >
+                v{course.version_index}
+              </span>
+              {course.is_latest ? (
+                <span
+                  className="mono"
+                  style={{
+                    fontSize: 10,
+                    color: "var(--accent)",
+                    flexShrink: 0,
+                  }}
+                >
+                  ★ latest
+                </span>
+              ) : null}
+              <span
+                style={{
+                  fontSize: 10,
+                  color: "var(--ink-3)",
+                  marginLeft: "auto",
+                  flexShrink: 0,
+                }}
+              >
+                {new Date(course.created_at).toLocaleDateString("zh-CN", {
+                  month: "short",
+                  day: "numeric",
+                })}
+              </span>
+            </div>
+
+            <div className="mt-2 flex items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <Link
+                  href={`/learn?courseId=${course.course_id}`}
+                  className="text-sm font-medium text-blue-600 hover:underline"
+                  style={{
+                    display: "block",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {course.course_title}
+                </Link>
+                {course.regeneration_directive ? (
+                  <p
+                    style={{
+                      fontSize: 11,
+                      color: "var(--ink-3)",
+                      marginTop: 2,
+                      fontStyle: "italic",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    "{course.regeneration_directive}"
+                  </p>
+                ) : null}
+              </div>
+              <Link
+                href={`/learn?courseId=${course.course_id}`}
+                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium hover:bg-white/60"
+                style={{ color: "var(--ink-2)", flexShrink: 0 }}
+              >
+                打开
+                <ArrowRight className="w-3 h-3" />
+              </Link>
+            </div>
+
+            {course.sections.length > 0 ? (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setExpandedId((prev) =>
+                    prev === course.course_id ? null : course.course_id,
+                  );
+                }}
+                style={{
+                  marginTop: 8,
+                  background: "transparent",
+                  border: "none",
+                  padding: 0,
+                  cursor: "pointer",
+                  color: "var(--ink-3)",
+                  fontSize: 11,
+                }}
+              >
+                {expandedId === course.course_id
+                  ? "收起"
+                  : `引用 ${course.sections.length} 个章节 ▾`}
+              </button>
+            ) : null}
+            {expandedId === course.course_id ? (
+              <ul className="mt-2 space-y-1 text-xs" style={{ color: "var(--ink-3)" }}>
+                {course.sections.slice(0, 6).map((s) => (
+                  <li key={s.section_id}>· {s.title}</li>
+                ))}
+                {course.sections.length > 6 ? (
+                  <li>· …+{course.sections.length - 6}</li>
+                ) : null}
+              </ul>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/* History — every recorded task row for this source, newest first. */
+function HistorySection({ sourceId }: { sourceId: string }) {
+  const [data, setData] = useState<SourceProgressResponse | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    getSourceProgress(sourceId)
+      .then((res) => {
+        if (!cancelled) setData(res);
+      })
+      .catch(() => {
+        if (!cancelled) setData(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sourceId]);
+  if (!data || data.tasks.length === 0) return null;
+  return (
+    <section>
+      <h3 className="text-sm font-semibold text-gray-900">
+        历史 <span className="ml-2 text-xs text-gray-400">{data.tasks.length}</span>
+      </h3>
+      <ul className="mt-3 space-y-2">
+        {data.tasks.map((t) => (
+          <li
+            key={`${t.task_type}-${t.celery_task_id ?? t.created_at}`}
+            className="rounded-xl border border-gray-200 bg-white p-3 text-xs"
+          >
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="font-medium text-gray-700">{t.task_type}</span>
+              <span
+                className={
+                  t.status === "success"
+                    ? "text-emerald-600"
+                    : t.status === "failure"
+                      ? "text-red-600"
+                      : "text-gray-500"
+                }
+              >
+                {t.status}
+              </span>
+            </div>
+            {t.stage ? (
+              <p className="mt-1 text-[11px] text-gray-500 mono">{t.stage}</p>
+            ) : null}
+            {t.error_summary ? (
+              <p className="mt-1 text-[11px] text-red-500">{t.error_summary}</p>
+            ) : null}
+            <p className="mt-1 text-[10px] text-gray-400 mono">
+              {new Date(t.created_at).toLocaleString("zh-CN")}
+            </p>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/* SectionPlanner stats — surfaces the per-source metadata that
+   ``app.services.section_planner.SectionPlanner`` writes during ingestion.
+   Source.metadata_["section_planner_stats"] is optional; pre-Phase-1 sources
+   simply don't render this block. */
+function SectionPlannerSection({
+  metadata,
+}: {
+  metadata: Record<string, unknown>;
+}) {
+  const stats = (metadata?.section_planner_stats ?? null) as
+    | import("@/lib/api").SectionPlannerStats
+    | null;
+  if (!stats) return null;
+
+  const tierLabel: Record<string, string> = {
+    skeleton: "整段（Layer 1）",
+    windowed: "分窗（Layer 2）",
+    embedding_only: "向量兜底（Layer 3）",
+    fallback: "逐 chunk 兜底（Layer 4）",
+  };
+  const tierBadgeClass =
+    stats.tier_used === "fallback"
+      ? "bg-amber-100 text-amber-800"
+      : stats.tier_used === "embedding_only"
+        ? "bg-purple-100 text-purple-800"
+        : "bg-blue-100 text-blue-800";
+
+  const formatMs = (ms: number) =>
+    ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${ms} ms`;
+
+  return (
+    <section>
+      <h3 className="text-sm font-semibold text-gray-900">章节规划</h3>
+      <div className="mt-3 rounded-2xl border border-gray-200 bg-white p-4 space-y-3">
+        <div className="flex items-center justify-between gap-4">
+          <span className="text-sm text-gray-500">分桶策略</span>
+          <span
+            className={`rounded-full px-2 py-0.5 text-xs font-medium ${tierBadgeClass}`}
+          >
+            {tierLabel[stats.tier_used] ?? stats.tier_used}
+          </span>
         </div>
-      </aside>
-    </>
+        {stats.short_circuit ? (
+          <p className="text-xs text-gray-500">
+            内容较短，整源归为一个 bucket，跳过 LLM 分析。
+          </p>
+        ) : null}
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+          <div className="flex items-center justify-between">
+            <dt className="text-gray-500">桶数</dt>
+            <dd className="font-medium text-gray-900">{stats.bucket_count}</dd>
+          </div>
+          <div className="flex items-center justify-between">
+            <dt className="text-gray-500">每桶平均 chunk</dt>
+            <dd className="font-medium text-gray-900">
+              {stats.avg_chunks_per_bucket}
+            </dd>
+          </div>
+          <div className="flex items-center justify-between">
+            <dt className="text-gray-500">最小 / 最大</dt>
+            <dd className="font-medium text-gray-900">
+              {stats.min_chunks_per_bucket} / {stats.max_chunks_per_bucket}
+            </dd>
+          </div>
+          <div className="flex items-center justify-between">
+            <dt className="text-gray-500">命名唯一度</dt>
+            <dd
+              className={`font-medium ${
+                stats.topic_uniqueness < 0.7
+                  ? "text-amber-600"
+                  : "text-gray-900"
+              }`}
+              title={
+                stats.topic_uniqueness < 0.7
+                  ? "topic_uniqueness < 0.7 — planner 给出了大量重复名字，可能分桶失效"
+                  : undefined
+              }
+            >
+              {(stats.topic_uniqueness * 100).toFixed(0)}%
+            </dd>
+          </div>
+          <div className="flex items-center justify-between">
+            <dt className="text-gray-500">耗时</dt>
+            <dd className="font-medium text-gray-900">
+              {formatMs(stats.planning_duration_ms)}
+            </dd>
+          </div>
+          <div className="flex items-center justify-between">
+            <dt className="text-gray-500">Token in / out</dt>
+            <dd className="font-medium text-gray-900 mono text-xs">
+              {stats.llm_input_tokens} / {stats.llm_output_tokens}
+            </dd>
+          </div>
+        </dl>
+        <div className="flex items-center justify-between text-[11px] text-gray-400 mono">
+          <span>planner: {stats.planner_version}</span>
+          {stats.error ? (
+            <span
+              className="truncate text-amber-600"
+              title={stats.error}
+            >
+              error: {stats.error}
+            </span>
+          ) : null}
+        </div>
+      </div>
+    </section>
   );
 }

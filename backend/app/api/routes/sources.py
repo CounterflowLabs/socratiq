@@ -11,11 +11,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_local_user
 from app.config import get_settings
-from app.db.models.course import Course, CourseSource
+from app.db.models.content_chunk import ContentChunk as ContentChunkModel
+from app.db.models.course import Course, CourseSource, Section
 from app.db.models.source import Source
 from app.db.models.source_task import SourceTask
 from app.db.models.user import User
 from app.models.source import (
+    SourceEmbed,
     SourceListResponse,
     SourceProgressResponse,
     SourceResponse,
@@ -38,6 +40,7 @@ _ACTIVE_SOURCE_STATUSES = {
     "generating_labs",
     "storing",
     "embedding",
+    "planning",
 }
 _ACTIVE_TASK_STATUSES = {"pending", "running", "progress"}
 _ACTIONABLE_RANK = {"failure": 0, "processing": 1, "ready": 2}
@@ -49,6 +52,7 @@ async def create_source(
     url: str | None = Form(None),
     source_type: str | None = Form(None),
     title: str | None = Form(None),
+    ingest_options_json: str | None = Form(None),
     file: UploadFile | None = File(None),
 ) -> SourceResponse:
     """Submit a URL or upload a file for content ingestion."""
@@ -56,6 +60,19 @@ async def create_source(
         raise HTTPException(400, "Either 'url' or 'file' must be provided")
 
     metadata: dict = {}
+    # Optional per-source ingest overrides (PRD §5.2): chunk size,
+    # transcript source, OCR strategy. The pipeline reads these from
+    # metadata.ingest_options when they're present; absence falls back
+    # to global defaults so existing callers stay unaffected.
+    if ingest_options_json:
+        try:
+            import json as _json
+
+            opts = _json.loads(ingest_options_json)
+            if isinstance(opts, dict):
+                metadata["ingest_options"] = opts
+        except Exception:
+            raise HTTPException(400, "ingest_options_json is not valid JSON")
     file_content: bytes | None = None
 
     if file:
@@ -108,7 +125,7 @@ async def create_source(
                 Source.created_by == user.id,
                 Source.content_key == content_key,
                 Source.status.in_(
-                    ["pending", "extracting", "analyzing", "generating_lessons", "generating_labs", "storing", "embedding"]
+                    ["pending", "extracting", "analyzing", "generating_lessons", "generating_labs", "storing", "embedding", "planning"]
                 ),
             )
             .order_by(Source.created_at.desc())
@@ -391,10 +408,23 @@ async def retry_source(
     if not source:
         raise HTTPException(404, f"Source {source_id} not found")
 
-    if source.status not in {"cancelled", "error", "pending"}:
+    # PRD §3 — stale sources are technically ``ready`` but the embed model
+    # they were built against is no longer routed. Allow re-processing
+    # those without needing the user to mark them as errored first.
+    allow_retry = {"cancelled", "error", "pending"}
+    if source.status == "ready":
+        current_embed = await _current_embedding_model_name(db)
+        stored_embed = None
+        if isinstance(source.metadata_, dict):
+            stored_embed = source.metadata_.get("embed_model") or source.metadata_.get(
+                "embedding_model"
+            )
+        if stored_embed and current_embed and stored_embed != current_embed:
+            allow_retry = allow_retry | {"ready"}
+    if source.status not in allow_retry:
         raise HTTPException(
             409,
-            f"Source is {source.status!r}; only cancelled/error/pending sources can be retried",
+            f"Source is {source.status!r}; only stale / cancelled / error / pending sources can be retried",
         )
 
     # If retrying a stuck pending, revoke any in-flight celery task first so
@@ -655,6 +685,149 @@ async def get_source_progress(
     )
 
 
+@router.get("/{source_id}/chunks")
+async def list_source_chunks(
+    source_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_local_user)],
+    skip: int = 0,
+    limit: int = 50,
+) -> dict:
+    """List the content chunks produced for a source (PRD §11 Phase E).
+
+    Powers the Library detail drawer's Chunks tab — gives the user
+    visibility into what the ingestion pipeline actually produced for
+    this source, without exposing embeddings.
+    """
+    if not (await _user_owns_source(db, source_id, user.id)):
+        raise HTTPException(404, f"Source {source_id} not found")
+
+    total = (
+        await db.execute(
+            select(func.count())
+            .select_from(ContentChunkModel)
+            .where(ContentChunkModel.source_id == source_id)
+        )
+    ).scalar_one()
+    rows = (
+        await db.execute(
+            select(ContentChunkModel)
+            .where(ContentChunkModel.source_id == source_id)
+            .order_by(ContentChunkModel.created_at)
+            .offset(skip)
+            .limit(limit)
+        )
+    ).scalars().all()
+    items = [
+        {
+            "id": str(c.id),
+            "text": c.text[:500] + ("…" if len(c.text) > 500 else ""),
+            "length": len(c.text),
+            "section_id": str(c.section_id) if c.section_id else None,
+            "metadata": c.metadata_ or {},
+            "created_at": c.created_at.isoformat(),
+        }
+        for c in rows
+    ]
+    return {"items": items, "total": total, "skip": skip, "limit": limit}
+
+
+@router.get("/{source_id}/citations")
+async def list_source_citations(
+    source_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_local_user)],
+) -> dict:
+    """List every course generated from (or citing) this source.
+
+    Powers the source-detail modal's "该资料生成的课程" section. For each
+    course we return enough to render a version chip (``version_index``
+    over the parent-chain root) and ordered sections.
+
+    The order is newest-first so the row at the top is the one the
+    Library row's Sparkle CTA would jump to (``latest_course_id``).
+    """
+    if not (await _user_owns_source(db, source_id, user.id)):
+        raise HTTPException(404, f"Source {source_id} not found")
+
+    # All courses generated from this source — covers original /
+    # regenerate / multi-source synthesis (all three land a
+    # course_sources row).
+    course_rows = (
+        await db.execute(
+            select(Course)
+            .join(CourseSource, CourseSource.course_id == Course.id)
+            .where(
+                CourseSource.source_id == source_id,
+                Course.created_by == user.id,
+            )
+            .order_by(Course.created_at.desc())
+        )
+    ).scalars().all()
+    if not course_rows:
+        return {"items": [], "total": 0}
+
+    course_ids = [c.id for c in course_rows]
+
+    # Sections per course that explicitly point at this source — for
+    # the "where exactly does this source appear" expansion inside each
+    # course card.
+    section_rows = (
+        await db.execute(
+            select(Section)
+            .where(
+                Section.course_id.in_(course_ids),
+                Section.source_id == source_id,
+            )
+            .order_by(Section.course_id, Section.order_index)
+        )
+    ).scalars().all()
+    sections_by_course: dict[uuid.UUID, list[dict]] = {}
+    for s in section_rows:
+        sections_by_course.setdefault(s.course_id, []).append(
+            {
+                "section_id": str(s.id),
+                "title": s.title,
+                "order_index": s.order_index,
+            }
+        )
+
+    # Compute version_index per course over its parent chain. Cached so
+    # sibling regenerations sharing the same root only pay one walk.
+    from app.api.routes.courses import _compute_version_index
+
+    version_cache: dict[uuid.UUID, int] = {}
+    for c in course_rows:
+        version_cache[c.id] = await _compute_version_index(db, c)
+
+    items = []
+    latest_id = course_rows[0].id  # already sorted desc by created_at
+    for c in course_rows:
+        items.append({
+            "course_id": str(c.id),
+            "course_title": c.title,
+            "created_at": c.created_at.isoformat(),
+            "parent_id": str(c.parent_id) if c.parent_id else None,
+            "regeneration_directive": c.regeneration_directive,
+            "version_index": version_cache[c.id],
+            "is_latest": c.id == latest_id,
+            "sections": sections_by_course.get(c.id, []),
+        })
+    return {"items": items, "total": len(items)}
+
+
+async def _user_owns_source(db: AsyncSession, source_id: uuid.UUID, user_id: uuid.UUID) -> bool:
+    return (
+        await db.execute(
+            select(Source.id).where(
+                Source.id == source_id,
+                Source.created_by == user_id,
+                Source.status != "deleted",
+            )
+        )
+    ).scalar_one_or_none() is not None
+
+
 @router.get("/{source_id}/file")
 async def get_source_file(
     source_id: uuid.UUID,
@@ -829,6 +1002,12 @@ async def _source_to_response(
             await _get_course_summaries(db, [source.id], user_id=user_id)
         ).get(source.id, (0, None))
 
+    embed = await _build_source_embed(
+        db,
+        source=source,
+        latest_processing_task=latest_processing_task,
+    )
+
     return SourceResponse(
         id=source.id,
         type=source.type,
@@ -841,9 +1020,98 @@ async def _source_to_response(
         latest_course_task=latest_course_task,
         course_count=course_count,
         latest_course_id=latest_course_id,
+        embed=embed,
         created_at=source.created_at,
         updated_at=source.updated_at,
     )
+
+
+_EMBEDDING_ROUTE_CACHE: dict[str, str | None] = {"name": None}
+
+
+async def _current_embedding_model_name(db: AsyncSession) -> str | None:
+    """Return the model_name currently routed for ``task_type='embedding'``."""
+    from app.db.models.model_config import ModelRouteConfig
+
+    if _EMBEDDING_ROUTE_CACHE.get("loaded"):
+        return _EMBEDDING_ROUTE_CACHE.get("name")
+    row = (
+        await db.execute(
+            select(ModelRouteConfig.model_name).where(
+                ModelRouteConfig.task_type == "embedding"
+            )
+        )
+    ).first()
+    _EMBEDDING_ROUTE_CACHE["name"] = row[0] if row else None
+    _EMBEDDING_ROUTE_CACHE["loaded"] = True
+    return _EMBEDDING_ROUTE_CACHE["name"]
+
+
+def invalidate_embedding_route_cache() -> None:
+    """Call after the user changes the embedding route in Settings."""
+    _EMBEDDING_ROUTE_CACHE.clear()
+
+
+async def _build_source_embed(
+    db: AsyncSession,
+    *,
+    source: Source,
+    latest_processing_task: SourceTaskSummary | None,
+) -> SourceEmbed:
+    """Fold flat source/task fields into the PRD §9 embed sub-object.
+
+    The 5-state taxonomy:
+
+    - ``ready``   — pipeline finished and the stored embed model still
+                    matches the currently-routed embedding model.
+    - ``running`` — Source.status is one of the active in-flight values
+                    OR the latest task row is running/progress.
+    - ``queued``  — pending dispatch.
+    - ``failed``  — Source.status == 'error' or latest task row failed.
+    - ``stale``   — was ready, but the model has been switched since.
+    """
+    meta = source.metadata_ if isinstance(source.metadata_, dict) else {}
+    used_model = meta.get("embed_model") or meta.get("embedding_model")
+    chunks = meta.get("chunks") if isinstance(meta.get("chunks"), int) else None
+    vectors = meta.get("vectors") if isinstance(meta.get("vectors"), int) else None
+    err = meta.get("error") if isinstance(meta.get("error"), str) else None
+
+    if source.status == "error":
+        return SourceEmbed(status="failed", model=used_model, error=err)
+    if (
+        latest_processing_task
+        and latest_processing_task.status == "failure"
+    ):
+        return SourceEmbed(
+            status="failed",
+            model=used_model,
+            error=latest_processing_task.error_summary or err,
+        )
+    if source.status in _ACTIVE_SOURCE_STATUSES or (
+        latest_processing_task and latest_processing_task.status in {"running", "progress"}
+    ):
+        return SourceEmbed(status="running", model=used_model)
+    if source.status == "pending" or (
+        latest_processing_task and latest_processing_task.status == "pending"
+    ):
+        return SourceEmbed(status="queued", model=used_model)
+    if source.status == "ready":
+        current = await _current_embedding_model_name(db)
+        if used_model and current and used_model != current:
+            return SourceEmbed(
+                status="stale",
+                model=used_model,
+                chunks=chunks,
+                vectors=vectors,
+                reason=f"embed model upgraded: {used_model} → {current}",
+            )
+        return SourceEmbed(
+            status="ready",
+            model=used_model,
+            chunks=chunks,
+            vectors=vectors,
+        )
+    return SourceEmbed(status="queued", model=used_model)
 
 
 def _build_source_base_query(

@@ -2,15 +2,45 @@
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 
+class GenerateIncludes(BaseModel):
+    """Asset toggles surfaced by the /generate step-2 config form."""
+    exercises: bool = True
+    lab: bool = True
+    review: bool = True
+
+
 class CourseGenerateRequest(BaseModel):
-    """Request body for generating a course from sources."""
+    """Request body for generating a course from sources.
+
+    PRD §5.4 step 2 — surfaces only the knobs that meaningfully change
+    generation output. Temperature / top-p / prompt template stay in
+    Settings.
+    """
     source_ids: list[uuid.UUID] = Field(..., min_length=1)
     title: str | None = None
+    brief: str | None = None
+    depth: int = Field(12, ge=4, le=48)
+    audience: Literal["intro", "mid", "adv"] = "mid"
+    tier: Literal["fast", "smart"] = "smart"
+    language: Literal["source", "zh", "en"] = "source"
+    includes: GenerateIncludes = Field(default_factory=GenerateIncludes)
+    # PRD §10 v2 — per-source weight (0..3, default 1) so the user can
+    # emphasize one source over the others during multi-source
+    # synthesis. The chunk-weighting algorithm consumes this from
+    # ``task.metadata_.config.source_weights``.
+    source_weights: dict[uuid.UUID, float] | None = None
+
+
+class CourseGenerateResponse(BaseModel):
+    """202 response from async POST /courses/generate."""
+    task_id: str
+    source_ids: list[uuid.UUID]
+    status: str  # "dispatched" | "already_dispatched"
 
 
 class CourseResponse(BaseModel):
@@ -54,6 +84,31 @@ class RegenerateSectionLessonResponse(BaseModel):
     task_id: str
     section_id: uuid.UUID
     status: str
+
+
+class SectionSplitRequest(BaseModel):
+    """Body for POST /sections/{id}/split.
+
+    ``split_at_chunk_index`` is the position of the first chunk that moves
+    into the newly-created section (1-based by chunk count, i.e. value 1
+    keeps one chunk in the original).
+    """
+    split_at_chunk_index: int = Field(..., ge=1)
+
+
+class SectionMergeResponse(BaseModel):
+    """Result of POST /sections/{id}/merge-next."""
+    surviving_section_id: uuid.UUID
+    removed_section_id: uuid.UUID
+    chunks_reassigned: int
+
+
+class SectionSplitResponse(BaseModel):
+    """Result of POST /sections/{id}/split."""
+    original_section_id: uuid.UUID
+    new_section_id: uuid.UUID
+    chunks_in_original: int
+    chunks_in_new: int
 
 
 class CourseDetailResponse(BaseModel):

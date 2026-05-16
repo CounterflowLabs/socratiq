@@ -92,6 +92,32 @@ export interface SourceTaskSummary {
   celery_task_id?: string | null;
 }
 
+export interface SourceEmbed {
+  status: "ready" | "running" | "queued" | "failed" | "stale";
+  model?: string | null;
+  chunks?: number | null;
+  vectors?: number | null;
+  progress?: number | null;
+  eta_seconds?: number | null;
+  error?: string | null;
+  reason?: string | null;
+}
+
+export interface SectionPlannerStats {
+  tier_used: "skeleton" | "windowed" | "embedding_only" | "fallback";
+  planner_version: string;
+  bucket_count: number;
+  avg_chunks_per_bucket: number;
+  min_chunks_per_bucket: number;
+  max_chunks_per_bucket: number;
+  topic_uniqueness: number;
+  planning_duration_ms: number;
+  llm_input_tokens: number;
+  llm_output_tokens: number;
+  short_circuit: boolean;
+  error: string | null;
+}
+
 export interface SourceResponse {
   id: string;
   type: string;
@@ -104,19 +130,30 @@ export interface SourceResponse {
   latest_course_task?: SourceTaskSummary | null;
   course_count: number;
   latest_course_id: string | null;
+  embed?: SourceEmbed | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface IngestOptions {
+  chunk_size?: 256 | 512 | 1024;
+  transcript?: "reuse" | "force_whisper";
+  ocr?: "auto" | "force" | "off";
 }
 
 export async function createSourceFromURL(
   url: string,
   sourceType?: string,
-  title?: string
+  title?: string,
+  ingestOptions?: IngestOptions,
 ): Promise<SourceResponse> {
   const form = new FormData();
   form.append("url", url);
   if (sourceType) form.append("source_type", sourceType);
   if (title) form.append("title", title);
+  if (ingestOptions && Object.keys(ingestOptions).length > 0) {
+    form.append("ingest_options_json", JSON.stringify(ingestOptions));
+  }
 
   const res = await apiFetch(`${API_BASE}/sources`, {
     method: "POST",
@@ -128,11 +165,15 @@ export async function createSourceFromURL(
 
 export async function createSourceFromFile(
   file: File,
-  title?: string
+  title?: string,
+  ingestOptions?: IngestOptions,
 ): Promise<SourceResponse> {
   const form = new FormData();
   form.append("file", file);
   if (title) form.append("title", title);
+  if (ingestOptions && Object.keys(ingestOptions).length > 0) {
+    form.append("ingest_options_json", JSON.stringify(ingestOptions));
+  }
 
   const res = await apiFetch(`${API_BASE}/sources`, {
     method: "POST",
@@ -263,14 +304,42 @@ export interface LessonContent {
   blocks?: LessonBlock[] | null;
 }
 
+export interface GenerateIncludes {
+  exercises: boolean;
+  lab: boolean;
+  review: boolean;
+}
+
+export interface GenerateCourseConfig {
+  source_ids: string[];
+  title?: string;
+  brief?: string;
+  depth?: number;
+  audience?: "intro" | "mid" | "adv";
+  tier?: "fast" | "smart";
+  language?: "source" | "zh" | "en";
+  includes?: GenerateIncludes;
+  /** PRD §10 — per-source weight overrides keyed by source_id.
+   *  Absent entries default to 1.0. Persists in the task metadata for
+   *  weighted-chunk synthesis when it lands. */
+  source_weights?: Record<string, number>;
+}
+
+export interface GenerateCourseResponse {
+  task_id: string;
+  source_ids: string[];
+  status: "dispatched" | "already_dispatched";
+}
+
+/** Async multi-source course generation (PRD §5.4). Returns a task id; the
+ *  course id appears on the unified Tasks queue when generation completes. */
 export async function generateCourse(
-  sourceIds: string[],
-  title?: string
-): Promise<CourseResponse> {
+  config: GenerateCourseConfig,
+): Promise<GenerateCourseResponse> {
   const res = await apiFetch(`${API_BASE}/courses/generate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ source_ids: sourceIds, title }),
+    body: JSON.stringify(config),
   });
   if (!res.ok) throw await responseError(res);
   return res.json();
@@ -287,6 +356,46 @@ export async function listCourses(): Promise<{
 
 export async function getCourse(id: string): Promise<CourseDetailResponse> {
   const res = await apiFetch(`${API_BASE}/courses/${id}`);
+  if (!res.ok) throw await responseError(res);
+  return res.json();
+}
+
+export interface SectionMergeResponse {
+  surviving_section_id: string;
+  removed_section_id: string;
+  chunks_reassigned: number;
+}
+
+export interface SectionSplitResponse {
+  original_section_id: string;
+  new_section_id: string;
+  chunks_in_original: number;
+  chunks_in_new: number;
+}
+
+export async function mergeSectionWithNext(
+  sectionId: string,
+): Promise<SectionMergeResponse> {
+  const res = await apiFetch(
+    `${API_BASE}/courses/sections/${sectionId}/merge-next`,
+    { method: "POST" },
+  );
+  if (!res.ok) throw await responseError(res);
+  return res.json();
+}
+
+export async function splitSection(
+  sectionId: string,
+  splitAtChunkIndex: number,
+): Promise<SectionSplitResponse> {
+  const res = await apiFetch(
+    `${API_BASE}/courses/sections/${sectionId}/split`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ split_at_chunk_index: splitAtChunkIndex }),
+    },
+  );
   if (!res.ok) throw await responseError(res);
   return res.json();
 }
@@ -507,6 +616,116 @@ export interface CourseProgressResponse {
   parent_course_id?: string | null;
   active_regeneration_task_id?: string | null;
   tasks: SourceTaskProgress[];
+}
+
+// ─── Unified Tasks queue (PRD §5.5) ──────────────────
+
+export type TaskTypeUi = "embed" | "generate";
+export type TaskStatusUi = "running" | "queued" | "done" | "failed";
+
+export interface TaskListItem {
+  id: string;
+  type: TaskTypeUi;
+  raw_task_type: string;
+  status: TaskStatusUi;
+  stage?: string | null;
+  error?: string | null;
+  eta_seconds?: number | null;
+  started_at: string;
+  updated_at: string;
+  finished_at?: string | null;
+  source_id?: string | null;
+  source_title?: string | null;
+  source_type?: string | null;
+  course_id?: string | null;
+  course_title?: string | null;
+  celery_task_id?: string | null;
+  cancel_requested: boolean;
+}
+
+export interface TaskListResponse {
+  items: TaskListItem[];
+  total: number;
+  skip: number;
+  limit: number;
+  counts_by_type: Record<string, number>;
+  counts_by_status: Record<string, number>;
+}
+
+export async function listTasks(params: {
+  type?: "all" | TaskTypeUi;
+  status?: "all" | TaskStatusUi;
+  skip?: number;
+  limit?: number;
+} = {}): Promise<TaskListResponse> {
+  const query = new URLSearchParams();
+  if (params.type) query.set("type", params.type);
+  if (params.status) query.set("status", params.status);
+  if (params.skip !== undefined) query.set("skip", String(params.skip));
+  if (params.limit !== undefined) query.set("limit", String(params.limit));
+  const qs = query.toString();
+  const res = await apiFetch(`${API_BASE}/tasks${qs ? `?${qs}` : ""}`);
+  if (!res.ok) throw await responseError(res);
+  return res.json();
+}
+
+export async function cancelTask(taskId: string): Promise<void> {
+  const res = await apiFetch(`${API_BASE}/tasks/${taskId}/cancel`, {
+    method: "POST",
+  });
+  if (!res.ok) throw await responseError(res);
+}
+
+export async function retryTask(
+  taskId: string,
+): Promise<{ task_id: string; status: string }> {
+  const res = await apiFetch(`${API_BASE}/tasks/${taskId}/retry`, {
+    method: "POST",
+  });
+  if (!res.ok) throw await responseError(res);
+  return res.json();
+}
+
+export interface SourceChunkBrief {
+  id: string;
+  text: string;
+  length: number;
+  section_id: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export async function listSourceChunks(
+  sourceId: string,
+  params: { skip?: number; limit?: number } = {},
+): Promise<{ items: SourceChunkBrief[]; total: number; skip: number; limit: number }> {
+  const qs = new URLSearchParams();
+  if (params.skip !== undefined) qs.set("skip", String(params.skip));
+  if (params.limit !== undefined) qs.set("limit", String(params.limit));
+  const res = await apiFetch(
+    `${API_BASE}/sources/${sourceId}/chunks${qs.toString() ? `?${qs.toString()}` : ""}`,
+  );
+  if (!res.ok) throw await responseError(res);
+  return res.json();
+}
+
+export interface SourceCitationCourse {
+  course_id: string;
+  course_title: string;
+  created_at: string;
+  parent_id: string | null;
+  regeneration_directive: string | null;
+  version_index: number;
+  is_latest: boolean;
+  sections: { section_id: string; title: string; order_index: number | null }[];
+}
+
+export async function listSourceCitations(
+  sourceId: string,
+): Promise<{ items: SourceCitationCourse[]; total: number }> {
+  const res = await apiFetch(`${API_BASE}/sources/${sourceId}/citations`);
+  if (!res.ok) throw await responseError(res);
+  return res.json();
 }
 
 export async function getSourceProgress(

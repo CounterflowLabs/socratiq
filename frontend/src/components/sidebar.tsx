@@ -12,6 +12,7 @@ import {
   IcDesign,
   IcGraph,
   IcHome,
+  IcClock,
   IcImport,
   IcLang,
   IcMenu,
@@ -20,6 +21,7 @@ import {
   IcSearch,
   IcSettings,
   IcSources,
+  IcSparkle,
   IcSun,
   SocratiqLogo,
 } from "@/components/icons";
@@ -101,6 +103,22 @@ export function Sidebar({
   }, []);
 
   const showLabels = !collapsed || mobileOpen;
+  const [newMenuOpen, setNewMenuOpen] = useState(false);
+
+  // Close the +New popover on outside click / escape.
+  useEffect(() => {
+    if (!newMenuOpen) return;
+    function close(e: MouseEvent | KeyboardEvent) {
+      if (e instanceof KeyboardEvent && e.key !== "Escape") return;
+      setNewMenuOpen(false);
+    }
+    window.addEventListener("click", close);
+    window.addEventListener("keydown", close);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("keydown", close);
+    };
+  }, [newMenuOpen]);
 
   useEffect(() => {
     function update() {
@@ -133,16 +151,16 @@ export function Sidebar({
       match: (p) => p === "/",
     },
     {
-      href: "/import",
-      icon: IcImport,
-      label: t("nav.import"),
-      match: (p) => p.startsWith("/import"),
-    },
-    {
       href: "/sources",
       icon: IcSources,
       label: t("nav.sources"),
       match: (p) => p.startsWith("/sources"),
+    },
+    {
+      href: "/tasks",
+      icon: IcClock,
+      label: t("nav.tasks"),
+      match: (p) => p.startsWith("/tasks"),
     },
     {
       href: "/graph",
@@ -278,27 +296,90 @@ export function Sidebar({
           ) : null}
         </div>
 
-        {/* Primary CTA — "新建" routes to import */}
-        <button
-          type="button"
-          className="btn btn-accent"
-          style={{
-            margin: "0 4px 12px",
-            justifyContent: "flex-start",
-            gap: 8,
-            height: 36,
-            padding: showLabels ? "0 12px" : 0,
-            width: showLabels ? undefined : 36,
-          }}
-          onClick={() => {
-            router.push("/import");
-            if (mobileOpen) onMobileToggle();
-          }}
-          title={t("common.new")}
-        >
-          <IcPlus size={14} />
-          {showLabels ? <span>{t("common.new")}</span> : null}
-        </button>
+        {/* Primary CTA — "+ 新建" opens a popover so the user picks the
+            task type (add source vs generate course) before navigating. */}
+        <div style={{ position: "relative", margin: "0 4px 12px" }}>
+          <button
+            type="button"
+            className="btn btn-accent"
+            style={{
+              justifyContent: "flex-start",
+              gap: 8,
+              height: 36,
+              padding: showLabels ? "0 12px" : 0,
+              width: showLabels ? "100%" : 36,
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              setNewMenuOpen((v) => !v);
+            }}
+            aria-expanded={newMenuOpen}
+            title={t("common.new")}
+          >
+            <IcPlus size={14} />
+            {showLabels ? <span>{t("common.new")}</span> : null}
+          </button>
+
+          {newMenuOpen ? (
+            <div
+              onClick={(e) => e.stopPropagation()}
+              role="menu"
+              style={{
+                position: "absolute",
+                top: 42,
+                left: showLabels ? 0 : 40,
+                width: 256,
+                background: "var(--surface)",
+                border: "1px solid var(--border)",
+                borderRadius: "var(--r-lg)",
+                boxShadow: "var(--shadow-lg)",
+                padding: 6,
+                zIndex: 50,
+              }}
+            >
+              <NewMenuItem
+                icon={<IcImport size={16} />}
+                title={t("newPopover.addSourceTitle")}
+                hint={t("newPopover.addSourceHint")}
+                chip={t("tasks.typeEmbed")}
+                chipClass="chip-accent"
+                onClick={() => {
+                  setNewMenuOpen(false);
+                  router.push("/import");
+                  if (mobileOpen) onMobileToggle();
+                }}
+              />
+              <NewMenuItem
+                icon={<IcSparkle size={16} />}
+                title={t("newPopover.generateTitle")}
+                hint={t("newPopover.generateHint")}
+                chip={t("tasks.typeGenerate")}
+                chipClass="chip-sage"
+                onClick={() => {
+                  setNewMenuOpen(false);
+                  router.push("/generate");
+                  if (mobileOpen) onMobileToggle();
+                }}
+              />
+              <hr className="divider" style={{ margin: "6px 0" }} />
+              <button
+                type="button"
+                className="nav-item"
+                style={{ gap: 10 }}
+                onClick={() => {
+                  setNewMenuOpen(false);
+                  router.push("/tasks");
+                  if (mobileOpen) onMobileToggle();
+                }}
+              >
+                <IcClock size={14} />
+                <span style={{ fontSize: 12 }}>
+                  {t("newPopover.viewTasks")}
+                </span>
+              </button>
+            </div>
+          ) : null}
+        </div>
 
         {nav.map((row) => {
           const Icon = row.icon;
@@ -495,5 +576,82 @@ export function Sidebar({
         ) : null}
       </aside>
     </>
+  );
+}
+
+function NewMenuItem({
+  icon,
+  title,
+  hint,
+  chip,
+  chipClass,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  hint: string;
+  chip: string;
+  chipClass: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      role="menuitem"
+      style={{
+        width: "100%",
+        background: "transparent",
+        border: "none",
+        cursor: "pointer",
+        textAlign: "left",
+        padding: "10px 12px",
+        borderRadius: "var(--r)",
+        display: "flex",
+        gap: 10,
+        alignItems: "flex-start",
+      }}
+      onMouseEnter={(e) => {
+        (e.currentTarget as HTMLButtonElement).style.background = "var(--surface-2)";
+      }}
+      onMouseLeave={(e) => {
+        (e.currentTarget as HTMLButtonElement).style.background = "transparent";
+      }}
+    >
+      <span
+        style={{
+          width: 28,
+          height: 28,
+          borderRadius: "var(--r)",
+          background: "var(--surface-2)",
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          color: "var(--ink-2)",
+          flexShrink: 0,
+        }}
+      >
+        {icon}
+      </span>
+      <span style={{ flex: 1, minWidth: 0 }}>
+        <span
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            color: "var(--ink)",
+            font: "500 13px var(--sans)",
+          }}
+        >
+          {title}
+          <span className={`chip ${chipClass}`} style={{ height: 18, fontSize: 10 }}>
+            {chip}
+          </span>
+        </span>
+        <span style={{ display: "block", fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
+          {hint}
+        </span>
+      </span>
+    </button>
   );
 }

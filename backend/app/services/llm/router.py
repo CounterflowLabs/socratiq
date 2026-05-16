@@ -17,6 +17,10 @@ class TaskType(str, Enum):
     MENTOR_CHAT = "mentor_chat"
     CONTENT_ANALYSIS = "content_analysis"
     EVALUATION = "evaluation"
+    # Structure planning — section bucketing, outline shaping. Decoupled
+    # from EVALUATION (which is judge/grade) so the two can route to
+    # different tiers as the routing table grows.
+    STRUCTURE_PLANNING = "structure_planning"
     EMBEDDING = "embedding"
 
 

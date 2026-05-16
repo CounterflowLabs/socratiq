@@ -3,15 +3,22 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 
+import { useRouter } from "next/navigation";
+
 import {
+  IcArrowRight,
+  IcCheck,
   IcDoc,
   IcFilter,
   IcLoader,
   IcMore,
   IcPlus,
+  IcRegen,
   IcSearch,
+  IcSparkle,
   SourceIcon,
 } from "@/components/icons";
+import { retrySource } from "@/lib/api";
 import { Eyebrow } from "@/components/ui/eyebrow";
 import { PageHeader } from "@/components/ui/page-header";
 import { listSources, type SourceResponse } from "@/lib/api";
@@ -26,12 +33,35 @@ import { useT } from "@/lib/i18n";
 
 export default function SourcesPage() {
   const { t, lang } = useT();
+  const router = useRouter();
   const [sources, setSources] = useState<SourceResponse[]>([]);
   const [loading, setLoading] = useState(true);
   const [total, setTotal] = useState(0);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<MaterialStatusFilter>("all");
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+
+  const togglePicked = (id: string) =>
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const startGenerateFromSelection = () => {
+    if (picked.size === 0) return;
+    try {
+      sessionStorage.setItem(
+        "pendingGenerateSources",
+        JSON.stringify(Array.from(picked)),
+      );
+    } catch {
+      /* SSR / storage disabled — fine, the page will load empty */
+    }
+    router.push("/generate");
+  };
 
   const loadSources = useCallback(async (options?: { background?: boolean }) => {
     if (!options?.background) setLoading(true);
@@ -96,6 +126,46 @@ export default function SourcesPage() {
           </Link>
         }
       />
+
+      {sources.length > 0 ? <StatsStrip sources={sources} /> : null}
+
+      {picked.size > 0 ? (
+        <div
+          style={{
+            position: "sticky",
+            top: 0,
+            zIndex: 5,
+            background: "var(--ink)",
+            color: "var(--surface)",
+            padding: "10px 16px",
+            borderRadius: "var(--r-lg)",
+            margin: "0 0 16px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+          }}
+        >
+          <span style={{ fontSize: 13 }}>
+            {t("sources.batchSelected").replace("{n}", String(picked.size))}
+          </span>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              className="btn btn-sm"
+              onClick={() => setPicked(new Set())}
+              style={{ color: "var(--surface)" }}
+            >
+              {t("common.cancel")}
+            </button>
+            <button
+              className="btn btn-accent btn-sm"
+              onClick={startGenerateFromSelection}
+            >
+              <IcSparkle size={12} /> {t("sources.batchGenerate")}
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {/* Filter strip */}
       <div
@@ -247,38 +317,65 @@ export default function SourcesPage() {
               lang === "zh" ? "zh-CN" : "en-US",
               { month: "short", day: "numeric" },
             );
+            const isReady = source.status === "ready";
+            const isPicked = picked.has(source.id);
 
             return (
-              <button
+              <div
                 key={source.id}
-                type="button"
-                onClick={() => setSelectedSourceId(source.id)}
                 style={{
                   display: "grid",
                   gridTemplateColumns: "36px 1fr 110px 120px 90px 40px",
                   padding: "14px 16px",
-                  borderTop: "none",
-                  borderLeft: "none",
-                  borderRight: "none",
                   borderBottom: isLast ? "none" : "1px solid var(--border-2)",
                   alignItems: "center",
                   gap: 12,
+                  background: isPicked ? "var(--accent-soft)" : "transparent",
                   cursor: "pointer",
-                  background: "transparent",
-                  width: "100%",
-                  textAlign: "left",
-                  color: "inherit",
-                  fontFamily: "inherit",
                   transition: "background var(--duration-fast) ease",
                 }}
+                onClick={() => setSelectedSourceId(source.id)}
                 onMouseEnter={(e) => {
-                  e.currentTarget.style.background = "var(--surface-2)";
+                  if (!isPicked) {
+                    (e.currentTarget as HTMLDivElement).style.background =
+                      "var(--surface-2)";
+                  }
                 }}
                 onMouseLeave={(e) => {
-                  e.currentTarget.style.background = "transparent";
+                  if (!isPicked) {
+                    (e.currentTarget as HTMLDivElement).style.background =
+                      "transparent";
+                  }
                 }}
               >
-                <SourceIcon type={source.type} size={18} />
+                {isReady ? (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      togglePicked(source.id);
+                    }}
+                    aria-label={isPicked ? "deselect" : "select"}
+                    style={{
+                      width: 18,
+                      height: 18,
+                      borderRadius: 4,
+                      border:
+                        "1.5px solid " +
+                        (isPicked ? "var(--accent)" : "var(--border-strong)"),
+                      background: isPicked ? "var(--accent)" : "transparent",
+                      color: "white",
+                      cursor: "pointer",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    {isPicked ? <IcCheck size={12} /> : null}
+                  </button>
+                ) : (
+                  <SourceIcon type={source.type} size={18} />
+                )}
                 <div style={{ minWidth: 0 }}>
                   <div
                     className="serif"
@@ -302,19 +399,9 @@ export default function SourcesPage() {
                       color: "var(--ink-3)",
                     }}
                   >
-                    <span
-                      className={`chip chip-mono ${
-                        presentation.category === "error"
-                          ? "chip-error"
-                          : presentation.category === "processing"
-                            ? "chip-warn"
-                            : "chip-sage"
-                      }`}
-                    >
-                      {presentation.badge}
-                    </span>
+                    <EmbedChip embed={source.embed} />
                     <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {presentation.supportingText}
+                      {source.embed?.reason ?? source.embed?.error ?? presentation.supportingText}
                     </span>
                   </div>
                 </div>
@@ -332,10 +419,21 @@ export default function SourcesPage() {
                 >
                   {source.course_count}×
                 </span>
-                <span className="btn btn-ghost btn-icon btn-sm" aria-hidden>
-                  <IcMore size={14} />
-                </span>
-              </button>
+                <RowAction
+                  source={source}
+                  onGenerate={() => {
+                    sessionStorage.setItem(
+                      "pendingGenerateSources",
+                      JSON.stringify([source.id]),
+                    );
+                    router.push("/generate");
+                  }}
+                  onReprocess={async () => {
+                    await retrySource(source.id);
+                    void loadSources({ background: true });
+                  }}
+                />
+              </div>
             );
           })}
         </div>
@@ -354,5 +452,173 @@ export default function SourcesPage() {
         }}
       />
     </div>
+  );
+}
+
+/* PRD §5.3 — top-of-page stats strip. No card frame, just four big
+   numbers with hairline dividers, derived from whatever the current
+   /sources page returned. */
+function StatsStrip({ sources }: { sources: SourceResponse[] }) {
+  const { t } = useT();
+  let ready = 0;
+  let running = 0;
+  let failed = 0;
+  let stale = 0;
+  for (const s of sources) {
+    const st = s.embed?.status;
+    if (st === "ready") ready++;
+    else if (st === "running" || st === "queued") running++;
+    else if (st === "failed") failed++;
+    else if (st === "stale") stale++;
+  }
+  const cells = [
+    { label: t("sources.statTotal"), value: sources.length, accent: "var(--ink)" },
+    { label: t("sources.statReady"), value: ready, accent: "var(--sage)" },
+    { label: t("sources.statRunning"), value: running, accent: "var(--accent)" },
+    { label: t("sources.statFailed"), value: failed + stale, accent: "var(--error)" },
+  ];
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(4, 1fr)",
+        borderTop: "1px solid var(--border)",
+        borderBottom: "1px solid var(--border)",
+        margin: "0 0 24px",
+      }}
+    >
+      {cells.map((c, i) => (
+        <div
+          key={c.label}
+          style={{
+            padding: "16px 12px",
+            borderLeft: i === 0 ? "none" : "1px solid var(--border-2)",
+          }}
+        >
+          <div className="eyebrow" style={{ marginBottom: 4 }}>
+            {c.label}
+          </div>
+          <div
+            className="display num"
+            style={{
+              fontSize: 28,
+              color: c.accent,
+              fontVariantNumeric: "tabular-nums",
+            }}
+          >
+            {c.value}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* 5-state embed chip. The badge color reflects the PRD §3 taxonomy. */
+function EmbedChip({ embed }: { embed: import("@/lib/api").SourceEmbed | null | undefined }) {
+  const { t } = useT();
+  if (!embed) return null;
+  const { status } = embed;
+  const map = {
+    ready: { label: t("sources.embedReady"), cls: "chip-sage", dot: "var(--sage)" },
+    running: { label: t("sources.embedRunning"), cls: "chip-accent", dot: "var(--accent)" },
+    queued: { label: t("sources.embedQueued"), cls: "", dot: "var(--ink-4)" },
+    failed: {
+      label: t("sources.embedFailed"),
+      cls: "",
+      dot: "var(--error)",
+    },
+    stale: { label: t("sources.embedStale"), cls: "chip-warn", dot: "var(--warn)" },
+  } as const;
+  const m = map[status];
+  return (
+    <span
+      className={`chip ${m.cls}`}
+      style={
+        status === "failed"
+          ? { background: "var(--error-soft)", color: "var(--error)" }
+          : undefined
+      }
+    >
+      <span
+        style={{
+          width: 6,
+          height: 6,
+          borderRadius: "50%",
+          background: m.dot,
+          boxShadow:
+            status === "running" ? "0 0 0 3px var(--accent-soft)" : undefined,
+        }}
+      />
+      {m.label}
+    </span>
+  );
+}
+
+/* Right-most action button per row. The action depends on embed.status:
+   ready → Generate course; failed/stale → Re-process; running → spinner;
+   else → no-op. */
+function RowAction({
+  source,
+  onGenerate,
+  onReprocess,
+}: {
+  source: SourceResponse;
+  onGenerate: () => void;
+  onReprocess: () => Promise<void>;
+}) {
+  const { t } = useT();
+  const [busy, setBusy] = useState(false);
+  const status = source.embed?.status ?? "queued";
+
+  if (status === "running") {
+    return (
+      <span className="btn btn-ghost btn-icon btn-sm" aria-hidden>
+        <IcLoader size={14} className="spin" />
+      </span>
+    );
+  }
+  if (status === "ready") {
+    return (
+      <button
+        type="button"
+        className="btn btn-ghost btn-sm"
+        style={{ color: "var(--accent)" }}
+        title={t("sources.rowGenerate")}
+        onClick={(e) => {
+          e.stopPropagation();
+          onGenerate();
+        }}
+      >
+        <IcSparkle size={14} />
+      </button>
+    );
+  }
+  if (status === "failed" || status === "stale") {
+    return (
+      <button
+        type="button"
+        className="btn btn-ghost btn-sm"
+        style={{ color: status === "stale" ? "var(--warn)" : "var(--error)" }}
+        title={t("sources.rowReprocess")}
+        disabled={busy}
+        onClick={async (e) => {
+          e.stopPropagation();
+          setBusy(true);
+          try {
+            await onReprocess();
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {busy ? <IcLoader size={14} className="spin" /> : <IcRegen size={14} />}
+      </button>
+    );
+  }
+  return (
+    <span className="btn btn-ghost btn-icon btn-sm" aria-hidden>
+      <IcMore size={14} />
+    </span>
   );
 }

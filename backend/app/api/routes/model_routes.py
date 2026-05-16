@@ -56,4 +56,9 @@ async def update_routes(
             )
         r = await manager.update_route_config(db, route.task_type, route.model_name)
         results.append(ModelRouteResponse(task_type=r.task_type, model_name=r.model_name))
+
+    # Invalidate the embedding-route cache used by the auto-stale check
+    # so subsequent /sources requests see the new model immediately.
+    from app.api.routes.sources import invalidate_embedding_route_cache
+    invalidate_embedding_route_cache()
     return results

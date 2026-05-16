@@ -1078,6 +1078,10 @@ async def _build_source_embed(
 
     if source.status == "error":
         return SourceEmbed(status="failed", model=used_model, error=err)
+    if source.status == "cancelled" or (
+        latest_processing_task and latest_processing_task.status == "cancelled"
+    ):
+        return SourceEmbed(status="cancelled", model=used_model)
     if (
         latest_processing_task
         and latest_processing_task.status == "failure"
@@ -1147,9 +1151,13 @@ def _source_material_status(
 ) -> str:
     if source.status == "error":
         return "failure"
+    if source.status == "cancelled":
+        return "failure"
 
     tasks = [task for task in (latest_processing_task, latest_course_task) if task]
     if any(task.status == "failure" for task in tasks):
+        return "failure"
+    if latest_processing_task and latest_processing_task.status == "cancelled":
         return "failure"
 
     if source.status in _ACTIVE_SOURCE_STATUSES or any(

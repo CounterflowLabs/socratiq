@@ -34,7 +34,7 @@ class SourceEmbed(BaseModel):
     structures.
     """
 
-    status: str  # ready | running | queued | failed | stale
+    status: str  # ready | running | queued | failed | stale | cancelled
     model: str | None = None
     chunks: int | None = None
     vectors: int | None = None

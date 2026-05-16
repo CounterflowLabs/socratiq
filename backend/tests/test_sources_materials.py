@@ -367,6 +367,45 @@ async def test_list_sources_filters_statuses_source_centrically(
 
 
 @pytest.mark.asyncio
+async def test_cancelled_source_is_terminal_in_embed_and_status_filter(
+    client, db_session, demo_user
+):
+    source = Source(
+        type="youtube",
+        title="Cancelled Source",
+        status="cancelled",
+        created_by=demo_user.id,
+    )
+    db_session.add(source)
+    await db_session.flush()
+
+    db_session.add(
+        SourceTask(
+            source_id=source.id,
+            task_type="source_processing",
+            status="cancelled",
+            stage="cancelled",
+            celery_task_id="cancelled-task-1",
+        )
+    )
+    await db_session.flush()
+
+    all_res = await client.get("/api/v1/sources")
+    assert all_res.status_code == 200
+    all_item = all_res.json()["items"][0]
+    assert all_item["id"] == str(source.id)
+    assert all_item["embed"]["status"] == "cancelled"
+
+    failure_res = await client.get("/api/v1/sources?status=failure")
+    assert failure_res.status_code == 200
+    assert [item["id"] for item in failure_res.json()["items"]] == [str(source.id)]
+
+    processing_res = await client.get("/api/v1/sources?status=processing")
+    assert processing_res.status_code == 200
+    assert processing_res.json()["items"] == []
+
+
+@pytest.mark.asyncio
 async def test_list_sources_uses_course_sources_for_course_summary(
     client, db_session, demo_user
 ):

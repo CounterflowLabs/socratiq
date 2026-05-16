@@ -6,7 +6,6 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import {
-  IcArrowRight,
   IcCheck,
   IcDoc,
   IcFilter,
@@ -24,6 +23,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { listSources, type SourceResponse } from "@/lib/api";
 import SourceDetailDrawer from "@/components/materials/source-detail-drawer";
 import {
+  deriveMaterialEmbed,
   deriveMaterialPresentation,
   isMaterialActive,
   matchesMaterialStatusFilter,
@@ -303,6 +303,7 @@ export default function SourcesPage() {
 
           {filteredSources.map((source, index) => {
             const presentation = deriveMaterialPresentation(source);
+            const displayEmbed = deriveMaterialEmbed(source);
             const isLast = index === filteredSources.length - 1;
             const meta = source.metadata_ as Record<string, unknown> | undefined;
             const lengthText =
@@ -399,9 +400,9 @@ export default function SourcesPage() {
                       color: "var(--ink-3)",
                     }}
                   >
-                    <EmbedChip embed={source.embed} />
+                    <EmbedChip embed={displayEmbed} />
                     <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {source.embed?.reason ?? source.embed?.error ?? presentation.supportingText}
+                      {displayEmbed?.reason ?? displayEmbed?.error ?? presentation.supportingText}
                     </span>
                   </div>
                 </div>
@@ -465,10 +466,10 @@ function StatsStrip({ sources }: { sources: SourceResponse[] }) {
   let failed = 0;
   let stale = 0;
   for (const s of sources) {
-    const st = s.embed?.status;
+    const st = deriveMaterialEmbed(s)?.status;
     if (st === "ready") ready++;
     else if (st === "running" || st === "queued") running++;
-    else if (st === "failed") failed++;
+    else if (st === "failed" || st === "cancelled") failed++;
     else if (st === "stale") stale++;
   }
   const cells = [
@@ -528,6 +529,11 @@ function EmbedChip({ embed }: { embed: import("@/lib/api").SourceEmbed | null | 
       cls: "",
       dot: "var(--error)",
     },
+    cancelled: {
+      label: t("sources.embedCancelled"),
+      cls: "",
+      dot: "var(--error)",
+    },
     stale: { label: t("sources.embedStale"), cls: "chip-warn", dot: "var(--warn)" },
   } as const;
   const m = map[status];
@@ -535,7 +541,7 @@ function EmbedChip({ embed }: { embed: import("@/lib/api").SourceEmbed | null | 
     <span
       className={`chip ${m.cls}`}
       style={
-        status === "failed"
+        status === "failed" || status === "cancelled"
           ? { background: "var(--error-soft)", color: "var(--error)" }
           : undefined
       }
@@ -556,7 +562,7 @@ function EmbedChip({ embed }: { embed: import("@/lib/api").SourceEmbed | null | 
 }
 
 /* Right-most action button per row. The action depends on embed.status:
-   ready → Generate course; failed/stale → Re-process; running → spinner;
+   ready → Generate course; failed/stale/cancelled → Re-process; running → spinner;
    else → no-op. */
 function RowAction({
   source,
@@ -569,7 +575,7 @@ function RowAction({
 }) {
   const { t } = useT();
   const [busy, setBusy] = useState(false);
-  const status = source.embed?.status ?? "queued";
+  const status = deriveMaterialEmbed(source)?.status ?? "queued";
 
   if (status === "running") {
     return (
@@ -594,7 +600,7 @@ function RowAction({
       </button>
     );
   }
-  if (status === "failed" || status === "stale") {
+  if (status === "failed" || status === "stale" || status === "cancelled") {
     return (
       <button
         type="button"

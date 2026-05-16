@@ -93,7 +93,7 @@ export interface SourceTaskSummary {
 }
 
 export interface SourceEmbed {
-  status: "ready" | "running" | "queued" | "failed" | "stale";
+  status: "ready" | "running" | "queued" | "failed" | "stale" | "cancelled";
   model?: string | null;
   chunks?: number | null;
   vectors?: number | null;

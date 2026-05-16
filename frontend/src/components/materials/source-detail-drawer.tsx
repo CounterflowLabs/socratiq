@@ -54,6 +54,7 @@ function canGenerateCourseFor(source: SourceResponse): boolean {
 
 const STAGE_LABELS: Record<string, string> = {
   pending: "排队中",
+  processing: "处理中",
   extracting: "提取中",
   analyzing: "分析中",
   storing: "存储中",
@@ -64,6 +65,16 @@ const STAGE_LABELS: Record<string, string> = {
   assembling_course: "组装课程",
   ready: "已完成",
   error: "失败",
+  cancelled: "已取消",
+};
+
+const TASK_STATUS_LABELS: Record<string, string> = {
+  pending: "排队中",
+  running: "进行中",
+  progress: "进行中",
+  success: "已完成",
+  failure: "失败",
+  cancelled: "已取消",
 };
 
 const TASK_TYPE_LABELS: Record<string, string> = {
@@ -109,23 +120,15 @@ function getTaskSummary(task?: SourceTaskSummary | null): string {
     return stageLabel;
   }
 
-  if (task.status === "success") {
-    return "已完成";
+  return TASK_STATUS_LABELS[task.status] ?? task.status;
+}
+
+function getTaskStatusLabel(status?: string | null): string | null {
+  if (!status) {
+    return null;
   }
 
-  if (task.status === "failure") {
-    return "失败";
-  }
-
-  if (task.status === "running") {
-    return "进行中";
-  }
-
-  if (task.status === "pending") {
-    return "排队中";
-  }
-
-  return task.status;
+  return TASK_STATUS_LABELS[status] ?? status;
 }
 
 function TaskRow({ task }: { task?: SourceTaskSummary | null }) {
@@ -138,7 +141,7 @@ function TaskRow({ task }: { task?: SourceTaskSummary | null }) {
         </div>
         {task?.status && (
           <span className="rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-600">
-            {task.status}
+            {getTaskStatusLabel(task.status)}
           </span>
         )}
       </div>
@@ -610,7 +613,7 @@ function CitationsSection({ sourceId }: { sourceId: string }) {
                       whiteSpace: "nowrap",
                     }}
                   >
-                    "{course.regeneration_directive}"
+                    &ldquo;{course.regeneration_directive}&rdquo;
                   </p>
                 ) : null}
               </div>
@@ -704,11 +707,13 @@ function HistorySection({ sourceId }: { sourceId: string }) {
                       : "text-gray-500"
                 }
               >
-                {t.status}
+                {getTaskStatusLabel(t.status)}
               </span>
             </div>
             {t.stage ? (
-              <p className="mt-1 text-[11px] text-gray-500 mono">{t.stage}</p>
+              <p className="mt-1 text-[11px] text-gray-500 mono">
+                {getStageLabel(t.stage) ?? t.stage}
+              </p>
             ) : null}
             {t.error_summary ? (
               <p className="mt-1 text-[11px] text-red-500">{t.error_summary}</p>

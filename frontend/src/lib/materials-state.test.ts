@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { SourceResponse } from "./api";
-import { deriveMaterialPresentation } from "./materials-state";
+import { deriveMaterialEmbed, deriveMaterialPresentation } from "./materials-state";
 
 function makeSource(overrides: Partial<SourceResponse> = {}): SourceResponse {
   return {
@@ -68,6 +68,27 @@ describe("deriveMaterialPresentation", () => {
     expect(result.badge).toBe("资料处理失败");
     expect(result.primaryAction).toBe("view-details");
     expect(result.supportingText).toContain("失败");
+  });
+
+  it("keeps cancelled sources terminal instead of showing processing copy", () => {
+    const source = makeSource({
+      status: "cancelled",
+      latest_processing_task: {
+        task_type: "source_processing",
+        status: "cancelled",
+        stage: "cancelled",
+      },
+      embed: {
+        status: "queued",
+      },
+    });
+    const result = deriveMaterialPresentation(source);
+
+    expect(result.badge).toBe("已取消");
+    expect(result.supportingText).toBe("资料处理已取消，可重试处理");
+    expect(result.category).toBe("error");
+    expect(result.isActive).toBe(false);
+    expect(deriveMaterialEmbed(source)?.status).toBe("cancelled");
   });
 
   it("treats ready sources with active course generation as processing", () => {

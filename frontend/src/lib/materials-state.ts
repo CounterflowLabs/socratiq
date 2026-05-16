@@ -1,4 +1,4 @@
-import type { SourceResponse, SourceTaskSummary } from "./api";
+import type { SourceEmbed, SourceResponse, SourceTaskSummary } from "./api";
 
 export type MaterialPrimaryAction = "enter-course" | "view-details";
 export type MaterialStatusCategory = "ready" | "processing" | "error";
@@ -16,7 +16,47 @@ function isTaskActive(task: SourceTaskSummary | null | undefined): boolean {
   return task?.status === "pending" || task?.status === "running";
 }
 
+function isSourceCancelled(source: SourceResponse): boolean {
+  return (
+    source.status === "cancelled" ||
+    source.latest_processing_task?.status === "cancelled"
+  );
+}
+
+function isSourceFailed(source: SourceResponse): boolean {
+  return source.status === "error" || source.latest_processing_task?.status === "failure";
+}
+
+export function deriveMaterialEmbed(source: SourceResponse): SourceEmbed | null | undefined {
+  if (isSourceCancelled(source)) {
+    return {
+      ...(source.embed ?? {}),
+      status: "cancelled",
+    };
+  }
+
+  if (isSourceFailed(source)) {
+    return {
+      ...(source.embed ?? {}),
+      status: "failed",
+      error: source.embed?.error ?? source.latest_processing_task?.error_summary ?? null,
+    };
+  }
+
+  return source.embed;
+}
+
 export function deriveMaterialPresentation(source: SourceResponse): MaterialPresentation {
+  if (isSourceCancelled(source)) {
+    return {
+      badge: "已取消",
+      supportingText: "资料处理已取消，可重试处理",
+      primaryAction: "view-details",
+      category: "error",
+      isActive: false,
+    };
+  }
+
   if (source.status === "error") {
     return {
       badge: "资料处理失败",

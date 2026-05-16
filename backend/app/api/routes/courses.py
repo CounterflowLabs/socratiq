@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db, get_local_user, get_model_router
+from app.api.deps import get_db, get_current_user, get_model_router, require_budget
 from app.db.models.course import Course, CourseSource, Section
 from app.db.models.source import Source
 from app.db.models.source_task import SourceTask
@@ -122,7 +122,7 @@ def _extract_page_indices(metadata: dict[str, Any]) -> list[int]:
 async def generate_course(
     request: CourseGenerateRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(require_budget)],
 ) -> CourseGenerateResponse:
     """Asynchronously synthesize a single course from one or more sources.
 
@@ -246,7 +246,7 @@ async def generate_course(
 async def generate_course_sync(
     request: CourseGenerateRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(require_budget)],
     model_router: Annotated[ModelRouter, Depends(get_model_router)],
 ) -> CourseResponse:
     """Synchronous legacy entry point — kept for older callers.
@@ -285,7 +285,7 @@ async def generate_course_sync(
 @router.get("", response_model=CourseListResponse)
 async def list_courses(
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(get_current_user)],
     skip: int = 0,
     limit: int = 20,
 ) -> CourseListResponse:
@@ -325,7 +325,7 @@ async def list_courses(
 async def get_course(
     course_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> CourseDetailResponse:
     """Get a course with its sections."""
     result = await db.execute(
@@ -422,7 +422,7 @@ async def regenerate_course_endpoint(
     course_id: uuid.UUID,
     request: RegenerateCourseRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(require_budget)],
 ) -> RegenerateCourseResponse:
     """Kick off a regeneration of an existing course.
 
@@ -489,7 +489,7 @@ async def regenerate_course_endpoint(
 async def clear_regeneration(
     course_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> None:
     """Drop the cached regeneration task pointer on a course.
 
@@ -510,7 +510,7 @@ async def clear_regeneration(
 async def cancel_regeneration(
     course_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> dict:
     """Request cooperative cancellation of an in-flight regeneration."""
     from celery.result import AsyncResult
@@ -559,7 +559,7 @@ async def cancel_regeneration(
 @router.get("/regenerations/{task_id}", deprecated=True)
 async def get_regeneration_status(
     task_id: str,
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(get_current_user)],
     response: Response,
 ) -> dict:
     """Deprecated. Use ``GET /courses/{course_id}/task-progress`` instead.
@@ -606,7 +606,7 @@ async def get_regeneration_status(
 async def get_course_task_progress(
     course_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> CourseProgressResponse:
     """Aggregate progress for a course's generation and regeneration tasks.
 
@@ -681,7 +681,7 @@ async def get_course_task_progress(
 async def regenerate_section_lesson_endpoint(
     section_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(require_budget)],
 ) -> RegenerateSectionLessonResponse:
     """Retry lesson generation for one section.
 
@@ -730,7 +730,7 @@ async def regenerate_section_lesson_endpoint(
 async def merge_section_with_next_endpoint(
     section_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> SectionMergeResponse:
     """Merge a section with the section immediately following it.
 
@@ -776,7 +776,7 @@ async def split_section_endpoint(
     section_id: uuid.UUID,
     payload: SectionSplitRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> SectionSplitResponse:
     """Split a section into two at the given chunk index.
 

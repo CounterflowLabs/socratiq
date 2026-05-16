@@ -18,7 +18,7 @@ from sqlalchemy import Select, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from app.api.deps import get_db, get_local_user
+from app.api.deps import get_db, get_current_user
 from app.db.models.course import Course
 from app.db.models.source import Source
 from app.db.models.source_task import SourceTask
@@ -55,7 +55,7 @@ def _filter_user(stmt: Select, user: User) -> Select:
 @router.get("", response_model=TaskListResponse)
 async def list_tasks(
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(get_current_user)],
     type: Literal["all", "embed", "generate"] = "all",
     status: Literal["all", "running", "queued", "done", "failed"] = "all",
     skip: int = 0,
@@ -195,7 +195,7 @@ async def list_tasks(
 async def cancel_task(
     task_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> dict:
     """Cooperative cancel for a single task (PRD §5.5 row action).
 
@@ -227,7 +227,7 @@ async def cancel_task(
 async def retry_task(
     task_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> dict:
     """Re-dispatch a failed task (PRD §5.5 failed-state row action).
 

@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db, get_local_user
+from app.api.deps import get_db, get_current_user
 from app.db.models.lab import Lab
 from app.db.models.user import User
 from app.models.lab import LabResponse
@@ -23,7 +23,7 @@ router = APIRouter(prefix="/api/v1/labs", tags=["labs"])
 async def get_section_lab(
     section_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(get_current_user)],
 ):
     result = await db.execute(select(Lab).where(Lab.section_id == section_id))
     lab = result.scalar_one_or_none()
@@ -42,7 +42,7 @@ async def get_section_lab(
 async def download_lab(
     lab_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(get_current_user)],
 ):
     lab = await db.get(Lab, lab_id)
     if not lab:

@@ -9,7 +9,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
-from app.api.deps import get_db, get_local_user, get_model_router
+from app.api.deps import get_db, get_current_user, get_model_router, require_budget
 from app.db.database import async_session_factory
 from app.db.models.conversation import Conversation
 from app.db.models.course import Section
@@ -37,7 +37,7 @@ router = APIRouter(tags=["chat"])
 @router.post("/api/v1/chat")
 async def chat(
     request: ChatRequest,
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(require_budget)],
     model_router: Annotated[ModelRouter, Depends(get_model_router)],
 ):
     """Send a message to the MentorAgent and receive an SSE stream."""
@@ -158,7 +158,7 @@ async def chat(
 @router.get("/api/v1/conversations", response_model=ConversationListResponse)
 async def list_conversations(
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(get_current_user)],
     skip: int = 0,
     limit: int = 20,
 ):
@@ -198,7 +198,7 @@ async def list_conversations(
 async def get_conversation_messages(
     conversation_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> list[MessageResponse]:
     """Get all messages in a conversation."""
     conversation = await db.get(Conversation, conversation_id)

@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import (
 from app.config import get_settings
 from app.db.models.base import Base
 import app.db.models  # noqa: F401 -- register all models
-from app.api.deps import get_db, get_redis, get_model_router, get_local_user, LOCAL_USER_ID
+from app.api.deps import get_db, get_redis, get_model_router, get_current_user, LOCAL_USER_ID
 from app.db.models.user import User
 from app.services.llm.base import LLMResponse, ContentBlock, StreamChunk, LLMProvider
 from app.services.llm.router import ModelRouter

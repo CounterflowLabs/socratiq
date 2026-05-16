@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db, get_local_user
+from app.api.deps import get_db, get_current_user, require_admin
 from app.config import get_settings
 from app.db.models.model_config import ModelConfig
 from app.db.models.model_config import ModelRouteConfig
@@ -30,14 +30,20 @@ def _get_config_manager() -> ModelConfigManager:
 
 @router.get("", response_model=list[ModelConfigResponse])
 async def list_models(
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(get_current_user)],
     db: AsyncSession = Depends(get_db),
     manager: ModelConfigManager = Depends(_get_config_manager),
 ):
+    # In SaaS mode, users see only the platform-managed models (user_id IS NULL).
+    # Admins additionally see any user-scoped overrides for debugging.
+    from app.api.deps import is_admin_user
+
+    if is_admin_user(user):
+        scope = or_(ModelConfig.user_id == user.id, ModelConfig.user_id.is_(None))
+    else:
+        scope = ModelConfig.user_id.is_(None)
     result = await db.execute(
-        select(ModelConfig)
-        .where(or_(ModelConfig.user_id == user.id, ModelConfig.user_id.is_(None)))
-        .order_by(ModelConfig.name)
+        select(ModelConfig).where(scope).order_by(ModelConfig.name)
     )
     models = list(result.scalars().all())
     return [
@@ -60,7 +66,7 @@ async def list_models(
 @router.post("", response_model=ModelConfigResponse, status_code=201)
 async def create_model(
     data: ModelConfigCreate,
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(require_admin)],
     db: AsyncSession = Depends(get_db),
     manager: ModelConfigManager = Depends(_get_config_manager),
 ):
@@ -133,7 +139,7 @@ async def create_model(
 async def update_model(
     name: str,
     data: ModelConfigUpdate,
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(require_admin)],
     db: AsyncSession = Depends(get_db),
     manager: ModelConfigManager = Depends(_get_config_manager),
 ):
@@ -174,7 +180,7 @@ async def update_model(
 @router.delete("/{name}", status_code=204)
 async def delete_model(
     name: str,
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(require_admin)],
     db: AsyncSession = Depends(get_db),
     manager: ModelConfigManager = Depends(_get_config_manager),
 ):
@@ -197,7 +203,7 @@ async def delete_model(
 @router.post("/{name}/test", response_model=ModelTestResponse)
 async def test_model(
     name: str,
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(require_admin)],
     db: AsyncSession = Depends(get_db),
     manager: ModelConfigManager = Depends(_get_config_manager),
 ):

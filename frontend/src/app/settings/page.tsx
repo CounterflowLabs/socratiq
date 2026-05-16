@@ -148,14 +148,14 @@ function guessLegacyPreset(baseUrl: string): WhisperPresetId {
   return "openai_compat";
 }
 
-const SECTIONS = [
-  { id: "appearance", labelZh: "外观", labelEn: "Appearance" },
-  { id: "llm", labelZh: "LLM 提供商", labelEn: "LLM providers" },
-  { id: "routes", labelZh: "模型路由", labelEn: "Model routing" },
-  { id: "sources", labelZh: "数据源", labelEn: "Data sources" },
+const ALL_SECTIONS = [
+  { id: "appearance", labelZh: "外观", labelEn: "Appearance", adminOnly: false },
+  { id: "llm", labelZh: "LLM 提供商", labelEn: "LLM providers", adminOnly: true },
+  { id: "routes", labelZh: "模型路由", labelEn: "Model routing", adminOnly: true },
+  { id: "sources", labelZh: "数据源", labelEn: "Data sources", adminOnly: false },
 ] as const;
 
-type SectionId = (typeof SECTIONS)[number]["id"];
+type SectionId = (typeof ALL_SECTIONS)[number]["id"];
 
 export default function SettingsPage() {
   const { t, lang } = useT();
@@ -166,6 +166,18 @@ export default function SettingsPage() {
   const themePreference = useLocaleStore((s) => s.theme);
 
   const [activeSection, setActiveSection] = useState<SectionId>("appearance");
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  useEffect(() => {
+    // Read admin flag from the cached login user without a network round-trip.
+    // Falls back to false when offline or the user predates the auth rollout.
+    import("@/lib/auth").then(({ getStoredUser }) => {
+      const u = getStoredUser();
+      if (u?.is_admin) setIsAdmin(true);
+    });
+  }, []);
+
+  const SECTIONS = ALL_SECTIONS.filter((s) => !s.adminOnly || isAdmin);
 
   const [models, setModels] = useState<ModelConfigResponse[]>([]);
   const [routes, setRoutes] = useState<ModelRouteResponse[]>([]);
@@ -961,6 +973,7 @@ export default function SettingsPage() {
                 </div>
               </div>
 
+              {isAdmin && (
               <div>
                 <h2
                   className="serif"
@@ -1132,6 +1145,7 @@ export default function SettingsPage() {
                   </div>
                 </div>
               </div>
+              )}
             </section>
           ) : null}
         </div>

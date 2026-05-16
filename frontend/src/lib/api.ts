@@ -1,5 +1,7 @@
 /** API client for Socratiq backend. */
 
+import { getAccessToken, redirectToLogin, redirectToRedeem } from "./auth";
+
 const API_BASE = "/api/v1";
 const nativeFetch = globalThis.fetch.bind(globalThis);
 
@@ -14,13 +16,45 @@ function formatFetchError(url: string, error: unknown): Error {
   );
 }
 
+function withAuthHeader(init: RequestInit | undefined): RequestInit | undefined {
+  const token = getAccessToken();
+  if (!token) return init;
+  const headers = new Headers(init?.headers);
+  if (!headers.has("Authorization") && !headers.has("authorization")) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+  return { ...(init ?? {}), headers };
+}
+
+/** Paths that should never trigger an auth-state redirect (login/redeem flow itself). */
+const AUTH_PUBLIC_PATHS = [
+  "/auth/google",
+  "/auth/refresh",
+  "/auth/me",
+  "/activation/redeem",
+  "/activation/status",
+];
+
+function isPublicAuthPath(url: string): boolean {
+  return AUTH_PUBLIC_PATHS.some((p) => url.includes(p));
+}
+
 async function apiFetch(
   input: RequestInfo | URL,
   init?: RequestInit
 ): Promise<Response> {
   const url = typeof input === "string" ? input : input.toString();
+  const finalInit = withAuthHeader(init);
   try {
-    return await nativeFetch(input, init);
+    const res = await nativeFetch(input, finalInit);
+    if (!isPublicAuthPath(url)) {
+      if (res.status === 401) {
+        redirectToLogin();
+      } else if (res.status === 402) {
+        redirectToRedeem();
+      }
+    }
+    return res;
   } catch (error) {
     throw formatFetchError(url, error);
   }
@@ -1144,4 +1178,71 @@ export async function recordProgress(sectionId: string, event: "lesson_read" | "
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ event }),
   });
+}
+
+// ─── Auth APIs ───────────────────────────────────────
+
+import type { AuthUser, TokenPair } from "./auth";
+
+export interface LoginResponse {
+  user: AuthUser;
+  tokens: TokenPair;
+}
+
+export async function loginWithGoogle(idToken: string): Promise<LoginResponse> {
+  const res = await apiFetch(`${API_BASE}/auth/google`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id_token: idToken }),
+  });
+  if (!res.ok) throw await responseError(res);
+  return res.json();
+}
+
+export async function refreshTokens(refreshToken: string): Promise<TokenPair> {
+  const res = await apiFetch(`${API_BASE}/auth/refresh`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ refresh_token: refreshToken }),
+  });
+  if (!res.ok) throw await responseError(res);
+  return res.json();
+}
+
+export async function getCurrentUser(): Promise<AuthUser> {
+  const res = await apiFetch(`${API_BASE}/auth/me`);
+  if (!res.ok) throw await responseError(res);
+  return res.json();
+}
+
+// ─── Activation APIs ─────────────────────────────────
+
+export interface SubscriptionStatus {
+  has_active_subscription: boolean;
+  subscription_until: string | null;
+  monthly_usd_cap: number | null;
+  tier: string | null;
+}
+
+export interface RedeemSuccess {
+  code: string;
+  tier: string;
+  subscription_until: string;
+  monthly_usd_cap: number;
+}
+
+export async function getSubscriptionStatus(): Promise<SubscriptionStatus> {
+  const res = await apiFetch(`${API_BASE}/activation/status`);
+  if (!res.ok) throw await responseError(res);
+  return res.json();
+}
+
+export async function redeemActivationCode(code: string): Promise<RedeemSuccess> {
+  const res = await apiFetch(`${API_BASE}/activation/redeem`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code }),
+  });
+  if (!res.ok) throw await responseError(res);
+  return res.json();
 }

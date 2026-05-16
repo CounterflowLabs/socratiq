@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db, get_local_user
+from app.api.deps import get_db, get_current_user
 from app.db.models import Section, SectionProgress, User
 from app.db.models.lab import Lab
 
@@ -49,7 +49,7 @@ def _compute_status(p: SectionProgress, has_lab: bool) -> str:
 async def get_course_progress(
     course_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_local_user),
+    user: User = Depends(get_current_user),
 ) -> list[SectionProgressResponse]:
     section_ids = (await db.execute(
         select(Section.id).where(Section.course_id == course_id)
@@ -92,7 +92,7 @@ async def record_progress(
     section_id: uuid.UUID,
     req: ProgressEventRequest,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_local_user),
+    user: User = Depends(get_current_user),
 ):
     row = (await db.execute(
         select(SectionProgress).where(

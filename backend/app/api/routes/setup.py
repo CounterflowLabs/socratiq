@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db, get_local_user
+from app.api.deps import get_db, get_current_user, require_admin
 from app.config import get_settings
 from app.db.models.bilibili_credential import BilibiliCredential
 from app.db.models.model_config import ModelConfig
@@ -74,7 +74,9 @@ async def setup_status(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/codex/login/start")
-async def start_codex_login():
+async def start_codex_login(
+    user: Annotated[User, Depends(require_admin)],
+):
     """Start or reuse an official ChatGPT device-auth flow for Codex CLI."""
     try:
         return await codex_login_manager.start()
@@ -83,7 +85,10 @@ async def start_codex_login():
 
 
 @router.get("/codex/login/{session_id}")
-async def get_codex_login_session(session_id: str):
+async def get_codex_login_session(
+    session_id: str,
+    user: Annotated[User, Depends(require_admin)],
+):
     """Return the latest state for a device-auth session."""
     session = codex_login_manager.get(session_id)
     if not session:
@@ -93,7 +98,7 @@ async def get_codex_login_session(session_id: str):
 
 @router.get("/whisper", response_model=WhisperConfigResponse)
 async def get_whisper_config(
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(get_current_user)],
     db: AsyncSession = Depends(get_db),
 ):
     """Return Whisper ASR config for the current local user."""
@@ -134,7 +139,7 @@ async def get_whisper_config(
 @router.put("/whisper", response_model=WhisperConfigResponse)
 async def update_whisper_config(
     data: WhisperConfigUpdate,
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(require_admin)],
     db: AsyncSession = Depends(get_db),
 ):
     """Persist Whisper ASR config for the current local user."""
@@ -186,7 +191,7 @@ async def update_whisper_config(
 
 @router.get("/bilibili/status")
 async def get_bilibili_status(
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(get_current_user)],
     db: AsyncSession = Depends(get_db),
 ):
     """Return whether a Bilibili credential is configured for the current user.
@@ -212,7 +217,7 @@ async def get_bilibili_status(
 
 @router.post("/bilibili/qrcode")
 async def generate_bilibili_qrcode(
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(get_current_user)],
 ):
     """Generate a Bilibili QR code for browser-based login."""
     import base64
@@ -231,7 +236,7 @@ async def generate_bilibili_qrcode(
 
 @router.get("/bilibili/qrcode/status")
 async def check_bilibili_qrcode(
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(get_current_user)],
     db: AsyncSession = Depends(get_db),
 ):
     """Check scan status and persist credential when login finishes."""
@@ -282,7 +287,7 @@ async def check_bilibili_qrcode(
 
 @router.delete("/bilibili")
 async def logout_bilibili(
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(get_current_user)],
     db: AsyncSession = Depends(get_db),
 ):
     """Remove the linked Bilibili credential for the current local user."""

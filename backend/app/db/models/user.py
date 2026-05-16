@@ -1,9 +1,10 @@
 """SQLAlchemy ORM model for the users table."""
 
 import uuid
+from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, String, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -36,6 +37,13 @@ class User(BaseMixin, Base):
     avatar_url: Mapped[str | None] = mapped_column(String, nullable=True)
     hashed_password: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, server_default=text("true"), nullable=False)
+
+    # Subscription / activation (W4)
+    activation_code_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("activation_codes.id"), nullable=True
+    )
+    subscription_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    monthly_usd_cap: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
 
     # Relationships
     sources: Mapped[list["Source"]] = relationship(  # noqa: F821

@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db, get_local_user, get_model_router
+from app.api.deps import get_db, get_current_user, get_model_router, require_budget
 from app.db.models.course import Section
 from app.db.models.exercise import Exercise
 from app.db.models.exercise_submission import ExerciseSubmission
@@ -69,7 +69,7 @@ class GenerateExercisesResponse(BaseModel):
 async def get_exercise(
     exercise_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> ExerciseResponse:
     """Get a single exercise by ID. Answer and correct_index are excluded."""
     exercise = await db.get(Exercise, exercise_id)
@@ -93,7 +93,7 @@ async def submit_answer(
     exercise_id: uuid.UUID,
     request: SubmitAnswerRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(require_budget)],
     model_router: Annotated[ModelRouter, Depends(get_model_router)],
 ) -> SubmitAnswerResponse:
     """Submit an answer to an exercise. Grades it and returns the result."""
@@ -174,7 +174,7 @@ async def submit_answer(
 async def list_exercises_for_section(
     section_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> ExerciseListResponse:
     """List all exercises for a section, plus the async-generation flag/error."""
     section = await db.get(Section, section_id)
@@ -236,7 +236,7 @@ async def generate_exercises_for_section(
     section_id: uuid.UUID,
     request: GenerateExercisesRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(require_budget)],
 ) -> GenerateExercisesResponse:
     """Dispatch a Celery task to generate exercises in the background.
 

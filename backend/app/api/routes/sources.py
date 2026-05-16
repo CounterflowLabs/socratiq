@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db, get_local_user
+from app.api.deps import get_db, get_current_user, require_budget
 from app.config import get_settings
 from app.db.models.content_chunk import ContentChunk as ContentChunkModel
 from app.db.models.course import Course, CourseSource, Section
@@ -48,7 +48,7 @@ _ACTIONABLE_RANK = {"failure": 0, "processing": 1, "ready": 2}
 @router.post("", response_model=SourceResponse, status_code=201)
 async def create_source(
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(require_budget)],
     url: str | None = Form(None),
     source_type: str | None = Form(None),
     title: str | None = Form(None),
@@ -203,7 +203,7 @@ async def create_source(
 @router.get("", response_model=SourceListResponse)
 async def list_sources(
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(get_current_user)],
     query: str | None = None,
     status: Literal["all", "processing", "ready", "failure"] = "all",
     source_type: str | None = None,
@@ -318,7 +318,7 @@ async def list_sources(
 async def get_source(
     source_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> SourceResponse:
     """Get a single source by ID."""
     result = await db.execute(
@@ -338,7 +338,7 @@ async def get_source(
 async def cancel_source(
     source_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> dict:
     """Request cooperative cancellation of any running tasks for this source.
 
@@ -389,7 +389,7 @@ async def cancel_source(
 async def retry_source(
     source_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(require_budget)],
 ) -> dict:
     """Re-dispatch ingest_source for a cancelled or errored source.
 
@@ -469,7 +469,7 @@ async def retry_source(
 async def delete_source(
     source_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> dict:
     """Soft-delete a source.
 
@@ -530,7 +530,7 @@ async def delete_source(
 async def generate_course_for_source(
     source_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(require_budget)],
 ) -> dict:
     """Dispatch async course generation for a ready source.
 
@@ -620,7 +620,7 @@ async def generate_course_for_source(
 async def get_source_progress(
     source_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> SourceProgressResponse:
     """Aggregate progress for a source — DB-authoritative, no Celery state.
 
@@ -689,7 +689,7 @@ async def get_source_progress(
 async def list_source_chunks(
     source_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(get_current_user)],
     skip: int = 0,
     limit: int = 50,
 ) -> dict:
@@ -736,7 +736,7 @@ async def list_source_chunks(
 async def list_source_citations(
     source_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> dict:
     """List every course generated from (or citing) this source.
 
@@ -832,7 +832,7 @@ async def _user_owns_source(db: AsyncSession, source_id: uuid.UUID, user_id: uui
 async def get_source_file(
     source_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> FileResponse:
     """Serve an uploaded PDF file for the owning user."""
     result = await db.execute(

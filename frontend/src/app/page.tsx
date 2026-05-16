@@ -21,7 +21,6 @@ import { Progress } from "@/components/ui/progress-bar";
 import {
   listCourses,
   listTasks,
-  getSetupStatus,
   getSourceProgress,
   getDueReviews,
   completeReview,
@@ -153,13 +152,12 @@ export default function DashboardPage() {
           if (!cancelled) setLoading(false);
         });
 
-    getSetupStatus()
-      .then((status) => {
+    // SaaS mode: providers are platform-managed, so we don't redirect to
+    // /setup on missing models. The seed script guarantees they exist; if
+    // not, we let downstream API calls surface the error.
+    Promise.resolve()
+      .then(() => {
         if (cancelled) return;
-        if (!status.has_models) {
-          router.replace("/setup");
-          return;
-        }
         setLoading(true);
         void refreshCourses();
         getDueReviews()

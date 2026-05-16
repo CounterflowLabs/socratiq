@@ -21,6 +21,7 @@ function isDedicatedLearnRoute(pathname: string): boolean {
 function isHiddenChromeRoute(pathname: string): boolean {
   return (
     pathname === "/login" ||
+    pathname === "/redeem" ||
     pathname === "/setup" ||
     pathname === "/welcome" ||
     isDedicatedLearnRoute(pathname)

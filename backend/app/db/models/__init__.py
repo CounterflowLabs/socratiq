@@ -22,6 +22,7 @@ from app.db.models.translation import Translation
 from app.db.models.section_progress import SectionProgress
 from app.db.models.bilibili_credential import BilibiliCredential
 from app.db.models.whisper_config import WhisperConfig
+from app.db.models.activation_code import ActivationCode
 
 __all__ = [
     "Base",
@@ -51,4 +52,5 @@ __all__ = [
     "SectionProgress",
     "BilibiliCredential",
     "WhisperConfig",
+    "ActivationCode",
 ]

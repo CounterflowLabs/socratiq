@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db, get_local_user
+from app.api.deps import get_db, get_current_user, require_admin
 from app.config import get_settings
 from app.db.models.user import User
 from app.models.model_schemas import ModelRouteResponse, ModelRouteUpdate
@@ -21,7 +21,7 @@ def _get_config_manager() -> ModelConfigManager:
 
 @router.get("", response_model=list[ModelRouteResponse])
 async def get_routes(
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(get_current_user)],
     db: AsyncSession = Depends(get_db),
     manager: ModelConfigManager = Depends(_get_config_manager),
 ):
@@ -35,7 +35,7 @@ async def get_routes(
 @router.put("", response_model=list[ModelRouteResponse])
 async def update_routes(
     routes: list[ModelRouteUpdate],
-    user: Annotated[User, Depends(get_local_user)],
+    user: Annotated[User, Depends(require_admin)],
     db: AsyncSession = Depends(get_db),
     manager: ModelConfigManager = Depends(_get_config_manager),
 ):

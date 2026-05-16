@@ -28,11 +28,24 @@ class Settings(BaseSettings):
     whisper_api_base_url: str = "https://api.groq.com/openai/v1"
     whisper_api_model: str = "whisper-large-v3"
 
+    # Runtime environment
+    env: str = "development"  # "development" | "staging" | "production"
+
     # Auth
+    # auth_mode = "local": no auth required, returns the fixed demo user (dev only).
+    # auth_mode = "jwt":   real Authorization: Bearer JWT required.
+    auth_mode: str = "local"
     jwt_secret_key: str = "change-me-in-production"
     jwt_access_expire_minutes: int = 15
     jwt_refresh_expire_days: int = 7
     google_client_id: str = ""
+
+    # Authorization
+    # Comma-separated list of admin emails (matched case-insensitively).
+    admin_emails: str = ""
+
+    # CORS — comma-separated list of allowed origins. Empty → localhost dev defaults.
+    cors_origins: str = ""
 
     # Observability
     sentry_dsn: str = ""

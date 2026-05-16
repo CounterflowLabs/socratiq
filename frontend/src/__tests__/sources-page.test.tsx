@@ -230,6 +230,43 @@ describe("/sources page", () => {
     expect(screen.queryByText("embed model upgraded")).not.toBeInTheDocument();
   });
 
+  it("shows source section planning as an in-order processing step", async () => {
+    globalThis.fetch = mockFetchSequence([
+      {
+        items: [
+          makeSource({
+            id: "src-source-planning",
+            title: "Planning Source Material",
+            status: "planning",
+            latest_processing_task: {
+              task_type: "source_processing",
+              status: "running",
+              stage: "planning",
+            },
+          }),
+        ],
+        total: 1,
+        skip: 0,
+        limit: 20,
+      },
+    ]) as unknown as typeof fetch;
+
+    const Page = (await import("@/app/sources/page")).default;
+    render(<Page />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Planning Source Material")).toBeInTheDocument();
+      expect(screen.getByText("资料正在规划章节中")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText("Planning Source Material"));
+
+    await waitFor(() => {
+      expect(screen.getAllByText("规划章节").length).toBeGreaterThan(0);
+      expect(screen.queryByText("planning")).not.toBeInTheDocument();
+    });
+  });
+
   it("does not show enter-course CTA when the derived state is failed", async () => {
     globalThis.fetch = mockFetchSequence([
       {
@@ -381,7 +418,7 @@ describe("/sources page", () => {
       expect(screen.getByRole("button", { name: "取消课程生成" })).toBeInTheDocument();
       expect(screen.getByRole("link", { name: /查看任务/ })).toHaveAttribute("href", "/tasks");
       expect(screen.getByText("排队生成")).toBeInTheDocument();
-      expect(screen.getByText("规划章节")).toBeInTheDocument();
+      expect(screen.getAllByText("规划章节").length).toBeGreaterThan(0);
       expect(screen.getByText("生成组装")).toBeInTheDocument();
       expect(screen.getByText("课程就绪")).toBeInTheDocument();
       expect(screen.getByText("章节组装进度")).toBeInTheDocument();

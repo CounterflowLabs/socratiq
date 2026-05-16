@@ -146,4 +146,20 @@ describe("deriveMaterialPresentation", () => {
     expect(result.supportingText).toBe("资料正在分析中");
     expect(result.isActive).toBe(true);
   });
+
+  it("labels source section planning as a material-processing stage", () => {
+    const result = deriveMaterialPresentation(
+      makeSource({
+        status: "planning",
+        latest_processing_task: {
+          task_type: "source_processing",
+          status: "running",
+          stage: "planning",
+        },
+      })
+    );
+
+    expect(result.badge).toBe("资料处理中");
+    expect(result.supportingText).toBe("资料正在规划章节中");
+  });
 });

@@ -95,6 +95,7 @@ const STAGE_LABELS: Record<string, string> = {
   storing: "存储中",
   embedding: "向量化",
   waiting_donor: "复用中",
+  planning: "规划章节",
   generating_lessons: "生成课文",
   generating_labs: "生成 Lab",
   assembling_course: "组装课程",
@@ -124,6 +125,7 @@ const TASK_STAGE_DETAILS: Record<string, Record<string, string[]>> = {
     analyzing: ["识别主题线索", "拆分学习切片", "估算难度与时长"],
     storing: ["保存资料摘要", "写入切片内容", "关联来源元数据"],
     embedding: ["生成切片向量", "生成概念向量", "写入检索库"],
+    planning: ["读取切片边界", "规划章节结构", "保存课程骨架"],
     ready: ["资料处理完成", "课程生成已接力"],
     error: ["记录失败原因", "等待重试"],
     cancelled: ["停止后台任务", "保留已完成记录"],
@@ -141,7 +143,7 @@ const TASK_STAGE_DETAILS: Record<string, Record<string, string[]>> = {
 };
 
 const TASK_STAGE_FLOW: Record<string, string[]> = {
-  source_processing: ["pending", "extracting", "analyzing", "storing", "embedding", "ready"],
+  source_processing: ["pending", "extracting", "analyzing", "storing", "embedding", "planning", "ready"],
   course_generation: ["pending", "planning", "assembling_course", "ready"],
 };
 

@@ -20,7 +20,7 @@ const STAGE_LABELS: Record<string, string> = {
   storing: "存储",
   embedding: "向量化",
   waiting_donor: "复用",
-  planning: "规划",
+  planning: "规划章节",
   generating: "生成",
   generating_lessons: "生成课文",
   generating_labs: "生成 Lab",

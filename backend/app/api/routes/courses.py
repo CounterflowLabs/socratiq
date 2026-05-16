@@ -2,12 +2,13 @@
 
 import uuid
 from collections import defaultdict
+from datetime import datetime
 from math import inf
 from typing import Annotated, Any
 
 from celery.result import AsyncResult
 from fastapi import APIRouter, Depends, HTTPException, Response
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_local_user, get_model_router
@@ -52,45 +53,46 @@ async def _compute_version_index(db: AsyncSession, course: Course) -> int:
     regenerations of the same parent become v2, v3, v4 in order, rather than
     all collapsing to v2.
     """
-    # 1. Walk up to find the root id.
-    root_id = course.id if course.parent_id is None else course.parent_id
+    # 1. Walk up to find the root course.
+    root = course
     visited: set[uuid.UUID] = {course.id}
     steps = 0
-    while steps < _MAX_VERSION_DEPTH:
-        row = (
-            await db.execute(
-                select(Course.parent_id).where(Course.id == root_id)
-            )
-        ).first()
-        if row is None:
+    while root.parent_id is not None and steps < _MAX_VERSION_DEPTH:
+        parent = await db.get(Course, root.parent_id)
+        if parent is None or parent.id in visited:
             break
-        parent_id = row[0]
-        if parent_id is None or parent_id in visited:
-            break
-        visited.add(root_id)
-        root_id = parent_id
+        visited.add(parent.id)
+        root = parent
         steps += 1
 
-    # 2. Pull the family tree rooted at ``root_id`` via a recursive CTE and
-    #    rank by created_at.
-    family_cte = text(
-        """
-        WITH RECURSIVE family AS (
-            SELECT id, parent_id, created_at FROM courses WHERE id = :root
-            UNION ALL
-            SELECT c.id, c.parent_id, c.created_at
-            FROM courses c JOIN family f ON c.parent_id = f.id
-        ),
-        ranked AS (
-            SELECT id, ROW_NUMBER() OVER (ORDER BY created_at, id) AS rn
-            FROM family
-        )
-        SELECT rn FROM ranked WHERE id = :course
-        """
+    # 2. Walk descendants from the root and rank by created_at. This avoids
+    # raw recursive SQL here, which is brittle across test DB drivers when UUID
+    # bind parameters are inferred as text.
+    family: list[tuple[int, Course]] = [(0, root)]
+    frontier = [root.id]
+    seen: set[uuid.UUID] = {root.id}
+    steps = 0
+    while frontier and steps < _MAX_VERSION_DEPTH:
+        rows = (
+            await db.execute(select(Course).where(Course.parent_id.in_(frontier)))
+        ).scalars().all()
+        frontier = []
+        for child in rows:
+            if child.id in seen:
+                continue
+            seen.add(child.id)
+            family.append((steps + 1, child))
+            frontier.append(child.id)
+        steps += 1
+
+    ranked = sorted(
+        family,
+        key=lambda item: (item[0], item[1].created_at or datetime.min, str(item[1].id)),
     )
-    result = await db.execute(family_cte, {"root": root_id, "course": course.id})
-    row = result.first()
-    return int(row[0]) if row and row[0] is not None else 1
+    for index, (_depth, item) in enumerate(ranked, start=1):
+        if item.id == course.id:
+            return index
+    return 1
 
 
 def _extract_page_indices(metadata: dict[str, Any]) -> list[int]:

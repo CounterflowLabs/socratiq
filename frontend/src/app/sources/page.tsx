@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 
 import { useRouter, useSearchParams } from "next/navigation";
@@ -33,6 +33,25 @@ import {
 import { useT } from "@/lib/i18n";
 
 export default function SourcesPage() {
+  return (
+    <Suspense fallback={<SourcesPageFallback />}>
+      <SourcesPageContent />
+    </Suspense>
+  );
+}
+
+function SourcesPageFallback() {
+  return (
+    <div className="min-h-screen px-8 py-8" style={{ background: "var(--background)" }}>
+      <div className="mx-auto max-w-6xl">
+        <div className="h-8 w-44 rounded-full" style={{ background: "var(--surface-2)" }} />
+        <div className="mt-8 h-32 rounded-2xl" style={{ background: "var(--surface)" }} />
+      </div>
+    </div>
+  );
+}
+
+function SourcesPageContent() {
   const { t, lang } = useT();
   const router = useRouter();
   const searchParams = useSearchParams();

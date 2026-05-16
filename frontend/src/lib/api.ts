@@ -85,11 +85,13 @@ async function responseError(res: Response): Promise<ApiError> {
 // ─── Source APIs ───────────────────────────────────────
 
 export interface SourceTaskSummary {
+  id?: string;
   task_type: string;
   status: string;
   stage?: string | null;
   error_summary?: string | null;
   celery_task_id?: string | null;
+  metadata_?: Record<string, unknown>;
 }
 
 export interface SourceEmbed {
@@ -599,6 +601,7 @@ export interface SourceTaskProgress {
   stage?: string | null;
   error_summary?: string | null;
   celery_task_id?: string | null;
+  metadata_?: Record<string, unknown>;
   cancel_requested: boolean;
   course_id?: string | null;
   updated_at: string;

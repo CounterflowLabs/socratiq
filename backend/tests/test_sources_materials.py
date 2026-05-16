@@ -220,25 +220,22 @@ async def test_get_source_returns_latest_processing_and_course_task_summaries(
     db_session.add(source)
     await db_session.flush()
 
-    db_session.add(
-        SourceTask(
-            source_id=source.id,
-            task_type="source_processing",
-            status="success",
-            stage="ready",
-            celery_task_id="processing-task-1",
-        )
+    processing_task = SourceTask(
+        source_id=source.id,
+        task_type="source_processing",
+        status="success",
+        stage="ready",
+        celery_task_id="processing-task-1",
     )
-    db_session.add(
-        SourceTask(
-            source_id=source.id,
-            task_type="course_generation",
-            status="failure",
-            stage="error",
-            error_summary="broker unavailable",
-            celery_task_id="course-task-1",
-        )
+    course_task = SourceTask(
+        source_id=source.id,
+        task_type="course_generation",
+        status="failure",
+        stage="error",
+        error_summary="broker unavailable",
+        celery_task_id="course-task-1",
     )
+    db_session.add_all([processing_task, course_task])
     await db_session.commit()
 
     res = await client.get(f"/api/v1/sources/{source.id}")
@@ -247,18 +244,22 @@ async def test_get_source_returns_latest_processing_and_course_task_summaries(
     data = res.json()
     assert data["task_id"] == "course-task-1"
     assert data["latest_processing_task"] == {
+        "id": str(processing_task.id),
         "task_type": "source_processing",
         "status": "success",
         "stage": "ready",
         "error_summary": None,
         "celery_task_id": "processing-task-1",
+        "metadata_": {},
     }
     assert data["latest_course_task"] == {
+        "id": str(course_task.id),
         "task_type": "course_generation",
         "status": "failure",
         "stage": "error",
         "error_summary": "broker unavailable",
         "celery_task_id": "course-task-1",
+        "metadata_": {},
     }
 
 

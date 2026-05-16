@@ -12,21 +12,36 @@ export interface MaterialPresentation {
   isActive: boolean;
 }
 
-function isTaskActive(task: SourceTaskSummary | null | undefined): boolean {
-  return task?.status === "pending" || task?.status === "running";
-}
-
 const STAGE_LABELS: Record<string, string> = {
   pending: "排队",
+  processing: "处理",
   extracting: "提取",
   analyzing: "分析",
   storing: "存储",
   embedding: "向量化",
+  waiting_donor: "复用",
   planning: "规划",
+  generating: "生成",
   generating_lessons: "生成课文",
   generating_labs: "生成 Lab",
   assembling_course: "组装",
+  ready: "已完成",
+  error: "失败",
+  cancelled: "已取消",
 };
+
+function isTaskActive(task: SourceTaskSummary | null | undefined): boolean {
+  return task?.status === "pending" || task?.status === "running" || task?.status === "progress";
+}
+
+export function isCourseTaskActive(source: SourceResponse): boolean {
+  return isTaskActive(source.latest_course_task);
+}
+
+export function formatMaterialStage(stage: string | null | undefined): string | null {
+  if (!stage) return null;
+  return STAGE_LABELS[stage] ?? stage;
+}
 
 function isSourceCancelled(source: SourceResponse): boolean {
   return (

@@ -670,6 +670,7 @@ async def get_source_progress(
             stage=t.stage,
             error_summary=t.error_summary,
             celery_task_id=t.celery_task_id,
+            metadata_=t.metadata_ or {},
             cancel_requested=t.cancel_requested,
             course_id=(
                 uuid.UUID(t.metadata_["course_id"])
@@ -910,11 +911,13 @@ async def _get_latest_task_summary(
         return None
 
     return SourceTaskSummary(
+        id=task.id,
         task_type=task.task_type,
         status=task.status,
         stage=task.stage,
         error_summary=task.error_summary,
         celery_task_id=task.celery_task_id,
+        metadata_=task.metadata_ or {},
     )
 
 
@@ -944,11 +947,13 @@ async def _get_latest_task_summaries(
             continue
         seen.add(key)
         latest.setdefault(task.source_id, {})[task.task_type] = SourceTaskSummary(
+            id=task.id,
             task_type=task.task_type,
             status=task.status,
             stage=task.stage,
             error_summary=task.error_summary,
             celery_task_id=task.celery_task_id,
+            metadata_=task.metadata_ or {},
         )
     return latest
 

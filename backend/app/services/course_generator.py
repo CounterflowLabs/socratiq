@@ -68,6 +68,7 @@ class CourseGenerator:
         skip_ready_check: bool = False,
         user_directive: str = "",
         cancel_check: "Callable[[], Awaitable[None]] | None" = None,
+        section_progress_callback: "Callable[[UUID, dict], Awaitable[None]] | None" = None,
     ) -> Course:
         """Generate a course from one or more ingested sources.
 
@@ -138,6 +139,7 @@ class CourseGenerator:
                 target_language=target_language,
                 user_directive=user_directive,
                 cancel_check=cancel_check,
+                section_progress_callback=section_progress_callback,
             )
             per_source_assets[source.id] = assets
 
@@ -188,6 +190,7 @@ class CourseGenerator:
         target_language: str,
         user_directive: str,
         cancel_check: Callable[[], Awaitable[None]] | None = None,
+        section_progress_callback: Callable[[UUID, dict], Awaitable[None]] | None = None,
     ) -> "_SourceAssets":
         """Plan + generate lessons/labs/graphs for one source, in parallel per page."""
         smeta = source.metadata_ or {}
@@ -250,6 +253,76 @@ class CourseGenerator:
                     bid = 0
                 bucket_groups[bid].append(c)
 
+        section_progress_items: list[dict] = []
+        section_progress_by_key: dict[str, dict] = {}
+        section_progress_mode = "section"
+        section_progress_lock = asyncio.Lock()
+
+        def _append_section_progress_item(
+            key: str,
+            *,
+            order_index: int,
+            title: str,
+        ) -> None:
+            item = {
+                "key": key,
+                "order_index": order_index,
+                "title": title,
+                "status": "pending",
+                "error": None,
+            }
+            section_progress_items.append(item)
+            section_progress_by_key[key] = item
+
+        async def _emit_section_progress() -> None:
+            if section_progress_callback is None or not section_progress_items:
+                return
+            completed = sum(
+                1
+                for item in section_progress_items
+                if item.get("status") in {"success", "failure"}
+            )
+            failed = sum(
+                1 for item in section_progress_items if item.get("status") == "failure"
+            )
+            active = next(
+                (
+                    item["key"]
+                    for item in section_progress_items
+                    if item.get("status") == "running"
+                ),
+                None,
+            )
+            payload = {
+                "mode": section_progress_mode,
+                "total": len(section_progress_items),
+                "completed": completed,
+                "failed": failed,
+                "active": active,
+                "items": [dict(item) for item in section_progress_items],
+            }
+            try:
+                await section_progress_callback(source.id, payload)
+            except Exception:
+                logger.warning(
+                    "Failed to update section progress for source %s",
+                    source.id,
+                    exc_info=True,
+                )
+
+        async def _set_section_progress(
+            key: str,
+            status: str,
+            error: str | None = None,
+        ) -> None:
+            async with section_progress_lock:
+                item = section_progress_by_key.get(key)
+                if not item:
+                    return
+                item["status"] = status
+                item["error"] = error
+                await _emit_section_progress()
+
         lesson_by_page: dict[int, dict] = {}
         lesson_by_chunk_id: dict[UUID, dict] = {}
         lesson_by_bucket_id: dict[int, dict] = {}
@@ -258,10 +331,30 @@ class CourseGenerator:
         error_by_bucket_id: dict[int, str] = {}
 
         if per_bucket_mode:
+            section_progress_mode = "bucket"
+            sorted_buckets = sorted(bucket_groups.keys())
+            for order_index, bucket_id in enumerate(sorted_buckets):
+                bucket_chunks = bucket_groups[bucket_id]
+                first_meta = bucket_chunks[0].metadata_ or {}
+                bucket_title = (
+                    first_meta.get("section_bucket_topic")
+                    or first_meta.get("topic")
+                    or source.title
+                    or f"Section {order_index + 1}"
+                )
+                _append_section_progress_item(
+                    f"bucket:{bucket_id}",
+                    order_index=order_index,
+                    title=str(bucket_title),
+                )
+            await _emit_section_progress()
+
             async def _gen_one_bucket_lesson(
                 bucket_id: int, bucket_chunks: list[ContentChunkModel]
             ):
                 async with sem:
+                    progress_key = f"bucket:{bucket_id}"
+                    await _set_section_progress(progress_key, "running")
                     if cancel_check is not None:
                         await cancel_check()
                     first_meta = bucket_chunks[0].metadata_ or {}
@@ -280,14 +373,15 @@ class CourseGenerator:
                             target_language=target_language,
                             user_directive=user_directive,
                         )
+                        await _set_section_progress(progress_key, "success")
                         return bucket_id, lesson, None
                     except LessonGenerationError as e:
                         logger.warning(
                             "Lesson generation failed for bucket %s: %s", bucket_id, e
                         )
+                        await _set_section_progress(progress_key, "failure", str(e)[:500])
                         return bucket_id, None, str(e)[:500]
 
-            sorted_buckets = sorted(bucket_groups.keys())
             bucket_results = await asyncio.gather(
                 *(
                     _gen_one_bucket_lesson(b, bucket_groups[b])
@@ -300,8 +394,26 @@ class CourseGenerator:
                 elif err is not None:
                     error_by_bucket_id[bid] = err
         elif per_chunk_mode:
+            section_progress_mode = "chunk"
+            for order_index, chunk in enumerate(chunks):
+                cmeta = chunk.metadata_ or {}
+                chunk_title = (
+                    cmeta.get("topic")
+                    or cmeta.get("page_title")
+                    or source.title
+                    or f"Section {order_index + 1}"
+                )
+                _append_section_progress_item(
+                    f"chunk:{chunk.id}",
+                    order_index=order_index,
+                    title=str(chunk_title),
+                )
+            await _emit_section_progress()
+
             async def _gen_one_chunk_lesson(chunk: ContentChunkModel):
                 async with sem:
+                    progress_key = f"chunk:{chunk.id}"
+                    await _set_section_progress(progress_key, "running")
                     if cancel_check is not None:
                         await cancel_check()
                     cmeta = chunk.metadata_ or {}
@@ -318,11 +430,13 @@ class CourseGenerator:
                             target_language=target_language,
                             user_directive=user_directive,
                         )
+                        await _set_section_progress(progress_key, "success")
                         return chunk.id, lesson, None
                     except LessonGenerationError as e:
                         logger.warning(
                             "Lesson generation failed for chunk %s: %s", chunk.id, e
                         )
+                        await _set_section_progress(progress_key, "failure", str(e)[:500])
                         return chunk.id, None, str(e)[:500]
 
             chunk_results = await asyncio.gather(
@@ -334,9 +448,24 @@ class CourseGenerator:
                 elif err is not None:
                     error_by_chunk_id[cid] = err
         else:
+            section_progress_mode = "page"
+            sorted_pages = sorted(page_groups.keys())
+            for order_index, page_idx in enumerate(sorted_pages):
+                page_chunks = page_groups[page_idx]
+                first_meta = page_chunks[0].metadata_ or {}
+                page_title = first_meta.get("page_title") or source.title or f"Section {order_index + 1}"
+                _append_section_progress_item(
+                    f"page:{page_idx}",
+                    order_index=order_index,
+                    title=str(page_title),
+                )
+            await _emit_section_progress()
+
             # Run lesson generation in parallel across pages
             async def _gen_one_lesson(page_idx: int, page_chunks: list[ContentChunkModel]):
                 async with sem:
+                    progress_key = f"page:{page_idx}"
+                    await _set_section_progress(progress_key, "running")
                     if cancel_check is not None:
                         await cancel_check()
                     first_meta = page_chunks[0].metadata_ or {}
@@ -350,14 +479,15 @@ class CourseGenerator:
                             target_language=target_language,
                             user_directive=user_directive,
                         )
+                        await _set_section_progress(progress_key, "success")
                         return page_idx, lesson, None
                     except LessonGenerationError as e:
                         logger.warning(
                             "Lesson generation failed for page %s: %s", page_idx, e
                         )
+                        await _set_section_progress(progress_key, "failure", str(e)[:500])
                         return page_idx, None, str(e)[:500]
 
-            sorted_pages = sorted(page_groups.keys())
             lesson_results = await asyncio.gather(
                 *(_gen_one_lesson(p, page_groups[p]) for p in sorted_pages)
             )

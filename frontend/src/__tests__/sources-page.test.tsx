@@ -151,6 +151,45 @@ describe("/sources page", () => {
     });
   });
 
+  it("lets active course generation override stale embed status in the list", async () => {
+    globalThis.fetch = mockFetchSequence([
+      {
+        items: [
+          makeSource({
+            id: "src-stale-course-active",
+            title: "Course Active Material",
+            embed: {
+              status: "stale",
+              model: "old-model",
+              reason: "embed model upgraded",
+            },
+            latest_course_task: {
+              id: "task-row-active",
+              task_type: "course_generation",
+              status: "running",
+              stage: "assembling_course",
+            },
+          }),
+        ],
+        total: 1,
+        skip: 0,
+        limit: 20,
+      },
+    ]) as unknown as typeof fetch;
+
+    const Page = (await import("@/app/sources/page")).default;
+    render(<Page />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Course Active Material")).toBeInTheDocument();
+      expect(screen.getByText("课程生成中")).toBeInTheDocument();
+      expect(screen.getByText("课程正在组装中")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText("需重新处理")).not.toBeInTheDocument();
+    expect(screen.queryByText("embed model upgraded")).not.toBeInTheDocument();
+  });
+
   it("does not show enter-course CTA when the derived state is failed", async () => {
     globalThis.fetch = mockFetchSequence([
       {
@@ -161,10 +200,12 @@ describe("/sources page", () => {
             latest_course_id: "course-stale",
             course_count: 1,
             latest_course_task: {
+              id: "course-task-row-failed",
               task_type: "course_generation",
               status: "failure",
               stage: "assembling_course",
               error_summary: "LLM timeout",
+              celery_task_id: "course-task-failed",
             },
           }),
         ],
@@ -184,7 +225,7 @@ describe("/sources page", () => {
     fireEvent.click(screen.getByText("Broken Material"));
 
     await waitFor(() => {
-      expect(screen.getByText("当前状态")).toBeInTheDocument();
+      expect(screen.getByText("课程状态")).toBeInTheDocument();
       expect(screen.getAllByText("课程生成失败").length).toBeGreaterThan(0);
     });
 
@@ -195,7 +236,128 @@ describe("/sources page", () => {
       }),
     ).toHaveAttribute("href", "https://www.youtube.com/watch?v=kCc8FmEb1nY");
     expect(screen.queryByRole("link", { name: "进入课程" })).not.toBeInTheDocument();
-    expect(screen.getByText("当前没有可进入的课程，请先查看失败原因。")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重试生成" })).toBeInTheDocument();
+    expect(screen.getAllByText("LLM timeout").length).toBeGreaterThan(0);
+  });
+
+  it("lets active course generation be cancelled from the source drawer", async () => {
+    const activeSource = makeSource({
+      id: "src-active-course",
+      title: "Queued Course Material",
+      latest_course_task: {
+        id: "task-row-1",
+        task_type: "course_generation",
+        status: "pending",
+        stage: "pending",
+        celery_task_id: "course-task-1",
+        metadata_: {
+          section_progress: {
+            total: 2,
+            completed: 1,
+            failed: 0,
+            active: "section-2",
+            items: [
+              {
+                key: "section-1",
+                title: "输入层",
+                status: "success",
+                order_index: 0,
+              },
+              {
+                key: "section-2",
+                title: "隐藏层",
+                status: "running",
+                order_index: 1,
+              },
+            ],
+          },
+        },
+      },
+    });
+    const cancelledSource = makeSource({
+      id: "src-active-course",
+      title: "Queued Course Material",
+      latest_course_task: {
+        id: "task-row-1",
+        task_type: "course_generation",
+        status: "cancelled",
+        stage: "cancelled",
+        celery_task_id: "course-task-1",
+      },
+    });
+    let sourceListCalls = 0;
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.includes("/chunks")) {
+        return jsonResponse({ items: [], total: 0, skip: 0, limit: 5 });
+      }
+      if (url.includes("/citations")) {
+        return jsonResponse({ items: [], total: 0 });
+      }
+      if (url.includes("/progress")) {
+        return jsonResponse({
+          source_id: "src-active-course",
+          source_status: "ready",
+          error: null,
+          course_id: null,
+          tasks: [],
+        });
+      }
+      if (url.includes("/api/v1/tasks/task-row-1/cancel")) {
+        expect(init?.method).toBe("POST");
+        return jsonResponse({ task_id: "task-row-1", cancelled: true });
+      }
+      if (url === "/api/v1/sources") {
+        sourceListCalls += 1;
+        return jsonResponse({
+          items: [sourceListCalls > 1 ? cancelledSource : activeSource],
+          total: 1,
+          skip: 0,
+          limit: 20,
+        });
+      }
+
+      return Promise.resolve({
+        ok: false,
+        status: 404,
+        statusText: "Not Found",
+        url,
+        text: () => Promise.resolve("Not found"),
+      });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const Page = (await import("@/app/sources/page")).default;
+    render(<Page />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Queued Course Material")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText("Queued Course Material"));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "取消课程生成" })).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: /查看任务/ })).toHaveAttribute("href", "/tasks");
+      expect(screen.getByText("排队生成")).toBeInTheDocument();
+      expect(screen.getByText("规划章节")).toBeInTheDocument();
+      expect(screen.getByText("生成组装")).toBeInTheDocument();
+      expect(screen.getByText("课程就绪")).toBeInTheDocument();
+      expect(screen.getByText("章节组装进度")).toBeInTheDocument();
+      expect(screen.getByText("已完成 1 / 2 个 section。")).toBeInTheDocument();
+      expect(screen.getByText(/#1 输入层/)).toBeInTheDocument();
+      expect(screen.getByText(/#2 隐藏层/)).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "取消课程生成" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/v1/tasks/task-row-1/cancel", {
+        method: "POST",
+      });
+      expect(screen.getAllByText("已取消").length).toBeGreaterThan(0);
+    });
   });
 
   it("renders cancelled materials consistently in the list and drawer", async () => {
@@ -329,7 +491,7 @@ describe("/sources page", () => {
       await Promise.resolve();
     });
 
-    expect(screen.getByText("组装课程")).toBeInTheDocument();
+    expect(screen.getAllByText("组装课程").length).toBeGreaterThan(0);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(3000);

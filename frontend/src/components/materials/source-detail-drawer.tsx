@@ -1,10 +1,14 @@
 "use client";
 
 import Link from "next/link";
+import type { CSSProperties, ReactNode } from "react";
 import { useEffect, useState } from "react";
 import {
+  IcAlert,
   IcArrowRight as ArrowRight,
+  IcCheck,
   IcDoc as FileText,
+  IcLoader,
   IcRegen,
   IcSpark,
   IcTrash,
@@ -12,11 +16,13 @@ import {
   IcClose as X,
 } from "@/components/icons";
 import {
+  cancelTask,
   deleteSource,
   generateCourseForSource,
   getSourceProgress,
   listSourceChunks,
   listSourceCitations,
+  retryTask,
   retrySource,
   type SourceCitationCourse,
   type SourceChunkBrief,
@@ -34,6 +40,27 @@ interface SourceDetailDrawerProps {
   onChanged?: () => void;
 }
 
+type DetailTab = "chunks" | "courses" | "history";
+type LifecycleState = "pending" | "current" | "done" | "error" | "cancelled";
+type SectionAssemblyStatus = "pending" | "running" | "success" | "failure";
+
+interface SectionAssemblyItem {
+  key: string;
+  title: string;
+  status: SectionAssemblyStatus;
+  order_index: number | null;
+  error?: string | null;
+}
+
+interface SectionAssemblyProgress {
+  mode?: string;
+  total: number;
+  completed: number;
+  failed: number;
+  active?: string | null;
+  items: SectionAssemblyItem[];
+}
+
 function canRetryFor(source: SourceResponse): boolean {
   if (source.status === "error" || source.status === "cancelled") return true;
   const proc = source.latest_processing_task;
@@ -48,8 +75,16 @@ function canGenerateCourseFor(source: SourceResponse): boolean {
   if (source.latest_course_id) return false;
   const ct = source.latest_course_task;
   // If a generation is already pending/running, don't offer to start another.
-  if (ct?.status === "pending" || ct?.status === "running") return false;
+  if (isTaskActiveStatus(ct)) return false;
   return true;
+}
+
+function isTaskActiveStatus(task?: SourceTaskSummary | null): boolean {
+  return task?.status === "pending" || task?.status === "running" || task?.status === "progress";
+}
+
+function getTaskActionId(task?: SourceTaskSummary | null): string | null {
+  return task?.id ?? task?.celery_task_id ?? null;
 }
 
 const STAGE_LABELS: Record<string, string> = {
@@ -100,12 +135,40 @@ function getSourceOrigin(source: SourceResponse): { label: string; href?: string
   return { label: source.type };
 }
 
+const COURSE_STAGE_FLOW = [
+  {
+    key: "source_ready",
+    label: "资料处理",
+    description: "完成后进入课程生成",
+  },
+  {
+    key: "pending",
+    label: "排队生成",
+    description: "等待生成任务开始",
+  },
+  {
+    key: "planning",
+    label: "规划章节",
+    description: "确定课程结构",
+  },
+  {
+    key: "assembling_course",
+    label: "生成组装",
+    description: "生成课文并装配章节",
+  },
+  {
+    key: "ready",
+    label: "课程就绪",
+    description: "可以进入学习",
+  },
+] as const;
+
 function TypeIcon({ type }: { type: string }) {
   if (type === "youtube" || type === "bilibili") {
-    return <Play className="w-4 h-4 text-blue-600" />;
+    return <Play className="w-4 h-4" style={{ color: "var(--accent)" }} />;
   }
 
-  return <FileText className="w-4 h-4 text-gray-500" />;
+  return <FileText className="w-4 h-4" style={{ color: "var(--ink-3)" }} />;
 }
 
 function getStageLabel(stage?: string | null): string | null {
@@ -149,20 +212,658 @@ function getTaskStatusLabel(status?: string | null): string | null {
   return TASK_STATUS_LABELS[status] ?? status;
 }
 
-function TaskRow({ task }: { task?: SourceTaskSummary | null }) {
+function isSourceReadyForCourse(source: SourceResponse): boolean {
   return (
-    <div className="rounded-xl border border-gray-200 bg-white p-3">
+    source.status === "ready" ||
+    source.latest_processing_task?.status === "success" ||
+    Boolean(source.latest_course_id)
+  );
+}
+
+function getCourseStageIndex(stage?: string | null): number {
+  switch (stage) {
+    case "pending":
+      return 1;
+    case "planning":
+      return 2;
+    case "assembling_course":
+    case "generating":
+    case "drafting":
+    case "generating_lessons":
+    case "generating_labs":
+      return 3;
+    case "ready":
+      return 4;
+    default:
+      return 3;
+  }
+}
+
+function deriveCourseLifecycle(source: SourceResponse): {
+  steps: { key: string; label: string; description: string; state: LifecycleState }[];
+  percent: number;
+  headline: string;
+  detail: string;
+  tone: "ready" | "processing" | "error" | "neutral";
+} {
+  const courseTask = source.latest_course_task;
+  const sourceReady = isSourceReadyForCourse(source);
+  const hasGeneratedCourse = Boolean(source.latest_course_id);
+  const courseReady =
+    hasGeneratedCourse &&
+    courseTask?.status !== "failure" &&
+    !isTaskActiveStatus(courseTask);
+
+  let currentIndex = sourceReady ? 1 : 0;
+  let currentState: LifecycleState = sourceReady ? "current" : "current";
+  let headline = sourceReady ? "资料就绪，等待生成课程" : "资料还在处理";
+  let detail = sourceReady ? "可以从这里发起课程生成。" : "课程生成会在资料处理完成后继续。";
+  let tone: "ready" | "processing" | "error" | "neutral" = sourceReady ? "neutral" : "processing";
+
+  if (courseTask?.status === "failure") {
+    currentIndex = getCourseStageIndex(courseTask.stage);
+    currentState = "error";
+    headline = "课程生成失败";
+    detail = courseTask.error_summary ?? "可以重试课程生成。";
+    tone = "error";
+  } else if (courseTask?.status === "cancelled") {
+    currentIndex = getCourseStageIndex(courseTask.stage);
+    currentState = "cancelled";
+    headline = "课程生成已取消";
+    detail = "可以重新发起课程生成。";
+    tone = "neutral";
+  } else if (courseTask?.status === "pending") {
+    currentIndex = 1;
+    currentState = "current";
+    headline = "课程正在排队";
+    detail = "任务已进入生成队列。";
+    tone = "processing";
+  } else if (courseTask?.status === "running" || courseTask?.status === "progress") {
+    currentIndex = getCourseStageIndex(courseTask.stage);
+    currentState = "current";
+    headline = getTaskSummary(courseTask);
+    detail = "课程生成正在进行。";
+    tone = "processing";
+  } else if (courseReady) {
+    currentIndex = COURSE_STAGE_FLOW.length - 1;
+    currentState = "done";
+    headline = "课程已就绪";
+    detail =
+      source.course_count > 0
+        ? `这份资料已生成 ${source.course_count} 门课程。`
+        : "课程已经生成，可以进入学习。";
+    tone = "ready";
+  }
+
+  const steps = COURSE_STAGE_FLOW.map((step, index) => {
+    let state: LifecycleState = "pending";
+    if (courseReady) {
+      state = "done";
+    } else if (index < currentIndex) {
+      state = "done";
+    } else if (index === currentIndex) {
+      state = currentState;
+    }
+    return { ...step, state };
+  });
+
+  const basePercent = [12, 30, 52, 76, 100][currentIndex] ?? 12;
+  const percent =
+    currentState === "done"
+      ? 100
+      : currentState === "error" || currentState === "cancelled"
+        ? Math.max(10, basePercent - 6)
+        : basePercent;
+
+  return { steps, percent, headline, detail, tone };
+}
+
+function lifecycleToneStyle(tone: "ready" | "processing" | "error" | "neutral") {
+  if (tone === "ready") {
+    return {
+      background: "var(--sage-soft)",
+      color: "var(--sage-ink)",
+      borderColor: "transparent",
+    };
+  }
+  if (tone === "processing") {
+    return {
+      background: "var(--accent-soft)",
+      color: "var(--accent-ink)",
+      borderColor: "transparent",
+    };
+  }
+  if (tone === "error") {
+    return {
+      background: "var(--error-soft)",
+      color: "var(--error)",
+      borderColor: "transparent",
+    };
+  }
+  return undefined;
+}
+
+function LifecycleIcon({ state }: { state: LifecycleState }) {
+  if (state === "done") return <IcCheck className="w-3.5 h-3.5" />;
+  if (state === "error") return <IcAlert className="w-3.5 h-3.5" />;
+  if (state === "cancelled") return <X className="w-3.5 h-3.5" />;
+  if (state === "current") return <IcLoader className="w-3.5 h-3.5 spin" />;
+  return <span className="h-2 w-2 rounded-full" style={{ background: "var(--ink-4)" }} />;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeSectionStatus(value: unknown): SectionAssemblyStatus {
+  if (value === "running" || value === "success" || value === "failure") return value;
+  return "pending";
+}
+
+function getSectionAssemblyProgress(
+  task?: SourceTaskSummary | null,
+): SectionAssemblyProgress | null {
+  const raw = task?.metadata_?.section_progress;
+  if (!isRecord(raw)) return null;
+  const rawItems = Array.isArray(raw.items) ? raw.items : [];
+  const items = rawItems.filter(isRecord).map((item, index) => ({
+    key: String(item.key ?? index),
+    title: String(item.title ?? `Section ${index + 1}`),
+    status: normalizeSectionStatus(item.status),
+    order_index: typeof item.order_index === "number" ? item.order_index : index,
+    error: typeof item.error === "string" ? item.error : null,
+  }));
+
+  if (items.length === 0) return null;
+
+  const completed =
+    typeof raw.completed === "number"
+      ? raw.completed
+      : items.filter((item) => item.status === "success" || item.status === "failure").length;
+  const failed =
+    typeof raw.failed === "number"
+      ? raw.failed
+      : items.filter((item) => item.status === "failure").length;
+
+  return {
+    mode: typeof raw.mode === "string" ? raw.mode : undefined,
+    total: typeof raw.total === "number" ? raw.total : items.length,
+    completed,
+    failed,
+    active: typeof raw.active === "string" ? raw.active : null,
+    items,
+  };
+}
+
+function TaskRow({
+  task,
+  action,
+}: {
+  task?: SourceTaskSummary | null;
+  action?: ReactNode;
+}) {
+  return (
+    <div
+      className="rounded-xl p-3"
+      style={{ background: "var(--surface-2)", border: "1px solid var(--border)" }}
+    >
       <div className="flex items-center justify-between gap-3">
-        <div>
-          <p className="text-sm font-medium text-gray-900">{getTaskLabel(task)}</p>
-          <p className="mt-1 text-sm text-gray-500">{getTaskSummary(task)}</p>
+        <div className="min-w-0">
+          <p className="text-sm font-medium" style={{ color: "var(--ink)" }}>
+            {getTaskLabel(task)}
+          </p>
+          <p className="mt-1 text-sm" style={{ color: "var(--ink-3)" }}>
+            {getTaskSummary(task)}
+          </p>
         </div>
-        {task?.status && (
-          <span className="rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-600">
-            {getTaskStatusLabel(task.status)}
-          </span>
-        )}
+        <div className="flex shrink-0 items-center gap-2">
+          {task?.status && (
+            <span className="chip">
+              {getTaskStatusLabel(task.status)}
+            </span>
+          )}
+          {action}
+        </div>
       </div>
+    </div>
+  );
+}
+
+function CourseTaskAction({
+  task,
+  courseId,
+  busyAction,
+  onCancel,
+  onRetry,
+}: {
+  task?: SourceTaskSummary | null;
+  courseId: string | null;
+  busyAction: "cancel" | "retry" | null;
+  onCancel: () => void;
+  onRetry: () => void;
+}) {
+  const taskId = getTaskActionId(task);
+  if (isTaskActiveStatus(task)) {
+    return (
+      <button
+        type="button"
+        aria-label="取消课程生成"
+        disabled={!taskId || busyAction !== null}
+        onClick={onCancel}
+        className="btn btn-danger btn-sm"
+      >
+        {busyAction === "cancel" ? (
+          <IcLoader className="w-3.5 h-3.5 spin" />
+        ) : (
+          <X className="w-3.5 h-3.5" />
+        )}
+        {busyAction === "cancel" ? "取消中…" : "取消生成"}
+      </button>
+    );
+  }
+
+  if (task?.status === "failure") {
+    return (
+      <button
+        type="button"
+        disabled={!taskId || busyAction !== null}
+        onClick={onRetry}
+        className="btn btn-outline btn-sm"
+        style={{ color: "var(--warn)", borderColor: "var(--warn)" }}
+      >
+        {busyAction === "retry" ? (
+          <IcLoader className="w-3.5 h-3.5 spin" />
+        ) : (
+          <IcRegen className="w-3.5 h-3.5" />
+        )}
+        {busyAction === "retry" ? "重试中…" : "重试生成"}
+      </button>
+    );
+  }
+
+  if (task?.status === "success" && courseId) {
+    return (
+      <Link
+        href={`/path?courseId=${courseId}`}
+        className="btn btn-outline btn-sm"
+        style={{ color: "var(--accent)" }}
+      >
+        打开课程
+        <ArrowRight className="w-3.5 h-3.5" />
+      </Link>
+    );
+  }
+
+  return null;
+}
+
+function CourseProgressPanel({
+  source,
+  generating,
+  busyAction,
+  onGenerate,
+  onCancel,
+  onRetry,
+}: {
+  source: SourceResponse;
+  generating: boolean;
+  busyAction: "cancel" | "retry" | null;
+  onGenerate: () => void;
+  onCancel: () => void;
+  onRetry: () => void;
+}) {
+  const lifecycle = deriveCourseLifecycle(source);
+
+  return (
+    <section
+      className="rounded-2xl p-4"
+      style={{
+        background: "var(--surface)",
+        border: "1px solid var(--border)",
+        boxShadow: "var(--shadow-sm)",
+      }}
+    >
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="eyebrow">课程状态</span>
+            <span className="chip" style={lifecycleToneStyle(lifecycle.tone)}>
+              {lifecycle.headline}
+            </span>
+          </div>
+          <p className="mt-2 text-sm" style={{ color: "var(--ink-2)" }}>
+            {lifecycle.detail}
+          </p>
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          {canGenerateCourseFor(source) ? (
+            <button
+              type="button"
+              disabled={generating}
+              onClick={onGenerate}
+              className="btn btn-accent"
+            >
+              <IcSpark className="w-4 h-4" />
+              {generating ? "正在派发…" : "生成课程"}
+            </button>
+          ) : source.latest_course_task?.status === "failure" ? (
+            <CourseTaskAction
+              task={source.latest_course_task}
+              courseId={source.latest_course_id}
+              busyAction={busyAction}
+              onCancel={onCancel}
+              onRetry={onRetry}
+            />
+          ) : isTaskActiveStatus(source.latest_course_task) ? (
+            <>
+              <CourseTaskAction
+                task={source.latest_course_task}
+                courseId={source.latest_course_id}
+                busyAction={busyAction}
+                onCancel={onCancel}
+                onRetry={onRetry}
+              />
+              <Link href="/tasks" className="btn btn-outline btn-sm">
+                查看任务
+                <ArrowRight className="w-3.5 h-3.5" />
+              </Link>
+            </>
+          ) : source.latest_course_id ? (
+            <Link href={`/path?courseId=${source.latest_course_id}`} className="btn btn-primary">
+              进入课程
+              <ArrowRight className="w-4 h-4" />
+            </Link>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="mt-4">
+        <div
+          className="h-1.5 overflow-hidden rounded-full"
+          style={{ background: "var(--surface-2)" }}
+        >
+          <div
+            className="h-full rounded-full transition-all"
+            style={{
+              width: `${lifecycle.percent}%`,
+              background:
+                lifecycle.tone === "ready"
+                  ? "var(--sage)"
+                  : lifecycle.tone === "error"
+                    ? "var(--error)"
+                    : "var(--accent)",
+            }}
+          />
+        </div>
+        <div className="mt-4 grid gap-2 sm:grid-cols-5">
+          {lifecycle.steps.map((step) => (
+            <div
+              key={step.key}
+              className="min-w-0 rounded-xl p-3"
+              style={{
+                background:
+                  step.state === "current"
+                    ? "var(--accent-soft)"
+                    : step.state === "done"
+                      ? "var(--sage-soft)"
+                      : step.state === "error"
+                        ? "var(--error-soft)"
+                        : "transparent",
+                border: "1px solid var(--border)",
+                color:
+                  step.state === "done"
+                    ? "var(--sage-ink)"
+                    : step.state === "error"
+                      ? "var(--error)"
+                      : step.state === "current"
+                        ? "var(--accent-ink)"
+                        : "var(--ink-3)",
+              }}
+            >
+              <div className="flex items-center gap-2">
+                <span
+                  className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full"
+                  style={{
+                    background: "var(--surface)",
+                    border: "1px solid var(--border)",
+                  }}
+                >
+                  <LifecycleIcon state={step.state} />
+                </span>
+                <span className="truncate text-xs font-semibold">{step.label}</span>
+              </div>
+              <p className="mt-1 line-clamp-2 text-[11px]">{step.description}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function SectionAssemblyPanel({ task }: { task?: SourceTaskSummary | null }) {
+  const progress = getSectionAssemblyProgress(task);
+  const showFallback =
+    isTaskActiveStatus(task) && (task?.stage === "assembling_course" || task?.stage === "generating_lessons");
+
+  if (!progress && !showFallback) {
+    return null;
+  }
+
+  const percent = progress?.total
+    ? Math.round((progress.completed / Math.max(progress.total, 1)) * 100)
+    : 0;
+  const statusStyle: Record<SectionAssemblyStatus, CSSProperties> = {
+    pending: { background: "var(--surface-2)", color: "var(--ink-3)" },
+    running: { background: "var(--accent-soft)", color: "var(--accent-ink)" },
+    success: { background: "var(--sage-soft)", color: "var(--sage-ink)" },
+    failure: { background: "var(--error-soft)", color: "var(--error)" },
+  };
+  const statusLabel: Record<SectionAssemblyStatus, string> = {
+    pending: "等待",
+    running: "生成中",
+    success: "完成",
+    failure: "失败",
+  };
+
+  return (
+    <section
+      className="rounded-2xl p-4"
+      style={{
+        background: "var(--surface)",
+        border: "1px solid var(--border)",
+      }}
+    >
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h3 className="text-sm font-semibold" style={{ color: "var(--ink)" }}>
+            章节组装进度
+          </h3>
+          <p className="mt-1 text-xs" style={{ color: "var(--ink-3)" }}>
+            {progress
+              ? `已完成 ${progress.completed} / ${progress.total} 个 section${
+                  progress.failed > 0 ? `，失败 ${progress.failed} 个` : ""
+                }。`
+              : "正在组装课程，当前任务还没有上报章节明细。"}
+          </p>
+        </div>
+        {progress ? (
+          <span className="chip chip-mono">
+            {percent}%
+          </span>
+        ) : null}
+      </div>
+
+      {progress ? (
+        <>
+          <div
+            className="mt-3 h-1.5 overflow-hidden rounded-full"
+            style={{ background: "var(--surface-2)" }}
+          >
+            <div
+              className="h-full rounded-full transition-all"
+              style={{
+                width: `${percent}%`,
+                background: progress.failed > 0 ? "var(--warn)" : "var(--accent)",
+              }}
+            />
+          </div>
+          <div className="mt-3 grid max-h-[240px] gap-2 overflow-y-auto pr-1 sm:grid-cols-2">
+            {progress.items.map((item) => (
+              <div
+                key={item.key}
+                className="rounded-xl p-3"
+                style={{
+                  background: item.status === "running" ? "var(--accent-soft)" : "var(--surface-2)",
+                  border: "1px solid var(--border)",
+                }}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p
+                      className="truncate text-xs font-semibold"
+                      style={{ color: "var(--ink)" }}
+                      title={item.title}
+                    >
+                      #{(item.order_index ?? 0) + 1} {item.title}
+                    </p>
+                    {item.error ? (
+                      <p className="mt-1 line-clamp-2 text-[11px]" style={{ color: "var(--error)" }}>
+                        {item.error}
+                      </p>
+                    ) : null}
+                  </div>
+                  <span
+                    className="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium"
+                    style={statusStyle[item.status]}
+                  >
+                    {statusLabel[item.status]}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      ) : null}
+    </section>
+  );
+}
+
+function SourceFactsPanel({ source }: { source: SourceResponse }) {
+  const sourceOrigin = getSourceOrigin(source);
+
+  return (
+    <section
+      className="rounded-2xl p-4"
+      style={{
+        background: "var(--surface)",
+        border: "1px solid var(--border)",
+      }}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold" style={{ color: "var(--ink)" }}>
+          资料概览
+        </h3>
+        <span className="chip chip-mono">{source.type}</span>
+      </div>
+      <dl className="mt-3 space-y-3">
+        <InfoRow label="资料状态" value={getStageLabel(source.status) ?? source.status} />
+        <InfoRow label="课程数量" value={`${source.course_count}`} />
+        <InfoRow
+          label="更新时间"
+          value={new Date(source.updated_at).toLocaleString("zh-CN")}
+        />
+        <InfoRow label="资料来源" value={sourceOrigin.label} href={sourceOrigin.href} />
+      </dl>
+    </section>
+  );
+}
+
+function TaskSnapshotPanel({
+  source,
+}: {
+  source: SourceResponse;
+}) {
+  return (
+    <section
+      className="rounded-2xl p-4"
+      style={{
+        background: "var(--surface)",
+        border: "1px solid var(--border)",
+      }}
+    >
+      <h3 className="text-sm font-semibold" style={{ color: "var(--ink)" }}>
+        任务摘要
+      </h3>
+      <div className="mt-3 space-y-2">
+        <TaskRow task={source.latest_processing_task} />
+        <TaskRow task={source.latest_course_task} />
+      </div>
+    </section>
+  );
+}
+
+function InfoRow({
+  label,
+  value,
+  href,
+}: {
+  label: string;
+  value: string;
+  href?: string;
+}) {
+  return (
+    <div className="grid grid-cols-[72px_minmax(0,1fr)] items-start gap-3 text-sm">
+      <dt style={{ color: "var(--ink-3)" }}>{label}</dt>
+      <dd className="min-w-0 text-right font-medium" style={{ color: "var(--ink)" }}>
+        {href ? (
+          <a
+            href={href}
+            target="_blank"
+            rel="noreferrer"
+            className="block truncate hover:underline"
+            style={{ color: "var(--accent)" }}
+          >
+            {value}
+          </a>
+        ) : (
+          <span className="block truncate">{value}</span>
+        )}
+      </dd>
+    </div>
+  );
+}
+
+function DetailTabs({
+  active,
+  onChange,
+}: {
+  active: DetailTab;
+  onChange: (tab: DetailTab) => void;
+}) {
+  const tabs: { key: DetailTab; label: string }[] = [
+    { key: "chunks", label: "切片" },
+    { key: "courses", label: "课程" },
+    { key: "history", label: "历史" },
+  ];
+
+  return (
+    <div className="flex flex-wrap gap-2">
+      {tabs.map((tab) => (
+        <button
+          key={tab.key}
+          type="button"
+          onClick={() => onChange(tab.key)}
+          className="btn btn-sm"
+          style={{
+            background: active === tab.key ? "var(--ink)" : "var(--surface)",
+            color: active === tab.key ? "var(--surface)" : "var(--ink-2)",
+            borderColor: active === tab.key ? "var(--ink)" : "var(--border)",
+          }}
+        >
+          {tab.label}
+        </button>
+      ))}
     </div>
   );
 }
@@ -178,11 +879,15 @@ export default function SourceDetailDrawer({
   const [deleting, setDeleting] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [courseTaskAction, setCourseTaskAction] = useState<"cancel" | "retry" | null>(null);
+  const [detailTab, setDetailTab] = useState<DetailTab>("chunks");
   const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) {
       setConfirmingDelete(false);
+      setCourseTaskAction(null);
+      setDetailTab("chunks");
       setActionError(null);
     }
   }, [open]);
@@ -204,7 +909,46 @@ export default function SourceDetailDrawer({
   }
 
   const presentation = deriveMaterialPresentation(source);
-  const sourceOrigin = getSourceOrigin(source);
+  const handleCourseTaskAction = async (action: "cancel" | "retry") => {
+    const taskId = getTaskActionId(source.latest_course_task);
+    if (!taskId) {
+      setActionError("没有找到课程任务记录，请刷新后再试。");
+      return;
+    }
+
+    setCourseTaskAction(action);
+    setActionError(null);
+    try {
+      if (action === "cancel") {
+        await cancelTask(taskId);
+      } else {
+        await retryTask(taskId);
+      }
+      onChanged?.();
+    } catch (err) {
+      setActionError(
+        err instanceof Error
+          ? err.message
+          : action === "cancel"
+            ? "取消课程生成失败，请稍后再试"
+            : "重试课程生成失败，请稍后再试",
+      );
+    } finally {
+      setCourseTaskAction(null);
+    }
+  };
+  const handleGenerateCourse = async () => {
+    setGenerating(true);
+    setActionError(null);
+    try {
+      await generateCourseForSource(source.id);
+      onChanged?.();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "课程生成失败，请稍后重试");
+    } finally {
+      setGenerating(false);
+    }
+  };
 
   if (!open) {
     // Mount nothing when closed so we don't run the lazy data fetches in
@@ -218,7 +962,7 @@ export default function SourceDetailDrawer({
       role="dialog"
       aria-modal="true"
       aria-label="资料详情"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6"
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6"
       onClick={(e) => {
         // Click on the backdrop (not the dialog itself) closes.
         if (e.target === e.currentTarget) onClose();
@@ -232,7 +976,7 @@ export default function SourceDetailDrawer({
       }}
     >
       <div
-        className="relative flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl shadow-2xl"
+        className="relative flex max-h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl shadow-2xl"
         style={{
           background: "var(--surface-alt)",
           border: "1px solid var(--border)",
@@ -250,19 +994,26 @@ export default function SourceDetailDrawer({
             extra `h-full` here would resolve against an auto-height
             parent and collapse, breaking the body's overflow-y-auto. */}
         <>
-          <div className="flex items-start justify-between border-b border-gray-200 bg-white px-5 py-4">
+          <div
+            className="flex items-start justify-between gap-4 border-b px-5 py-4"
+            style={{ background: "var(--surface)", borderColor: "var(--border)" }}
+          >
             <div className="min-w-0">
-              <div className="flex items-center gap-2 text-sm text-gray-500">
+              <div className="flex flex-wrap items-center gap-2 text-sm" style={{ color: "var(--ink-3)" }}>
                 <TypeIcon type={source.type} />
                 <span>{source.type}</span>
+                <span className="chip" style={lifecycleToneStyle(deriveCourseLifecycle(source).tone)}>
+                  {presentation.badge}
+                </span>
               </div>
-              <h2 className="mt-2 text-lg font-semibold text-gray-900">
+              <h2 className="mt-2 line-clamp-2 text-lg font-semibold" style={{ color: "var(--ink)" }}>
                 {source.title || source.url || "未命名资料"}
               </h2>
             </div>
             <button
               aria-label="关闭"
-              className="rounded-lg p-2 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600"
+              className="rounded-lg p-2 transition"
+              style={{ color: "var(--ink-3)" }}
               onClick={onClose}
               type="button"
             >
@@ -270,150 +1021,91 @@ export default function SourceDetailDrawer({
             </button>
           </div>
 
-          <div className="flex-1 min-h-0 space-y-6 overflow-y-auto p-5">
-            <section>
-              <h3 className="text-sm font-semibold text-gray-900">当前状态</h3>
-              <div className="mt-3 rounded-2xl border border-blue-100 bg-blue-50 p-4">
-                <p className="text-sm font-medium text-blue-900">{presentation.badge}</p>
-                <p className="mt-1 text-sm text-blue-700">{presentation.supportingText}</p>
+          <div className="flex-1 min-h-0 overflow-y-auto p-5">
+            <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
+              <div className="min-w-0 space-y-5">
+                <CourseProgressPanel
+                  source={source}
+                  generating={generating}
+                  busyAction={courseTaskAction}
+                  onGenerate={() => void handleGenerateCourse()}
+                  onCancel={() => void handleCourseTaskAction("cancel")}
+                  onRetry={() => void handleCourseTaskAction("retry")}
+                />
+                <SectionAssemblyPanel task={source.latest_course_task} />
+
+                <section
+                  className="rounded-2xl p-4"
+                  style={{
+                    background: "var(--surface)",
+                    border: "1px solid var(--border)",
+                  }}
+                >
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <h3 className="text-sm font-semibold" style={{ color: "var(--ink)" }}>
+                        资料内容
+                      </h3>
+                      <p className="mt-1 text-xs" style={{ color: "var(--ink-3)" }}>
+                        切片、已生成课程和任务历史集中在这里查看。
+                      </p>
+                    </div>
+                    <DetailTabs active={detailTab} onChange={setDetailTab} />
+                  </div>
+                  <div
+                    className="mt-4 max-h-[330px] min-h-[220px] overflow-y-auto rounded-xl p-3"
+                    style={{
+                      background: "var(--surface-2)",
+                      border: "1px solid var(--border)",
+                    }}
+                  >
+                    {detailTab === "chunks" && source.id ? (
+                      <ChunksSection sourceId={source.id} />
+                    ) : null}
+                    {detailTab === "courses" && source.id ? (
+                      <CitationsSection sourceId={source.id} />
+                    ) : null}
+                    {detailTab === "history" && source.id ? (
+                      <HistorySection sourceId={source.id} />
+                    ) : null}
+                  </div>
+                </section>
               </div>
-            </section>
 
-            <section>
-              <h3 className="text-sm font-semibold text-gray-900">关键任务</h3>
-              <div className="mt-3 space-y-3">
-                <TaskRow task={source.latest_processing_task} />
-                <TaskRow task={source.latest_course_task} />
-              </div>
-            </section>
-
-            <section>
-              <h3 className="text-sm font-semibold text-gray-900">资料信息</h3>
-              <dl className="mt-3 space-y-3 rounded-2xl border border-gray-200 bg-white p-4">
-                <div className="flex items-center justify-between gap-4">
-                  <dt className="text-sm text-gray-500">资料状态</dt>
-                  <dd className="text-sm font-medium text-gray-900">
-                    {getStageLabel(source.status) ?? source.status}
-                  </dd>
-                </div>
-                <div className="flex items-center justify-between gap-4">
-                  <dt className="text-sm text-gray-500">资料来源</dt>
-                  <dd className="min-w-0 text-right text-sm font-medium text-gray-900">
-                    {sourceOrigin.href ? (
-                      <a
-                        href={sourceOrigin.href}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-block max-w-[360px] truncate text-blue-600 hover:underline"
-                        title={sourceOrigin.label}
-                      >
-                        {sourceOrigin.label}
-                      </a>
-                    ) : (
-                      <span
-                        className="inline-block max-w-[360px] truncate"
-                        title={sourceOrigin.label}
-                      >
-                        {sourceOrigin.label}
-                      </span>
-                    )}
-                  </dd>
-                </div>
-                <div className="flex items-center justify-between gap-4">
-                  <dt className="text-sm text-gray-500">课程数量</dt>
-                  <dd className="text-sm font-medium text-gray-900">{source.course_count}</dd>
-                </div>
-                <div className="flex items-center justify-between gap-4">
-                  <dt className="text-sm text-gray-500">更新时间</dt>
-                  <dd className="text-sm font-medium text-gray-900">
-                    {new Date(source.updated_at).toLocaleString("zh-CN")}
-                  </dd>
-                </div>
-              </dl>
-            </section>
-
-            <SectionPlannerSection metadata={source.metadata_} />
-
-            {/* PRD §11 Phase E — lazy-loaded chunks / citations / history. */}
-            {open && source.id ? <ChunksSection sourceId={source.id} /> : null}
-            {open && source.id ? <CitationsSection sourceId={source.id} /> : null}
-            {open && source.id ? <HistorySection sourceId={source.id} /> : null}
+              <aside className="min-w-0 space-y-4">
+                <SourceFactsPanel source={source} />
+                <TaskSnapshotPanel source={source} />
+                <SectionPlannerSection metadata={source.metadata_} />
+              </aside>
+            </div>
           </div>
 
-          <div className="border-t border-gray-200 bg-white p-5 space-y-3">
+          <div
+            className="space-y-3 border-t p-4"
+            style={{ background: "var(--surface)", borderColor: "var(--border)" }}
+          >
             {actionError ? (
-              <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+              <p
+                className="rounded-md border px-3 py-2 text-xs"
+                style={{
+                  background: "var(--error-soft)",
+                  borderColor: "var(--error)",
+                  color: "var(--error)",
+                }}
+              >
                 {actionError}
               </p>
             ) : null}
-            {presentation.primaryAction === "enter-course" && source.latest_course_id ? (
-              <Link
-                className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-blue-700"
-                href={`/path?courseId=${source.latest_course_id}`}
-              >
-                进入课程
-                <ArrowRight className="w-4 h-4" />
-              </Link>
-            ) : canGenerateCourseFor(source) ? (
-              <button
-                type="button"
-                disabled={generating}
-                onClick={async () => {
-                  if (!source) return;
-                  setGenerating(true);
-                  setActionError(null);
-                  try {
-                    await generateCourseForSource(source.id);
-                    onChanged?.();
-                    onClose();
-                  } catch (err) {
-                    setActionError(
-                      err instanceof Error ? err.message : "课程生成失败，请稍后重试",
-                    );
-                  } finally {
-                    setGenerating(false);
-                  }
-                }}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-60"
-              >
-                <IcSpark className="w-4 h-4" />
-                {generating ? "正在派发…" : "生成课程"}
-              </button>
-            ) : canRetryFor(source) ? (
-              <button
-                type="button"
-                disabled={retrying}
-                onClick={async () => {
-                  if (!source) return;
-                  setRetrying(true);
-                  setActionError(null);
-                  try {
-                    await retrySource(source.id);
-                    onChanged?.();
-                    onClose();
-                  } catch (err) {
-                    setActionError(
-                      err instanceof Error ? err.message : "重试失败，请稍后再试",
-                    );
-                  } finally {
-                    setRetrying(false);
-                  }
-                }}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-blue-200 bg-white px-4 py-2.5 text-sm font-medium text-blue-700 transition hover:bg-blue-50 disabled:opacity-60"
-              >
-                <IcRegen className="w-4 h-4" />
-                {retrying ? "正在重试…" : "重试处理"}
-              </button>
-            ) : (
-              <p className="text-sm text-gray-500">
-                {presentation.category === "error"
-                  ? "当前没有可进入的课程，请先查看失败原因。"
-                  : "课程生成完成后，就可以从这里直接进入课程。"}
-              </p>
-            )}
             {confirmingDelete ? (
-              <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm">
-                <p className="text-red-700">
+              <div
+                className="rounded-lg border p-3 text-sm"
+                style={{
+                  background: "var(--error-soft)",
+                  borderColor: "var(--error)",
+                  color: "var(--error)",
+                }}
+              >
+                <p>
                   确认删除？资料会从列表中移除，
                   {presentation.isActive ? "进行中的后台任务会被停止。" : "已生成的内容仍会保留在数据库。"}
                 </p>
@@ -422,7 +1114,7 @@ export default function SourceDetailDrawer({
                     type="button"
                     onClick={() => setConfirmingDelete(false)}
                     disabled={deleting}
-                    className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                    className="btn btn-outline btn-sm"
                   >
                     取消
                   </button>
@@ -441,21 +1133,50 @@ export default function SourceDetailDrawer({
                       }
                     }}
                     disabled={deleting}
-                    className="rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-red-700 disabled:opacity-50"
+                    className="btn btn-danger btn-sm"
                   >
                     {deleting ? "删除中…" : "确认删除"}
                   </button>
                 </div>
               </div>
             ) : (
-              <button
-                type="button"
-                onClick={() => setConfirmingDelete(true)}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-red-200 bg-white px-4 py-2 text-sm font-medium text-red-600 transition hover:bg-red-50"
-              >
-                <IcTrash className="w-4 h-4" />
-                删除资料
-              </button>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-sm" style={{ color: "var(--ink-3)" }}>
+                  课程进度会随任务状态自动更新。
+                </p>
+                <div className="flex flex-wrap justify-end gap-2">
+                  {canRetryFor(source) ? (
+                    <button
+                      type="button"
+                      disabled={retrying}
+                      onClick={async () => {
+                        setRetrying(true);
+                        setActionError(null);
+                        try {
+                          await retrySource(source.id);
+                          onChanged?.();
+                        } catch (err) {
+                          setActionError(err instanceof Error ? err.message : "重试失败，请稍后再试");
+                        } finally {
+                          setRetrying(false);
+                        }
+                      }}
+                      className="btn btn-outline"
+                    >
+                      <IcRegen className="w-4 h-4" />
+                      {retrying ? "正在重试…" : "重试处理"}
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => setConfirmingDelete(true)}
+                    className="btn btn-danger"
+                  >
+                    <IcTrash className="w-4 h-4" />
+                    删除资料
+                  </button>
+                </div>
+              </div>
             )}
           </div>
         </>
@@ -472,13 +1193,12 @@ function ChunksSection({ sourceId }: { sourceId: string }) {
     items: SourceChunkBrief[];
     total: number;
   } | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [skip, setSkip] = useState(0);
   const PAGE = 5;
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
     listSourceChunks(sourceId, { skip: 0, limit: PAGE })
       .then((res) => {
         if (cancelled) return;
@@ -508,30 +1228,44 @@ function ChunksSection({ sourceId }: { sourceId: string }) {
 
   return (
     <section>
-      <h3 className="text-sm font-semibold text-gray-900">
+      <h3 className="text-sm font-semibold" style={{ color: "var(--ink)" }}>
         切片预览
-        {data ? <span className="ml-2 text-xs text-gray-400">{data.total}</span> : null}
+        {data ? (
+          <span className="ml-2 text-xs" style={{ color: "var(--ink-4)" }}>
+            {data.total}
+          </span>
+        ) : null}
       </h3>
       <div className="mt-3 space-y-2">
+        {!data && loading ? (
+          <p className="text-xs" style={{ color: "var(--ink-3)" }}>加载切片中…</p>
+        ) : null}
         {data?.items.length === 0 && !loading ? (
-          <p className="text-xs text-gray-500">暂无切片</p>
+          <p className="text-xs" style={{ color: "var(--ink-3)" }}>暂无切片</p>
         ) : null}
         {data?.items.map((c, idx) => (
           <div
             key={c.id}
-            className="rounded-xl border border-gray-200 bg-white p-3 text-xs"
+            className="rounded-xl p-3 text-xs"
+            style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
           >
-            <div className="mb-1 flex items-center justify-between text-[10px] text-gray-400">
+            <div
+              className="mb-1 flex items-center justify-between text-[10px]"
+              style={{ color: "var(--ink-4)" }}
+            >
               <span className="mono">#{idx + 1}</span>
               <span className="mono">{c.length} chars</span>
             </div>
-            <p className="line-clamp-3 text-gray-700">{c.text}</p>
+            <p className="line-clamp-3" style={{ color: "var(--ink-2)" }}>
+              {c.text}
+            </p>
           </div>
         ))}
         {data && skip < data.total ? (
           <button
             type="button"
-            className="text-xs text-blue-600 hover:underline disabled:opacity-50"
+            className="text-xs hover:underline disabled:opacity-50"
+            style={{ color: "var(--accent)" }}
             disabled={loading}
             onClick={loadMore}
           >
@@ -566,23 +1300,35 @@ function CitationsSection({ sourceId }: { sourceId: string }) {
       cancelled = true;
     };
   }, [sourceId]);
-  if (!data) return null;
-  if (data.items.length === 0) return null;
+  if (!data) {
+    return <p className="text-xs" style={{ color: "var(--ink-3)" }}>加载课程中…</p>;
+  }
+  if (data.items.length === 0) {
+    return <p className="text-xs" style={{ color: "var(--ink-3)" }}>暂无生成课程</p>;
+  }
   return (
     <section>
-      <h3 className="text-sm font-semibold text-gray-900">
+      <h3 className="text-sm font-semibold" style={{ color: "var(--ink)" }}>
         该资料生成的课程
-        <span className="ml-2 text-xs text-gray-400">{data.total}</span>
+        <span className="ml-2 text-xs" style={{ color: "var(--ink-4)" }}>
+          {data.total}
+        </span>
       </h3>
       <ul className="mt-3 space-y-2">
         {data.items.map((course) => (
           <li
             key={course.course_id}
-            className="rounded-xl border border-gray-200 bg-white p-3"
+            className="rounded-xl p-3"
             style={
               course.is_latest
-                ? { borderColor: "var(--accent)", background: "var(--accent-soft)" }
-                : undefined
+                ? {
+                    border: "1px solid var(--accent)",
+                    background: "var(--accent-soft)",
+                  }
+                : {
+                    border: "1px solid var(--border)",
+                    background: "var(--surface)",
+                  }
             }
           >
             <div className="flex items-center gap-2">
@@ -611,7 +1357,7 @@ function CitationsSection({ sourceId }: { sourceId: string }) {
                     flexShrink: 0,
                   }}
                 >
-                  ★ latest
+                  最新
                 </span>
               ) : null}
               <span
@@ -633,8 +1379,9 @@ function CitationsSection({ sourceId }: { sourceId: string }) {
               <div className="min-w-0 flex-1">
                 <Link
                   href={`/learn?courseId=${course.course_id}`}
-                  className="text-sm font-medium text-blue-600 hover:underline"
+                  className="text-sm font-medium hover:underline"
                   style={{
+                    color: "var(--accent)",
                     display: "block",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
@@ -661,7 +1408,7 @@ function CitationsSection({ sourceId }: { sourceId: string }) {
               </div>
               <Link
                 href={`/learn?courseId=${course.course_id}`}
-                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium hover:bg-white/60"
+                className="btn btn-outline btn-sm"
                 style={{ color: "var(--ink-2)", flexShrink: 0 }}
               >
                 打开
@@ -726,41 +1473,55 @@ function HistorySection({ sourceId }: { sourceId: string }) {
       cancelled = true;
     };
   }, [sourceId]);
-  if (!data || data.tasks.length === 0) return null;
+  if (!data) {
+    return <p className="text-xs" style={{ color: "var(--ink-3)" }}>加载历史中…</p>;
+  }
+  if (data.tasks.length === 0) {
+    return <p className="text-xs" style={{ color: "var(--ink-3)" }}>暂无任务历史</p>;
+  }
   return (
     <section>
-      <h3 className="text-sm font-semibold text-gray-900">
-        历史 <span className="ml-2 text-xs text-gray-400">{data.tasks.length}</span>
+      <h3 className="text-sm font-semibold" style={{ color: "var(--ink)" }}>
+        历史{" "}
+        <span className="ml-2 text-xs" style={{ color: "var(--ink-4)" }}>
+          {data.tasks.length}
+        </span>
       </h3>
       <ul className="mt-3 space-y-2">
         {data.tasks.map((t) => (
           <li
             key={`${t.task_type}-${t.celery_task_id ?? t.created_at}`}
-            className="rounded-xl border border-gray-200 bg-white p-3 text-xs"
+            className="rounded-xl p-3 text-xs"
+            style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
           >
             <div className="flex items-center justify-between text-[11px]">
-              <span className="font-medium text-gray-700">{t.task_type}</span>
+              <span className="font-medium" style={{ color: "var(--ink-2)" }}>
+                {t.task_type}
+              </span>
               <span
-                className={
-                  t.status === "success"
-                    ? "text-emerald-600"
-                    : t.status === "failure"
-                      ? "text-red-600"
-                      : "text-gray-500"
-                }
+                style={{
+                  color:
+                    t.status === "success"
+                      ? "var(--sage)"
+                      : t.status === "failure"
+                        ? "var(--error)"
+                        : "var(--ink-3)",
+                }}
               >
                 {getTaskStatusLabel(t.status)}
               </span>
             </div>
             {t.stage ? (
-              <p className="mt-1 text-[11px] text-gray-500 mono">
+              <p className="mt-1 text-[11px] mono" style={{ color: "var(--ink-3)" }}>
                 {getStageLabel(t.stage) ?? t.stage}
               </p>
             ) : null}
             {t.error_summary ? (
-              <p className="mt-1 text-[11px] text-red-500">{t.error_summary}</p>
+              <p className="mt-1 text-[11px]" style={{ color: "var(--error)" }}>
+                {t.error_summary}
+              </p>
             ) : null}
-            <p className="mt-1 text-[10px] text-gray-400 mono">
+            <p className="mt-1 text-[10px] mono" style={{ color: "var(--ink-4)" }}>
               {new Date(t.created_at).toLocaleString("zh-CN")}
             </p>
           </li>
@@ -790,58 +1551,67 @@ function SectionPlannerSection({
     embedding_only: "向量兜底（Layer 3）",
     fallback: "逐 chunk 兜底（Layer 4）",
   };
-  const tierBadgeClass =
+  const tierStyle =
     stats.tier_used === "fallback"
-      ? "bg-amber-100 text-amber-800"
+      ? { background: "var(--warn-soft)", color: "var(--warn)" }
       : stats.tier_used === "embedding_only"
-        ? "bg-purple-100 text-purple-800"
-        : "bg-blue-100 text-blue-800";
+        ? { background: "var(--accent-soft)", color: "var(--accent-ink)" }
+        : { background: "var(--surface-2)", color: "var(--ink-2)" };
 
   const formatMs = (ms: number) =>
     ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${ms} ms`;
 
   return (
-    <section>
-      <h3 className="text-sm font-semibold text-gray-900">章节规划</h3>
-      <div className="mt-3 rounded-2xl border border-gray-200 bg-white p-4 space-y-3">
+    <section
+      className="rounded-2xl p-4"
+      style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
+    >
+      <h3 className="text-sm font-semibold" style={{ color: "var(--ink)" }}>
+        章节规划
+      </h3>
+      <div className="mt-3 space-y-3">
         <div className="flex items-center justify-between gap-4">
-          <span className="text-sm text-gray-500">分桶策略</span>
+          <span className="text-sm" style={{ color: "var(--ink-3)" }}>
+            分桶策略
+          </span>
           <span
-            className={`rounded-full px-2 py-0.5 text-xs font-medium ${tierBadgeClass}`}
+            className="rounded-full px-2 py-0.5 text-xs font-medium"
+            style={tierStyle}
           >
             {tierLabel[stats.tier_used] ?? stats.tier_used}
           </span>
         </div>
         {stats.short_circuit ? (
-          <p className="text-xs text-gray-500">
+          <p className="text-xs" style={{ color: "var(--ink-3)" }}>
             内容较短，整源归为一个 bucket，跳过 LLM 分析。
           </p>
         ) : null}
         <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
           <div className="flex items-center justify-between">
-            <dt className="text-gray-500">桶数</dt>
-            <dd className="font-medium text-gray-900">{stats.bucket_count}</dd>
+            <dt style={{ color: "var(--ink-3)" }}>桶数</dt>
+            <dd className="font-medium" style={{ color: "var(--ink)" }}>
+              {stats.bucket_count}
+            </dd>
           </div>
           <div className="flex items-center justify-between">
-            <dt className="text-gray-500">每桶平均 chunk</dt>
-            <dd className="font-medium text-gray-900">
+            <dt style={{ color: "var(--ink-3)" }}>每桶平均 chunk</dt>
+            <dd className="font-medium" style={{ color: "var(--ink)" }}>
               {stats.avg_chunks_per_bucket}
             </dd>
           </div>
           <div className="flex items-center justify-between">
-            <dt className="text-gray-500">最小 / 最大</dt>
-            <dd className="font-medium text-gray-900">
+            <dt style={{ color: "var(--ink-3)" }}>最小 / 最大</dt>
+            <dd className="font-medium" style={{ color: "var(--ink)" }}>
               {stats.min_chunks_per_bucket} / {stats.max_chunks_per_bucket}
             </dd>
           </div>
           <div className="flex items-center justify-between">
-            <dt className="text-gray-500">命名唯一度</dt>
+            <dt style={{ color: "var(--ink-3)" }}>命名唯一度</dt>
             <dd
-              className={`font-medium ${
-                stats.topic_uniqueness < 0.7
-                  ? "text-amber-600"
-                  : "text-gray-900"
-              }`}
+              className="font-medium"
+              style={{
+                color: stats.topic_uniqueness < 0.7 ? "var(--warn)" : "var(--ink)",
+              }}
               title={
                 stats.topic_uniqueness < 0.7
                   ? "topic_uniqueness < 0.7 — planner 给出了大量重复名字，可能分桶失效"
@@ -852,23 +1622,27 @@ function SectionPlannerSection({
             </dd>
           </div>
           <div className="flex items-center justify-between">
-            <dt className="text-gray-500">耗时</dt>
-            <dd className="font-medium text-gray-900">
+            <dt style={{ color: "var(--ink-3)" }}>耗时</dt>
+            <dd className="font-medium" style={{ color: "var(--ink)" }}>
               {formatMs(stats.planning_duration_ms)}
             </dd>
           </div>
           <div className="flex items-center justify-between">
-            <dt className="text-gray-500">Token in / out</dt>
-            <dd className="font-medium text-gray-900 mono text-xs">
+            <dt style={{ color: "var(--ink-3)" }}>Token in / out</dt>
+            <dd className="font-medium mono text-xs" style={{ color: "var(--ink)" }}>
               {stats.llm_input_tokens} / {stats.llm_output_tokens}
             </dd>
           </div>
         </dl>
-        <div className="flex items-center justify-between text-[11px] text-gray-400 mono">
+        <div
+          className="flex items-center justify-between text-[11px] mono"
+          style={{ color: "var(--ink-4)" }}
+        >
           <span>planner: {stats.planner_version}</span>
           {stats.error ? (
             <span
-              className="truncate text-amber-600"
+              className="truncate"
+              style={{ color: "var(--warn)" }}
               title={stats.error}
             >
               error: {stats.error}

@@ -17,11 +17,13 @@ class SourceCreate(BaseModel):
 class SourceTaskSummary(BaseModel):
     """Minimal task summary embedded on source responses."""
 
+    id: uuid.UUID
     task_type: str
     status: str
     stage: str | None = None
     error_summary: str | None = None
     celery_task_id: str | None = None
+    metadata_: dict[str, Any] = Field(default_factory=dict, alias="metadata_")
 
     model_config = {"from_attributes": True}
 
@@ -85,6 +87,7 @@ class SourceTaskProgress(BaseModel):
     stage: str | None = None
     error_summary: str | None = None
     celery_task_id: str | None = None
+    metadata_: dict[str, Any] = Field(default_factory=dict, alias="metadata_")
     cancel_requested: bool = False
     course_id: uuid.UUID | None = None
     updated_at: datetime

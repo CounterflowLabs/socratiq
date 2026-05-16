@@ -14,6 +14,7 @@ from app.services.source_tasks import (
     finish_source_processing_and_enqueue_course,
     recover_course_generation_dispatch_failure,
 )
+from app.services.course_generator import CourseGenerator
 from app.worker.tasks import course_generation
 
 
@@ -103,6 +104,103 @@ def test_dispatch_course_generation_uses_preallocated_task_id(monkeypatch):
         "kwargs": {"user_id": "user-1"},
         "task_id": "course-1",
     }
+
+
+@pytest.mark.asyncio
+async def test_course_generator_reports_section_progress(
+    monkeypatch, db_session, demo_user
+):
+    source = Source(
+        type="bilibili",
+        url="https://www.bilibili.com/video/BV-progress",
+        title="Progress Source",
+        status="ready",
+        metadata_={},
+        created_by=demo_user.id,
+    )
+    db_session.add(source)
+    await db_session.flush()
+    db_session.add_all(
+        [
+            ContentChunk(
+                source_id=source.id,
+                text="input layer transcript",
+                metadata_={"topic": "输入层"},
+            ),
+            ContentChunk(
+                source_id=source.id,
+                text="hidden layer transcript",
+                metadata_={"topic": "隐藏层"},
+            ),
+        ]
+    )
+    await db_session.flush()
+
+    class FakeLesson:
+        def __init__(self, title: str):
+            self._title = title
+
+        def model_dump(self):
+            return {
+                "title": self._title,
+                "summary": "summary",
+                "sections": [],
+                "blocks": [],
+            }
+
+    class FakeLessonGenerator:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def generate(self, *, video_title, **_kwargs):
+            return FakeLesson(str(video_title))
+
+    class FakeLabGenerator:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+    from app.services import course_generator as course_generator_module
+
+    monkeypatch.setattr(
+        course_generator_module,
+        "LessonGenerator",
+        FakeLessonGenerator,
+    )
+    monkeypatch.setattr(course_generator_module, "LabGenerator", FakeLabGenerator)
+
+    provider = SimpleNamespace(
+        chat=AsyncMock(
+            return_value=SimpleNamespace(
+                content=[SimpleNamespace(type="text", text="description")]
+            )
+        ),
+        model_id=lambda: "test-model",
+    )
+    router = SimpleNamespace(get_provider=AsyncMock(return_value=provider))
+    updates: list[tuple[UUID, dict]] = []
+
+    async def report_progress(source_id, progress):
+        updates.append((source_id, progress))
+
+    await CourseGenerator(router).generate(
+        db=db_session,
+        source_ids=[source.id],
+        target_language="zh-CN",
+        user_id=demo_user.id,
+        skip_ready_check=True,
+        section_progress_callback=report_progress,
+    )
+
+    assert updates
+    assert all(source_id == source.id for source_id, _ in updates)
+    final_progress = updates[-1][1]
+    assert final_progress["total"] == 2
+    assert final_progress["completed"] == 2
+    assert [item["status"] for item in final_progress["items"]] == [
+        "success",
+        "success",
+    ]
+    assert {item["title"] for item in final_progress["items"]} == {"输入层", "隐藏层"}
 
 
 def test_generate_course_task_ignores_legacy_goal_kwarg(monkeypatch):

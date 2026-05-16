@@ -138,6 +138,18 @@ async def _generate_multi_async(
                     f"course_generation cancelled for sources {source_ids}"
                 )
 
+    async def _report_section_progress(source_id: UUID, progress: dict[str, Any]) -> None:
+        async with resources.session_factory() as progress_db:
+            await mark_source_task(
+                progress_db,
+                source_id=source_id,
+                task_type="course_generation",
+                status="running",
+                stage="assembling_course",
+                metadata_={"section_progress": progress},
+            )
+            await progress_db.commit()
+
     try:
         async with resources.session_factory() as db:
             sources = (
@@ -190,6 +202,7 @@ async def _generate_multi_async(
                 user_directive=directive,
                 skip_ready_check=True,
                 cancel_check=_check_cancel,
+                section_progress_callback=_report_section_progress,
             )
 
             for sid in sids:

@@ -653,6 +653,7 @@ async def get_course_task_progress(
             stage=t.stage,
             error_summary=t.error_summary,
             celery_task_id=t.celery_task_id,
+            metadata_=t.metadata_ or {},
             cancel_requested=t.cancel_requested,
             course_id=(
                 uuid.UUID(t.metadata_["course_id"])

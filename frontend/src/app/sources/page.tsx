@@ -25,6 +25,7 @@ import SourceDetailDrawer from "@/components/materials/source-detail-drawer";
 import {
   deriveMaterialEmbed,
   deriveMaterialPresentation,
+  isCourseTaskActive,
   isMaterialActive,
   matchesMaterialStatusFilter,
   type MaterialStatusFilter,
@@ -331,6 +332,7 @@ export default function SourcesPage() {
           {filteredSources.map((source, index) => {
             const presentation = deriveMaterialPresentation(source);
             const displayEmbed = deriveMaterialEmbed(source);
+            const courseTaskActive = isCourseTaskActive(source);
             const isLast = index === filteredSources.length - 1;
             const meta = source.metadata_ as Record<string, unknown> | undefined;
             const lengthText =
@@ -427,9 +429,26 @@ export default function SourcesPage() {
                       color: "var(--ink-3)",
                     }}
                   >
-                    <EmbedChip embed={displayEmbed} />
+                    {courseTaskActive ? (
+                      <span className="chip chip-accent">
+                        <span
+                          style={{
+                            width: 6,
+                            height: 6,
+                            borderRadius: "50%",
+                            background: "var(--accent)",
+                            boxShadow: "0 0 0 3px var(--accent-soft)",
+                          }}
+                        />
+                        {presentation.badge}
+                      </span>
+                    ) : (
+                      <EmbedChip embed={displayEmbed} />
+                    )}
                     <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {displayEmbed?.reason ?? displayEmbed?.error ?? presentation.supportingText}
+                      {courseTaskActive
+                        ? presentation.supportingText
+                        : displayEmbed?.reason ?? displayEmbed?.error ?? presentation.supportingText}
                     </span>
                   </div>
                 </div>
@@ -493,8 +512,10 @@ function StatsStrip({ sources }: { sources: SourceResponse[] }) {
   let failed = 0;
   let stale = 0;
   for (const s of sources) {
+    const presentation = deriveMaterialPresentation(s);
     const st = deriveMaterialEmbed(s)?.status;
-    if (st === "ready") ready++;
+    if (presentation.isActive) running++;
+    else if (st === "ready") ready++;
     else if (st === "running" || st === "queued") running++;
     else if (st === "failed" || st === "cancelled") failed++;
     else if (st === "stale") stale++;
@@ -603,6 +624,15 @@ function RowAction({
   const { t } = useT();
   const [busy, setBusy] = useState(false);
   const status = deriveMaterialEmbed(source)?.status ?? "queued";
+  const courseTaskActive = isCourseTaskActive(source);
+
+  if (courseTaskActive) {
+    return (
+      <span className="btn btn-ghost btn-icon btn-sm" aria-hidden>
+        <IcLoader size={14} className="spin" />
+      </span>
+    );
+  }
 
   if (status === "running") {
     return (

@@ -5,6 +5,7 @@ import mermaid from "mermaid";
 import { useResolvedTheme } from "@/lib/theme";
 
 import { summarizeMermaidFlow } from "./mermaid-flow";
+import { isMermaidErrorSvg, normalizeMermaidSource } from "./mermaid-source";
 
 function getThemeVariables(theme: string) {
   const isDark = theme === "dark";
@@ -64,9 +65,13 @@ export default function MermaidDiagram({
   const ref = useRef<HTMLDivElement>(null);
   const [failedSignature, setFailedSignature] = useState<string | null>(null);
   const theme = useResolvedTheme();
-  const signature = `${theme}:${content}`;
+  const normalizedContent = useMemo(() => normalizeMermaidSource(content), [content]);
+  const signature = `${theme}:${normalizedContent}`;
   const error = failedSignature === signature;
-  const flowSummary = useMemo(() => summarizeMermaidFlow(content), [content]);
+  const flowSummary = useMemo(
+    () => summarizeMermaidFlow(normalizedContent),
+    [normalizedContent]
+  );
   const themeVars = useMemo(() => getThemeVariables(theme), [theme]);
 
   // Only show aside for complex diagrams (has branches or many nodes)
@@ -91,9 +96,14 @@ export default function MermaidDiagram({
     });
 
     mermaid
-      .render(id, content)
+      .parse(normalizedContent, { suppressErrors: false })
+      .then(() => mermaid.render(id, normalizedContent))
       .then(({ svg }) => {
         if (!active || !container) return;
+        if (isMermaidErrorSvg(svg)) {
+          setFailedSignature(signature);
+          return;
+        }
         container.innerHTML = svg;
       })
       .catch(() => {
@@ -106,7 +116,7 @@ export default function MermaidDiagram({
         container.innerHTML = "";
       }
     };
-  }, [content, signature, theme, themeVars]);
+  }, [normalizedContent, signature, theme, themeVars]);
 
   if (error) {
     return (

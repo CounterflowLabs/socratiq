@@ -30,4 +30,23 @@ describe("summarizeMermaidFlow", () => {
     expect(summary.branchCount).toBe(1);
     expect(summary.isLinear).toBe(false);
   });
+
+  it("ignores Mermaid subgraph framing in the readable summary", () => {
+    const summary = summarizeMermaidFlow(`flowchart TD
+  subgraph Encoder
+    A[输入] --> B[自注意力]
+  end
+  subgraph Decoder
+    C[目标输入] --> D[交叉注意力]
+  end
+  B --> D`);
+
+    expect(summary.nodes.map((node) => node.label)).toEqual([
+      "输入",
+      "自注意力",
+      "目标输入",
+      "交叉注意力",
+    ]);
+    expect(summary.edges).toHaveLength(3);
+  });
 });

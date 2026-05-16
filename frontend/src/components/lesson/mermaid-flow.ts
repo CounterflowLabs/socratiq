@@ -71,6 +71,11 @@ export function summarizeMermaidFlow(content: string): MermaidFlowSummary {
     .map((line) => line.trim())
     .filter((line) => line && !line.startsWith("%%"))
     .forEach((line) => {
+      const keyword = line.toLowerCase();
+      if (keyword === "end" || keyword.startsWith("subgraph ")) {
+        return;
+      }
+
       const declaration = line.match(GRAPH_DECLARATION);
       if (declaration) {
         direction = declaration[1].toUpperCase();

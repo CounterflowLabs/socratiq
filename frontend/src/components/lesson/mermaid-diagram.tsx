@@ -4,7 +4,6 @@ import mermaid from "mermaid";
 
 import { useResolvedTheme } from "@/lib/theme";
 
-import { summarizeMermaidFlow } from "./mermaid-flow";
 import { isMermaidErrorSvg, normalizeMermaidSource } from "./mermaid-source";
 
 function getThemeVariables(theme: string) {
@@ -68,14 +67,7 @@ export default function MermaidDiagram({
   const normalizedContent = useMemo(() => normalizeMermaidSource(content), [content]);
   const signature = `${theme}:${normalizedContent}`;
   const error = failedSignature === signature;
-  const flowSummary = useMemo(
-    () => summarizeMermaidFlow(normalizedContent),
-    [normalizedContent]
-  );
   const themeVars = useMemo(() => getThemeVariables(theme), [theme]);
-
-  // Only show aside for complex diagrams (has branches or many nodes)
-  const showAside = flowSummary.branchCount > 0 || flowSummary.nodes.length > 6;
 
   useEffect(() => {
     let active = true;
@@ -144,21 +136,6 @@ export default function MermaidDiagram({
     );
   }
 
-  // Compact inline summary for simple diagrams
-  const inlineSummary = !showAside && flowSummary.nodes.length > 0 && (
-    <div
-      className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t px-5 py-3 text-xs"
-      style={{ borderColor: "var(--border)", color: "var(--text-tertiary)" }}
-    >
-      <span>{flowSummary.nodes.length} 个节点</span>
-      <span>{flowSummary.edges.length} 个连接</span>
-      <span>{flowSummary.isLinear ? "线性主线" : `${flowSummary.branchCount} 个分支`}</span>
-      <span style={{ color: "var(--text-secondary)" }}>
-        {flowSummary.direction ?? ""}
-      </span>
-    </div>
-  );
-
   return (
     <section
       className="my-4 overflow-hidden rounded-lg border"
@@ -192,109 +169,17 @@ export default function MermaidDiagram({
             </>
           ) : null}
         </div>
-        {flowSummary.direction ? (
-          <span
-            className="rounded-full border px-2 py-0.5 text-[10px] font-medium"
-            style={{
-              borderColor: "var(--border)",
-              color: "var(--text-tertiary)",
-            }}
-          >
-            {flowSummary.direction}
-          </span>
-        ) : null}
       </div>
 
       {/* Diagram body */}
-      {showAside ? (
-        <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_200px] sm:p-5">
-          <div
-            className="overflow-x-auto rounded-lg border p-4"
-            style={{
-              borderColor: "var(--border)",
-              background: "var(--surface-alt)",
-            }}
-          >
-            <div ref={ref} className="mermaid-canvas" />
-          </div>
-          <aside className="space-y-3">
-            <div className="grid grid-cols-3 gap-1.5">
-              {(
-                [
-                  ["节点", flowSummary.nodes.length],
-                  ["连接", flowSummary.edges.length],
-                  ["分支", flowSummary.branchCount],
-                ] as const
-              ).map(([label, value]) => (
-                <div
-                  key={label}
-                  className="rounded-md border px-2 py-1.5 text-center"
-                  style={{
-                    borderColor: "var(--border)",
-                    background: "var(--surface-alt)",
-                  }}
-                >
-                  <p
-                    className="text-[10px]"
-                    style={{ color: "var(--text-tertiary)" }}
-                  >
-                    {label}
-                  </p>
-                  <p
-                    className="text-sm font-semibold"
-                    style={{ color: "var(--text)" }}
-                  >
-                    {value}
-                  </p>
-                </div>
-              ))}
-            </div>
-            <ol className="space-y-1">
-              {flowSummary.nodes.slice(0, 8).map((node, index) => (
-                <li key={node.id} className="flex items-start gap-2">
-                  <span
-                    className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-[10px] font-semibold mt-0.5"
-                    style={{
-                      background: "var(--primary-light)",
-                      color: "var(--primary)",
-                    }}
-                  >
-                    {index + 1}
-                  </span>
-                  <span
-                    className="text-xs leading-4"
-                    style={{ color: "var(--text-secondary)" }}
-                  >
-                    {node.label}
-                  </span>
-                </li>
-              ))}
-            </ol>
-            <p
-              className="border-t pt-2 text-[11px]"
-              style={{
-                borderColor: "var(--border)",
-                color: "var(--text-tertiary)",
-              }}
-            >
-              {flowSummary.isLinear ? "线性主线" : "含分支路径"}
-            </p>
-          </aside>
+      <div className="p-4 sm:p-5">
+        <div
+          className="overflow-x-auto rounded-lg p-4"
+          style={{ background: "var(--surface-alt)" }}
+        >
+          <div ref={ref} className="mermaid-canvas" />
         </div>
-      ) : (
-        /* Simple diagram — full width, no aside */
-        <div className="p-4 sm:p-5">
-          <div
-            className="overflow-x-auto rounded-lg p-4"
-            style={{ background: "var(--surface-alt)" }}
-          >
-            <div ref={ref} className="mermaid-canvas" />
-          </div>
-        </div>
-      )}
-
-      {/* Compact inline stats for simple diagrams */}
-      {inlineSummary}
+      </div>
     </section>
   );
 }

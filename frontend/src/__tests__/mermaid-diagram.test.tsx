@@ -142,15 +142,21 @@ describe("MermaidDiagram", () => {
     expect(screen.queryByText("Syntax error in text")).not.toBeInTheDocument();
   });
 
-  it("keeps Mermaid diagrams as static summaries without autoplay controls", async () => {
+  it("renders Mermaid diagrams without auxiliary summary panels", async () => {
     const { default: MermaidDiagram } = await import("@/components/lesson/mermaid-diagram");
 
     render(<MermaidDiagram title="流程图" content={"flowchart TD\nA[起点]-->B[终点]"} />);
 
     await waitFor(() => {
-      expect(screen.getByText("2 个节点")).toBeTruthy();
+      expect(document.querySelector("[data-testid='mock-mermaid']")).toBeTruthy();
     });
     expect(screen.queryByText("Show Me Demo")).toBeNull();
     expect(screen.queryByRole("button", { name: "播放动态讲解" })).toBeNull();
+    expect(screen.queryByText("2 个节点")).toBeNull();
+    expect(screen.queryByText("节点")).toBeNull();
+    expect(screen.queryByText("连接")).toBeNull();
+    expect(screen.queryByText("分支")).toBeNull();
+    expect(screen.queryByText("线性主线")).toBeNull();
+    expect(screen.queryByText("含分支路径")).toBeNull();
   });
 });

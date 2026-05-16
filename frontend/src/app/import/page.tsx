@@ -28,12 +28,19 @@ import {
   retrySource,
   type IngestOptions,
   type SourceProgressResponse,
+  type SourceResponse,
 } from "@/lib/api";
 import { useSourcesStore, useTasksStore } from "@/lib/stores";
 import { useT } from "@/lib/i18n";
 
 type Tab = "url" | "file" | "text";
 type CardStatus = "running" | "failed" | "done";
+
+interface ExistingSourceNotice {
+  sourceId: string;
+  title: string;
+  status: string;
+}
 
 // Map worker stage strings to the 4 visible stages on the card.
 // Stages live in two task buckets server-side (source_processing then
@@ -108,6 +115,10 @@ function deriveCardState(
     errorMessage: null,
     courseId: null,
   };
+}
+
+function isUserExistingSource(source: SourceResponse): boolean {
+  return source.duplicate_reason === "user_existing";
 }
 
 const SAMPLES: Array<{
@@ -204,6 +215,8 @@ export default function ImportPage() {
   const [activeSourceId, setActiveSourceId] = useState<string | null>(null);
   const [activeSourceLabel, setActiveSourceLabel] = useState<string>("");
   const [activeSourceType, setActiveSourceType] = useState<"youtube" | "bilibili" | "pdf" | "markdown" | "url">("url");
+  const [existingSourceNotice, setExistingSourceNotice] =
+    useState<ExistingSourceNotice | null>(null);
   const [card, setCard] = useState<CardState>({
     status: "running",
     stageIndex: 0,
@@ -283,6 +296,7 @@ export default function ImportPage() {
     if (!canSubmit || bilibiliBlocked) return;
     setLoading(true);
     setErrorMsg(null);
+    setExistingSourceNotice(null);
     setCard({
       status: "running",
       stageIndex: 0,
@@ -293,7 +307,7 @@ export default function ImportPage() {
     setAnalyzing(true);
 
     try {
-      let source;
+      let source: SourceResponse;
       const ingestOpts = buildIngestOptions();
       if (tab === "url") {
         source = await createSourceFromURL(url.trim(), undefined, undefined, ingestOpts);
@@ -312,12 +326,30 @@ export default function ImportPage() {
         return;
       }
 
-      addSource(source);
       setActiveSourceId(source.id);
       setActiveSourceLabel(source.title || url.trim() || pdfName || source.id);
       setActiveSourceType(
         (source.type as typeof activeSourceType) ?? (tab === "url" ? "url" : "pdf"),
       );
+
+      if (isUserExistingSource(source)) {
+        setExistingSourceNotice({
+          sourceId: source.id,
+          title: source.title || url.trim() || pdfName || source.id,
+          status: source.status,
+        });
+        setCard({
+          status: "done",
+          stageIndex: 4,
+          failedStageIndex: null,
+          errorMessage: null,
+          courseId: source.latest_course_id ?? null,
+        });
+        setLoading(false);
+        return;
+      }
+
+      addSource(source);
 
       if (source.task_id) {
         addTask({
@@ -378,6 +410,7 @@ export default function ImportPage() {
     setAnalyzing(false);
     setActiveSourceId(null);
     setActiveSourceLabel("");
+    setExistingSourceNotice(null);
     setCard({
       status: "running",
       stageIndex: 0,
@@ -830,6 +863,7 @@ export default function ImportPage() {
         (() => {
           const isFailed = card.status === "failed";
           const isDone = card.status === "done";
+          const isExisting = existingSourceNotice !== null;
           const chipClass = isFailed
             ? "chip"
             : isDone
@@ -849,17 +883,23 @@ export default function ImportPage() {
               : undefined;
           const heading = isFailed
             ? t("import.pipelineFailedTitle")
-            : isDone
+            : isExisting
+              ? "已存在资料"
+              : isDone
               ? t("import.pipelineDoneTitle")
               : t("import.pipelineStartedTitle");
           const hint = isFailed
             ? t("import.pipelineFailedHint")
-            : isDone
+            : isExisting
+              ? "这份资料已经在你的资料库中，没有重复创建新资料。"
+              : isDone
               ? t("import.pipelineDoneHint")
               : t("import.pipelineStartedHint");
           const chipLabel = isFailed
             ? t("import.statusFailed")
-            : isDone
+            : isExisting
+              ? "已存在"
+              : isDone
               ? t("import.statusDone")
               : t("import.statusProcessing");
 
@@ -917,6 +957,29 @@ export default function ImportPage() {
                 </div>
               ) : null}
 
+              {isExisting && existingSourceNotice ? (
+                <div
+                  role="status"
+                  className="card-quiet"
+                  style={{
+                    display: "flex",
+                    gap: 10,
+                    padding: 12,
+                    marginBottom: 24,
+                    borderColor: "var(--border)",
+                    background: "var(--surface-2)",
+                    color: "var(--ink-2)",
+                    fontSize: 13,
+                    lineHeight: 1.6,
+                  }}
+                >
+                  <IcCheck size={14} style={{ flexShrink: 0, marginTop: 2 }} />
+                  <span style={{ minWidth: 0, wordBreak: "break-word" }}>
+                    已找到已有资料：{existingSourceNotice.title}
+                  </span>
+                </div>
+              ) : null}
+
               <div
                 style={{
                   display: "flex",
@@ -925,7 +988,17 @@ export default function ImportPage() {
                   flexWrap: "wrap",
                 }}
               >
-                {isDone && card.courseId ? (
+                {isExisting && existingSourceNotice ? (
+                  <button
+                    type="button"
+                    className="btn btn-accent"
+                    onClick={() => router.push(`/sources?sourceId=${existingSourceNotice.sourceId}`)}
+                  >
+                    <span>打开已有资料</span>
+                    <IcArrowRight size={12} />
+                  </button>
+                ) : null}
+                {isDone && card.courseId && !isExisting ? (
                   <button
                     type="button"
                     className="btn btn-accent"
@@ -935,7 +1008,7 @@ export default function ImportPage() {
                     <IcArrowRight size={12} />
                   </button>
                 ) : null}
-                {isDone && !card.courseId && activeSourceId ? (
+                {isDone && !card.courseId && activeSourceId && !isExisting ? (
                   // PRD §5.2: don't auto-jump to course generation. Surface
                   // it as a primary CTA on the success card instead.
                   <button
@@ -987,6 +1060,7 @@ export default function ImportPage() {
                 </button>
               </div>
 
+              {!isExisting ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                 {stages.map((s, i) => {
                   const isThisFailed = card.failedStageIndex === i;
@@ -1066,6 +1140,7 @@ export default function ImportPage() {
                   );
                 })}
               </div>
+              ) : null}
             </div>
           );
         })()

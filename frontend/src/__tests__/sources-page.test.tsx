@@ -13,6 +13,7 @@ function makeSource(overrides: Record<string, unknown> = {}) {
   return {
     id: "src-1",
     type: "youtube",
+    url: "https://www.youtube.com/watch?v=kCc8FmEb1nY",
     title: "Karpathy GPT",
     status: "ready",
     metadata_: {},
@@ -146,7 +147,7 @@ describe("/sources page", () => {
     await waitFor(() => {
       expect(screen.getByText("Karpathy GPT")).toBeInTheDocument();
       expect(screen.queryByText("Math Notes")).not.toBeInTheDocument();
-      expect(screen.getByText("课程正在assembling_course中")).toBeInTheDocument();
+      expect(screen.getByText("课程正在组装中")).toBeInTheDocument();
     });
   });
 
@@ -187,6 +188,12 @@ describe("/sources page", () => {
       expect(screen.getAllByText("课程生成失败").length).toBeGreaterThan(0);
     });
 
+    expect(screen.getByText("资料来源")).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", {
+        name: "https://www.youtube.com/watch?v=kCc8FmEb1nY",
+      }),
+    ).toHaveAttribute("href", "https://www.youtube.com/watch?v=kCc8FmEb1nY");
     expect(screen.queryByRole("link", { name: "进入课程" })).not.toBeInTheDocument();
     expect(screen.getByText("当前没有可进入的课程，请先查看失败原因。")).toBeInTheDocument();
   });
@@ -314,7 +321,7 @@ describe("/sources page", () => {
     });
 
     expect(screen.getByText("Realtime Material")).toBeInTheDocument();
-    expect(screen.getByText("课程正在assembling_course中")).toBeInTheDocument();
+    expect(screen.getByText("课程正在组装中")).toBeInTheDocument();
 
     fireEvent.click(screen.getByText("Realtime Material"));
 

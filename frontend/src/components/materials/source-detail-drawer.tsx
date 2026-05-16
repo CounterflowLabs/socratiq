@@ -82,6 +82,24 @@ const TASK_TYPE_LABELS: Record<string, string> = {
   course_generation: "课程生成",
 };
 
+function getSourceOrigin(source: SourceResponse): { label: string; href?: string } {
+  const originalFilename = source.metadata_?.original_filename;
+  if (typeof originalFilename === "string" && originalFilename.trim()) {
+    return { label: originalFilename };
+  }
+
+  const mediaUrl = source.metadata_?.media_url;
+  if (typeof mediaUrl === "string" && mediaUrl.trim()) {
+    return { label: mediaUrl, href: mediaUrl };
+  }
+
+  if (source.url) {
+    return { label: source.url, href: source.url };
+  }
+
+  return { label: source.type };
+}
+
 function TypeIcon({ type }: { type: string }) {
   if (type === "youtube" || type === "bilibili") {
     return <Play className="w-4 h-4 text-blue-600" />;
@@ -186,6 +204,7 @@ export default function SourceDetailDrawer({
   }
 
   const presentation = deriveMaterialPresentation(source);
+  const sourceOrigin = getSourceOrigin(source);
 
   if (!open) {
     // Mount nothing when closed so we don't run the lazy data fetches in
@@ -275,6 +294,29 @@ export default function SourceDetailDrawer({
                   <dt className="text-sm text-gray-500">资料状态</dt>
                   <dd className="text-sm font-medium text-gray-900">
                     {getStageLabel(source.status) ?? source.status}
+                  </dd>
+                </div>
+                <div className="flex items-center justify-between gap-4">
+                  <dt className="text-sm text-gray-500">资料来源</dt>
+                  <dd className="min-w-0 text-right text-sm font-medium text-gray-900">
+                    {sourceOrigin.href ? (
+                      <a
+                        href={sourceOrigin.href}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-block max-w-[360px] truncate text-blue-600 hover:underline"
+                        title={sourceOrigin.label}
+                      >
+                        {sourceOrigin.label}
+                      </a>
+                    ) : (
+                      <span
+                        className="inline-block max-w-[360px] truncate"
+                        title={sourceOrigin.label}
+                      >
+                        {sourceOrigin.label}
+                      </span>
+                    )}
                   </dd>
                 </div>
                 <div className="flex items-center justify-between gap-4">

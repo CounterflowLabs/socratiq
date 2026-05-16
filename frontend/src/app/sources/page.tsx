@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
 import {
   IcCheck,
@@ -17,7 +17,7 @@ import {
   IcSparkle,
   SourceIcon,
 } from "@/components/icons";
-import { retrySource } from "@/lib/api";
+import { getSource, retrySource } from "@/lib/api";
 import { Eyebrow } from "@/components/ui/eyebrow";
 import { PageHeader } from "@/components/ui/page-header";
 import { listSources, type SourceResponse } from "@/lib/api";
@@ -34,6 +34,8 @@ import { useT } from "@/lib/i18n";
 export default function SourcesPage() {
   const { t, lang } = useT();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const sourceIdFromUrl = searchParams.get("sourceId");
   const [sources, setSources] = useState<SourceResponse[]>([]);
   const [loading, setLoading] = useState(true);
   const [total, setTotal] = useState(0);
@@ -94,6 +96,31 @@ export default function SourcesPage() {
       setSelectedSourceId(null);
     }
   }, [selectedSourceId, sources]);
+
+  useEffect(() => {
+    if (!sourceIdFromUrl) return;
+    if (sources.some((source) => source.id === sourceIdFromUrl)) {
+      setSelectedSourceId(sourceIdFromUrl);
+      return;
+    }
+    if (loading) return;
+
+    let cancelled = false;
+    getSource(sourceIdFromUrl)
+      .then((source) => {
+        if (cancelled) return;
+        setSources((prev) =>
+          prev.some((item) => item.id === source.id) ? prev : [source, ...prev],
+        );
+        setSelectedSourceId(source.id);
+      })
+      .catch((e) => {
+        console.error("Failed to load linked source:", e);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [loading, sourceIdFromUrl, sources]);
 
   const normalizedQuery = query.trim().toLowerCase();
   const filteredSources = sources.filter((source) => {

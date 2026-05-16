@@ -57,6 +57,8 @@ class SourceResponse(BaseModel):
     latest_course_task: SourceTaskSummary | None = None
     course_count: int = 0
     latest_course_id: uuid.UUID | None = None
+    duplicate_of_source_id: uuid.UUID | None = None
+    duplicate_reason: str | None = None
     # New PRD §9 sub-object. Legacy callers can keep reading the flat
     # status/latest_processing_task fields above for the duration of the
     # transition.

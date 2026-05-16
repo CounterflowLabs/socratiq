@@ -16,6 +16,18 @@ function isTaskActive(task: SourceTaskSummary | null | undefined): boolean {
   return task?.status === "pending" || task?.status === "running";
 }
 
+const STAGE_LABELS: Record<string, string> = {
+  pending: "排队",
+  extracting: "提取",
+  analyzing: "分析",
+  storing: "存储",
+  embedding: "向量化",
+  planning: "规划",
+  generating_lessons: "生成课文",
+  generating_labs: "生成 Lab",
+  assembling_course: "组装",
+};
+
 function isSourceCancelled(source: SourceResponse): boolean {
   return (
     source.status === "cancelled" ||
@@ -25,6 +37,28 @@ function isSourceCancelled(source: SourceResponse): boolean {
 
 function isSourceFailed(source: SourceResponse): boolean {
   return source.status === "error" || source.latest_processing_task?.status === "failure";
+}
+
+function isSourceProcessingActive(source: SourceResponse): boolean {
+  return (
+    isTaskActive(source.latest_processing_task) ||
+    (source.status !== "ready" &&
+      source.status !== "error" &&
+      source.status !== "cancelled")
+  );
+}
+
+function stageLabel(stage?: string | null): string | null {
+  if (!stage) {
+    return null;
+  }
+
+  return STAGE_LABELS[stage] ?? stage;
+}
+
+function progressText(subject: "资料" | "课程", stage?: string | null): string {
+  const label = stageLabel(stage);
+  return label ? `${subject}正在${label}中` : `${subject}正在处理中`;
 }
 
 export function deriveMaterialEmbed(source: SourceResponse): SourceEmbed | null | undefined {
@@ -67,6 +101,16 @@ export function deriveMaterialPresentation(source: SourceResponse): MaterialPres
     };
   }
 
+  if (isSourceProcessingActive(source)) {
+    return {
+      badge: "资料处理中",
+      supportingText: progressText("资料", source.latest_processing_task?.stage ?? source.status),
+      primaryAction: "view-details",
+      category: "processing",
+      isActive: true,
+    };
+  }
+
   if (source.latest_course_task?.status === "failure") {
     return {
       badge: "课程生成失败",
@@ -82,21 +126,7 @@ export function deriveMaterialPresentation(source: SourceResponse): MaterialPres
   if (isTaskActive(source.latest_course_task)) {
     return {
       badge: "课程生成中",
-      supportingText: source.latest_course_task?.stage
-        ? `课程正在${source.latest_course_task.stage}中`
-        : "课程正在生成中",
-      primaryAction: "view-details",
-      category: "processing",
-      isActive: true,
-    };
-  }
-
-  if (isTaskActive(source.latest_processing_task) || (source.status !== "ready" && source.status !== "error")) {
-    return {
-      badge: "资料处理中",
-      supportingText: source.latest_processing_task?.stage
-        ? `资料正在${source.latest_processing_task.stage}中`
-        : "资料正在处理中",
+      supportingText: progressText("课程", source.latest_course_task?.stage),
       primaryAction: "view-details",
       category: "processing",
       isActive: true,

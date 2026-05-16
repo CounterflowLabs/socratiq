@@ -93,16 +93,7 @@ class CourseGenerator:
             else:
                 title = f"Course from {len(sources)} sources"
 
-        # 3. Create Course
-        course = Course(title=title, description="", created_by=user_id)
-        db.add(course)
-        await db.flush()
-
-        # 4. Link sources
-        for source in sources:
-            db.add(CourseSource(course_id=course.id, source_id=source.id))
-
-        # 5. Load content chunks for these sources
+        # 3. Load content chunks for these sources
         chunks_by_source: dict[UUID, list[ContentChunkModel]] = {}
         all_chunks: list[ContentChunkModel] = []
         for source in sources:
@@ -115,7 +106,12 @@ class CourseGenerator:
             chunks_by_source[source.id] = rows
             all_chunks.extend(rows)
 
-        # 6. Generate teaching assets per source (lesson + lab + graph per page)
+        # Release the read transaction before LLM calls. Generation can sit
+        # idle for minutes on local models; holding AccessShare/RowExclusive
+        # locks across that wait blocks test cleanup, DDL, and maintenance.
+        await db.commit()
+
+        # 4. Generate teaching assets per source (lesson + lab + graph per page)
         provider = await self._router.get_provider(TaskType.CONTENT_ANALYSIS)
         lesson_gen = LessonGenerator(provider)
         lab_gen = LabGenerator(provider)
@@ -145,21 +141,31 @@ class CourseGenerator:
             )
             per_source_assets[source.id] = assets
 
-        # 7. Create Sections (one per (source, page) group)
+        # 5. Generate course description via LLM before opening the write
+        # transaction for the course rows.
+        description = await self._generate_description(
+            course_title=title,
+            section_count=len(all_chunks),
+            sources=sources,
+            target_language=target_language,
+        )
+
+        # 6. Create Course
+        course = Course(title=title, description=description, created_by=user_id)
+        db.add(course)
+        await db.flush()
+
+        # 7. Link sources
+        for source in sources:
+            db.add(CourseSource(course_id=course.id, source_id=source.id))
+
+        # 8. Create Sections (one per (source, page) group)
         await self._build_sections(
             db=db,
             course=course,
             sources=sources,
             chunks_by_source=chunks_by_source,
             per_source_assets=per_source_assets,
-        )
-
-        # 8. Generate course description via LLM
-        course.description = await self._generate_description(
-            course_title=title,
-            section_count=len(all_chunks),
-            sources=sources,
-            target_language=target_language,
         )
 
         await db.flush()

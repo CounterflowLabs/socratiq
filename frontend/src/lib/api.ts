@@ -130,6 +130,8 @@ export interface SourceResponse {
   latest_course_task?: SourceTaskSummary | null;
   course_count: number;
   latest_course_id: string | null;
+  duplicate_of_source_id?: string | null;
+  duplicate_reason?: "user_existing" | "global_existing_reused" | string | null;
   embed?: SourceEmbed | null;
   created_at: string;
   updated_at: string;

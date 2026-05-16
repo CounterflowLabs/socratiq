@@ -4,7 +4,7 @@ import uuid
 from pathlib import Path
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -49,6 +49,7 @@ _ACTIONABLE_RANK = {"failure": 0, "processing": 1, "ready": 2}
 async def create_source(
     db: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(get_local_user)],
+    response: Response,
     url: str | None = Form(None),
     source_type: str | None = Form(None),
     title: str | None = Form(None),
@@ -103,15 +104,6 @@ async def create_source(
         if source_type not in ("bilibili", "youtube"):
             raise HTTPException(400, f"Unsupported source type: {source_type}")
 
-    if source_type == "bilibili" and not await has_bilibili_credential(db):
-        raise HTTPException(
-            status_code=412,
-            detail={
-                "code": "bilibili_credential_required",
-                "message": "导入 B 站视频需要先登录 B 站账号才能抓取字幕。",
-            },
-        )
-
     content_key = extract_content_key(
         source_type=source_type,
         url=url,
@@ -119,33 +111,38 @@ async def create_source(
     )
 
     if content_key:
-        active_result = await db.execute(
+        existing_result = await db.execute(
             select(Source)
             .where(
                 Source.created_by == user.id,
                 Source.content_key == content_key,
-                Source.status.in_(
-                    ["pending", "extracting", "analyzing", "generating_lessons", "generating_labs", "storing", "embedding", "planning"]
-                ),
+                Source.status != "deleted",
             )
             .order_by(Source.created_at.desc())
             .limit(1)
         )
-        active_source = active_result.scalar_one_or_none()
-        if active_source and active_source.celery_task_id:
-            return await _source_to_response(db, active_source, user_id=user.id)
+        existing_source = existing_result.scalar_one_or_none()
+        if existing_source:
+            response.status_code = 200
+            return await _source_to_response(
+                db,
+                existing_source,
+                user_id=user.id,
+                duplicate_of_source_id=existing_source.id,
+                duplicate_reason="user_existing",
+            )
 
-        ready_result = await db.execute(
+        reusable_result = await db.execute(
             select(Source)
             .where(
-                Source.created_by == user.id,
                 Source.content_key == content_key,
                 Source.status == "ready",
+                or_(Source.created_by != user.id, Source.created_by.is_(None)),
             )
             .order_by(Source.created_at.desc())
             .limit(1)
         )
-        donor_source = ready_result.scalar_one_or_none()
+        donor_source = reusable_result.scalar_one_or_none()
         if donor_source:
             source = Source(
                 type=source_type,
@@ -171,7 +168,22 @@ async def create_source(
             )
             await db.commit()
             await db.refresh(source)
-            return await _source_to_response(db, source, user_id=user.id)
+            return await _source_to_response(
+                db,
+                source,
+                user_id=user.id,
+                duplicate_of_source_id=donor_source.id,
+                duplicate_reason="global_existing_reused",
+            )
+
+    if source_type == "bilibili" and not await has_bilibili_credential(db):
+        raise HTTPException(
+            status_code=412,
+            detail={
+                "code": "bilibili_credential_required",
+                "message": "导入 B 站视频需要先登录 B 站账号才能抓取字幕。",
+            },
+        )
 
     source = Source(
         type=source_type,
@@ -984,6 +996,8 @@ async def _source_to_response(
     latest_course_task: SourceTaskSummary | None = None,
     course_count: int | None = None,
     latest_course_id: uuid.UUID | None = None,
+    duplicate_of_source_id: uuid.UUID | None = None,
+    duplicate_reason: str | None = None,
 ) -> SourceResponse:
     if latest_processing_task is None:
         latest_processing_task = await _get_latest_task_summary(
@@ -1020,6 +1034,8 @@ async def _source_to_response(
         latest_course_task=latest_course_task,
         course_count=course_count,
         latest_course_id=latest_course_id,
+        duplicate_of_source_id=duplicate_of_source_id,
+        duplicate_reason=duplicate_reason,
         embed=embed,
         created_at=source.created_at,
         updated_at=source.updated_at,

@@ -105,4 +105,26 @@ describe("deriveMaterialPresentation", () => {
     expect(result.badge).toBe("课程生成中");
     expect(result.primaryAction).toBe("view-details");
   });
+
+  it("prioritizes active source processing over queued course generation", () => {
+    const result = deriveMaterialPresentation(
+      makeSource({
+        status: "analyzing",
+        latest_processing_task: {
+          task_type: "source_processing",
+          status: "running",
+          stage: "analyzing",
+        },
+        latest_course_task: {
+          task_type: "course_generation",
+          status: "pending",
+          stage: "pending",
+        },
+      })
+    );
+
+    expect(result.badge).toBe("资料处理中");
+    expect(result.supportingText).toBe("资料正在分析中");
+    expect(result.isActive).toBe(true);
+  });
 });

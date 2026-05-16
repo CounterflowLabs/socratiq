@@ -264,7 +264,7 @@ describe("Import Page", () => {
     }));
 
     let createCalls = 0;
-    const fetchMock = vi.fn((url: RequestInfo | URL) => {
+    const fetchMock = vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
       const u = typeof url === "string" ? url : url.toString();
       if (u.includes("/setup/bilibili/status")) {
         return Promise.resolve({
@@ -272,7 +272,9 @@ describe("Import Page", () => {
           json: () => Promise.resolve({ logged_in: true, source: "db" }),
         }) as ReturnType<typeof fetch>;
       }
-      createCalls += 1;
+      if (u.includes("/api/v1/sources") && init?.method === "POST") {
+        createCalls += 1;
+      }
       return Promise.resolve({
         ok: true,
         json: () =>
@@ -285,13 +287,78 @@ describe("Import Page", () => {
     const ImportPage = (await import("@/app/import/page")).default;
     render(<ImportPage />);
 
-    fireEvent.change(screen.getByPlaceholderText(/粘贴 B站 \/ YouTube 链接/), {
+    fireEvent.change(screen.getByPlaceholderText(/B站|Bilibili/), {
       target: { value: "https://www.bilibili.com/video/BV1xoJwzDESD" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /开始分析/ }));
+    fireEvent.click(screen.getByRole("button", { name: /开始分析|Analyze/ }));
 
     await waitFor(() => expect(createCalls).toBe(1));
+    fireEvent.click(screen.getByRole("button", { name: /资料库|source library/i }));
     await waitFor(() => expect(push).toHaveBeenCalledWith("/sources"));
+  });
+
+  it("shows an existing-source prompt and jumps to the source detail", async () => {
+    const push = vi.fn();
+
+    vi.doMock("next/navigation", () => ({
+      useRouter: () => ({ push, back: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
+      useSearchParams: () => new URLSearchParams(),
+      usePathname: () => "/import",
+    }));
+
+    globalThis.fetch = vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
+      const u = typeof url === "string" ? url : url.toString();
+      if (u.includes("/setup/bilibili/status")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ logged_in: true, source: "db" }),
+        }) as ReturnType<typeof fetch>;
+      }
+      if (u.includes("/api/v1/sources") && init?.method === "POST") {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              id: "src-existing",
+              type: "bilibili",
+              url: "https://www.bilibili.com/video/BV1xoJwzDESD",
+              title: "Existing Material",
+              status: "ready",
+              metadata_: {},
+              task_id: null,
+              latest_processing_task: null,
+              latest_course_task: null,
+              course_count: 1,
+              latest_course_id: "course-existing",
+              duplicate_of_source_id: "src-existing",
+              duplicate_reason: "user_existing",
+              created_at: "2026-04-19T00:00:00Z",
+              updated_at: "2026-04-19T00:00:00Z",
+            }),
+        }) as ReturnType<typeof fetch>;
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve([]),
+      }) as ReturnType<typeof fetch>;
+    }) as unknown as typeof fetch;
+
+    vi.resetModules();
+    const ImportPage = (await import("@/app/import/page")).default;
+    render(<ImportPage />);
+
+    fireEvent.change(screen.getByPlaceholderText(/B站|Bilibili/), {
+      target: { value: "https://www.bilibili.com/video/BV1xoJwzDESD" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /开始分析|Analyze/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText("已存在资料")).toBeInTheDocument();
+      expect(screen.getByText("已找到已有资料：Existing Material")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /打开已有资料/ }));
+    expect(push).toHaveBeenCalledWith("/sources?sourceId=src-existing");
   });
 });
 

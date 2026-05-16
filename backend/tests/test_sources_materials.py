@@ -111,16 +111,64 @@ async def test_create_bilibili_source_passes_when_env_credential_present(
 
 
 @pytest.mark.asyncio
+async def test_create_source_returns_existing_for_same_user_duplicate(
+    client, db_session, demo_user
+):
+    existing = Source(
+        type="youtube",
+        url="https://www.youtube.com/watch?v=existing",
+        title="Existing source",
+        status="ready",
+        content_key="shared-key",
+        created_by=demo_user.id,
+    )
+    db_session.add(existing)
+    await db_session.flush()
+
+    with patch("app.api.routes.sources.extract_content_key", return_value="shared-key"):
+        with patch("app.api.routes.sources.ingest_source") as mock_ingest:
+            with patch("app.api.routes.sources.clone_source") as mock_clone:
+                res = await client.post("/api/v1/sources", data={
+                    "url": "https://www.youtube.com/watch?v=kCc8FmEb1nY",
+                })
+
+    assert res.status_code == 200
+    data = res.json()
+    assert data["id"] == str(existing.id)
+    assert data["duplicate_of_source_id"] == str(existing.id)
+    assert data["duplicate_reason"] == "user_existing"
+    mock_ingest.delay.assert_not_called()
+    mock_clone.delay.assert_not_called()
+
+    sources = (await db_session.execute(select(Source))).scalars().all()
+    assert sources == [existing]
+
+
+@pytest.mark.asyncio
 async def test_create_clone_source_persists_processing_task(client, db_session, demo_user):
+    donor_user = User(
+        id=uuid.uuid4(),
+        email="donor@socratiq.local",
+        name="Donor User",
+    )
+    db_session.add(donor_user)
+    await db_session.flush()
+
     donor = Source(
         type="youtube",
         url="https://www.youtube.com/watch?v=donor",
         title="Donor source",
         status="ready",
         content_key="shared-key",
-        created_by=demo_user.id,
+        created_by=donor_user.id,
     )
     db_session.add(donor)
+    await db_session.flush()
+
+    course = Course(title="Donor course", created_by=donor_user.id)
+    db_session.add(course)
+    await db_session.flush()
+    db_session.add(CourseSource(course_id=course.id, source_id=donor.id))
     await db_session.flush()
 
     with patch("app.api.routes.sources.extract_content_key", return_value="shared-key"):
@@ -134,7 +182,17 @@ async def test_create_clone_source_persists_processing_task(client, db_session, 
             })
 
     assert res.status_code == 201
-    source_id = uuid.UUID(res.json()["id"])
+    data = res.json()
+    source_id = uuid.UUID(data["id"])
+    assert data["duplicate_of_source_id"] == str(donor.id)
+    assert data["duplicate_reason"] == "global_existing_reused"
+    assert data["course_count"] == 0
+
+    created_source = await db_session.get(Source, source_id)
+    assert created_source is not None
+    assert created_source.created_by == demo_user.id
+    assert created_source.ref_source_id == donor.id
+
     tasks = (
         await db_session.execute(
             select(SourceTask).where(SourceTask.source_id == source_id)

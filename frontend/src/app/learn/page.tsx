@@ -18,7 +18,9 @@ import {
   estimateTranslation,
   getCourse,
   getRegenerationStatus,
+  mergeSectionWithNext,
   recordProgress,
+  splitSection,
   translateSection,
   type CourseDetailResponse,
   type GraphCard,
@@ -691,6 +693,54 @@ function LearnPageInner() {
             lessonWaypoints={lessonWaypoints}
             onSelectWaypoint={handleSelectWaypoint}
             onCollapse={() => setOutlineOpen(false)}
+            onMergeWithNext={async (sec) => {
+              if (!courseId) return;
+              if (
+                !window.confirm(
+                  `将「${sec.title}」与下一节合并？合并后会保留当前节的标题与课文，下一节的内容会被并入。`,
+                )
+              ) {
+                return;
+              }
+              try {
+                await mergeSectionWithNext(sec.id);
+                const fresh = await getCourse(courseId);
+                setCourse(fresh);
+                // Keep the merged section as the active one when possible.
+                const stillThere = fresh.sections.find((s) => s.id === sec.id);
+                setSection(stillThere ?? fresh.sections[0] ?? null);
+              } catch (err) {
+                window.alert(
+                  err instanceof Error ? err.message : "合并失败，请稍后重试",
+                );
+              }
+            }}
+            onSplit={async (sec) => {
+              if (!courseId) return;
+              const input = window.prompt(
+                `在「${sec.title}」的第几个 chunk 之前拆出新章节？\n` +
+                  `(整数，1 = 保留首个 chunk 在原节，其余移到新节)`,
+                "1",
+              );
+              if (input === null) return;
+              const idx = Number.parseInt(input.trim(), 10);
+              if (!Number.isFinite(idx) || idx < 1) {
+                window.alert("请输入大于等于 1 的整数");
+                return;
+              }
+              try {
+                await splitSection(sec.id, idx);
+                const fresh = await getCourse(courseId);
+                setCourse(fresh);
+                // Keep the (now shrunk) original section selected.
+                const stillThere = fresh.sections.find((s) => s.id === sec.id);
+                setSection(stillThere ?? fresh.sections[0] ?? null);
+              } catch (err) {
+                window.alert(
+                  err instanceof Error ? err.message : "拆分失败，请稍后重试",
+                );
+              }
+            }}
           />
         }
         lessonStage={lessonStage}

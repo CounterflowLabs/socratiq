@@ -26,7 +26,10 @@ from app.models.course import (
     RegenerateCourseRequest,
     RegenerateCourseResponse,
     RegenerateSectionLessonResponse,
+    SectionMergeResponse,
     SectionResponse,
+    SectionSplitRequest,
+    SectionSplitResponse,
     SourceSummary,
 )
 from app.services.course_generator import CourseGenerator
@@ -717,4 +720,96 @@ async def regenerate_section_lesson_endpoint(
         task_id=celery_task.id,
         section_id=section_id,
         status="dispatched",
+    )
+
+
+@router.post(
+    "/sections/{section_id}/merge-next",
+    response_model=SectionMergeResponse,
+)
+async def merge_section_with_next_endpoint(
+    section_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_local_user)],
+) -> SectionMergeResponse:
+    """Merge a section with the section immediately following it.
+
+    Manual-override path from Phase 4 of section-planning.md. Chunks from the
+    trailing section move into this one, the trailing section is deleted,
+    and order_index is renumbered. Lesson content is left stale — caller can
+    call ``/regenerate-lesson`` after if a fresh lesson is wanted.
+    """
+    from app.services.section_override import (
+        CrossSourceMerge,
+        NoAdjacentSection,
+        SectionNotFound,
+        SectionNotOwned,
+        merge_with_next,
+    )
+
+    try:
+        result = await merge_with_next(
+            db, section_id=section_id, user_id=user.id
+        )
+    except SectionNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except SectionNotOwned as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except NoAdjacentSection as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except CrossSourceMerge as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+    await db.commit()
+    return SectionMergeResponse(
+        surviving_section_id=result.surviving_section_id,
+        removed_section_id=result.removed_section_id,
+        chunks_reassigned=result.chunks_reassigned,
+    )
+
+
+@router.post(
+    "/sections/{section_id}/split",
+    response_model=SectionSplitResponse,
+)
+async def split_section_endpoint(
+    section_id: uuid.UUID,
+    payload: SectionSplitRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_local_user)],
+) -> SectionSplitResponse:
+    """Split a section into two at the given chunk index.
+
+    Manual-override path from Phase 4 of section-planning.md. The original
+    section keeps the first ``split_at_chunk_index`` chunks; the rest move
+    to a newly-created section that slots in immediately after. order_index
+    of every following section is bumped up by one to make room.
+    """
+    from app.services.section_override import (
+        SectionNotFound,
+        SectionNotOwned,
+        SplitPositionInvalid,
+        split_section,
+    )
+
+    try:
+        result = await split_section(
+            db,
+            section_id=section_id,
+            user_id=user.id,
+            split_at_chunk_index=payload.split_at_chunk_index,
+        )
+    except SectionNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except SectionNotOwned as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except SplitPositionInvalid as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    await db.commit()
+    return SectionSplitResponse(
+        original_section_id=result.original_section_id,
+        new_section_id=result.new_section_id,
+        chunks_in_original=result.chunks_in_original,
+        chunks_in_new=result.chunks_in_new,
     )

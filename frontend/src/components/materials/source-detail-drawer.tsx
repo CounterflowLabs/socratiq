@@ -287,6 +287,8 @@ export default function SourceDetailDrawer({
               </dl>
             </section>
 
+            <SectionPlannerSection metadata={source.metadata_} />
+
             {/* PRD §11 Phase E — lazy-loaded chunks / citations / history. */}
             {open && source.id ? <ChunksSection sourceId={source.id} /> : null}
             {open && source.id ? <CitationsSection sourceId={source.id} /> : null}
@@ -717,6 +719,116 @@ function HistorySection({ sourceId }: { sourceId: string }) {
           </li>
         ))}
       </ul>
+    </section>
+  );
+}
+
+/* SectionPlanner stats — surfaces the per-source metadata that
+   ``app.services.section_planner.SectionPlanner`` writes during ingestion.
+   Source.metadata_["section_planner_stats"] is optional; pre-Phase-1 sources
+   simply don't render this block. */
+function SectionPlannerSection({
+  metadata,
+}: {
+  metadata: Record<string, unknown>;
+}) {
+  const stats = (metadata?.section_planner_stats ?? null) as
+    | import("@/lib/api").SectionPlannerStats
+    | null;
+  if (!stats) return null;
+
+  const tierLabel: Record<string, string> = {
+    skeleton: "整段（Layer 1）",
+    windowed: "分窗（Layer 2）",
+    embedding_only: "向量兜底（Layer 3）",
+    fallback: "逐 chunk 兜底（Layer 4）",
+  };
+  const tierBadgeClass =
+    stats.tier_used === "fallback"
+      ? "bg-amber-100 text-amber-800"
+      : stats.tier_used === "embedding_only"
+        ? "bg-purple-100 text-purple-800"
+        : "bg-blue-100 text-blue-800";
+
+  const formatMs = (ms: number) =>
+    ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${ms} ms`;
+
+  return (
+    <section>
+      <h3 className="text-sm font-semibold text-gray-900">章节规划</h3>
+      <div className="mt-3 rounded-2xl border border-gray-200 bg-white p-4 space-y-3">
+        <div className="flex items-center justify-between gap-4">
+          <span className="text-sm text-gray-500">分桶策略</span>
+          <span
+            className={`rounded-full px-2 py-0.5 text-xs font-medium ${tierBadgeClass}`}
+          >
+            {tierLabel[stats.tier_used] ?? stats.tier_used}
+          </span>
+        </div>
+        {stats.short_circuit ? (
+          <p className="text-xs text-gray-500">
+            内容较短，整源归为一个 bucket，跳过 LLM 分析。
+          </p>
+        ) : null}
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+          <div className="flex items-center justify-between">
+            <dt className="text-gray-500">桶数</dt>
+            <dd className="font-medium text-gray-900">{stats.bucket_count}</dd>
+          </div>
+          <div className="flex items-center justify-between">
+            <dt className="text-gray-500">每桶平均 chunk</dt>
+            <dd className="font-medium text-gray-900">
+              {stats.avg_chunks_per_bucket}
+            </dd>
+          </div>
+          <div className="flex items-center justify-between">
+            <dt className="text-gray-500">最小 / 最大</dt>
+            <dd className="font-medium text-gray-900">
+              {stats.min_chunks_per_bucket} / {stats.max_chunks_per_bucket}
+            </dd>
+          </div>
+          <div className="flex items-center justify-between">
+            <dt className="text-gray-500">命名唯一度</dt>
+            <dd
+              className={`font-medium ${
+                stats.topic_uniqueness < 0.7
+                  ? "text-amber-600"
+                  : "text-gray-900"
+              }`}
+              title={
+                stats.topic_uniqueness < 0.7
+                  ? "topic_uniqueness < 0.7 — planner 给出了大量重复名字，可能分桶失效"
+                  : undefined
+              }
+            >
+              {(stats.topic_uniqueness * 100).toFixed(0)}%
+            </dd>
+          </div>
+          <div className="flex items-center justify-between">
+            <dt className="text-gray-500">耗时</dt>
+            <dd className="font-medium text-gray-900">
+              {formatMs(stats.planning_duration_ms)}
+            </dd>
+          </div>
+          <div className="flex items-center justify-between">
+            <dt className="text-gray-500">Token in / out</dt>
+            <dd className="font-medium text-gray-900 mono text-xs">
+              {stats.llm_input_tokens} / {stats.llm_output_tokens}
+            </dd>
+          </div>
+        </dl>
+        <div className="flex items-center justify-between text-[11px] text-gray-400 mono">
+          <span>planner: {stats.planner_version}</span>
+          {stats.error ? (
+            <span
+              className="truncate text-amber-600"
+              title={stats.error}
+            >
+              error: {stats.error}
+            </span>
+          ) : null}
+        </div>
+      </div>
     </section>
   );
 }

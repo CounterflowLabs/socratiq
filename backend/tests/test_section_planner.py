@@ -11,12 +11,17 @@ from app.services.section_planner import (
     PLANNER_VERSION,
     SECTION_BUCKET_KEY,
     SECTION_BUCKET_TOPIC_KEY,
+    BucketAssignment,
     SectionPlanner,
     _build_chunk_inputs,
+    _build_window_spans,
+    _clamp_bucket_count,
     _cosine_distance,
     _compute_boundary_hints,
     _detect_size_unit,
     _fallback_assignments,
+    _merge_seam_buckets,
+    _run_layer3_embedding_only,
     _should_short_circuit,
     _validate_and_normalize,
     has_section_buckets,
@@ -590,3 +595,324 @@ def test_metadata_keys_are_stable():
     # Other layers (course_generator, frontend) rely on these strings.
     assert SECTION_BUCKET_KEY == "section_bucket"
     assert SECTION_BUCKET_TOPIC_KEY == "section_bucket_topic"
+
+
+# --- Phase 2: window splitting --------------------------------------------
+
+
+class TestWindowSpans:
+    def test_small_input_returns_single_window(self):
+        assert _build_window_spans(0) == []
+        assert _build_window_spans(5) == [(0, 5)]
+        assert _build_window_spans(30) == [(0, 30)]
+
+    def test_two_windows_with_overlap(self):
+        # 50 chunks, window=30, overlap=3, step=27
+        spans = _build_window_spans(50)
+        assert spans[0] == (0, 30)
+        # second window starts at 30 - 3 = 27, runs to 50
+        assert spans[-1][1] == 50
+        assert spans[1] == (27, 50)
+
+    def test_three_windows_long_input(self):
+        # 80 chunks: [0,30) [27,57) [54,80)
+        spans = _build_window_spans(80)
+        assert len(spans) == 3
+        assert spans[0] == (0, 30)
+        assert spans[1] == (27, 57)
+        assert spans[2] == (54, 80)
+        # Adjacent windows overlap by exactly 3
+        for a, b in zip(spans, spans[1:]):
+            assert a[1] - b[0] == 3
+
+    def test_terminal_window_smaller_than_full(self):
+        # 100 chunks: [0,30) [27,57) [54,84) [81,100)
+        spans = _build_window_spans(100)
+        assert spans[-1] == (81, 100)
+        assert spans[-1][1] - spans[-1][0] == 19  # stub end window
+
+    def test_every_chunk_covered_by_exactly_one_window_after_truncation(self):
+        # Each non-final window contributes [start, end - overlap);
+        # final window contributes [start, end). Sum must equal n.
+        for n in [31, 60, 90, 120, 199]:
+            spans = _build_window_spans(n)
+            covered = 0
+            for i, (start, end) in enumerate(spans):
+                if i + 1 < len(spans):
+                    covered += (end - 3) - start  # overlap=3
+                else:
+                    covered += end - start
+            assert covered == n, f"coverage mismatch for n={n}"
+
+
+# --- Phase 2: seam merge logic --------------------------------------------
+
+
+class TestMergeSeamBuckets:
+    def test_merges_and_shifts_higher_ids(self):
+        # Combined assignment after concat: 4 buckets, IDs 0..3
+        original = [
+            BucketAssignment(0, "intro"),
+            BucketAssignment(0, "intro"),
+            BucketAssignment(1, "core"),
+            BucketAssignment(2, "more core"),
+            BucketAssignment(3, "wrap up"),
+        ]
+        # Merge bucket 2 into bucket 1 (same theme across window seam)
+        result = _merge_seam_buckets(original, seam_bid=2, target_bid=1)
+        ids = [a.bucket_id for a in result]
+        topics = [a.bucket_topic for a in result]
+        assert ids == [0, 0, 1, 1, 2]
+        # Both chunks now in bucket 1 carry bucket 1's topic ("core")
+        assert topics[2] == "core"
+        assert topics[3] == "core"
+        # The previously bucket-3 chunk inherits id 2 with its OWN topic
+        assert topics[4] == "wrap up"
+
+    def test_no_higher_ids_no_shift(self):
+        original = [BucketAssignment(0, "a"), BucketAssignment(1, "b")]
+        result = _merge_seam_buckets(original, seam_bid=1, target_bid=0)
+        assert [a.bucket_id for a in result] == [0, 0]
+
+
+# --- Phase 2: clamp ------------------------------------------------------
+
+
+class TestClampBucketCount:
+    def test_under_cap_is_noop(self):
+        assignments = [BucketAssignment(i, f"b{i}") for i in range(5)]
+        result = _clamp_bucket_count(assignments, cap=12)
+        assert [a.bucket_id for a in result] == [0, 1, 2, 3, 4]
+
+    def test_over_cap_collapses_tail(self):
+        # 15 buckets, cap=12 → tail buckets (11..14) all merge into 11
+        assignments = [BucketAssignment(i, f"b{i}") for i in range(15)]
+        result = _clamp_bucket_count(assignments, cap=12)
+        ids = [a.bucket_id for a in result]
+        assert max(ids) == 11
+        # Tail chunks share bucket 11
+        tail_chunks = [a for a in result if a.bucket_id == 11]
+        assert len(tail_chunks) == 4
+
+
+# --- Phase 2: end-to-end windowed mode ------------------------------------
+
+
+def _huge_chunk(idx: int) -> RawContentChunk:
+    """A chunk whose serialized JSON is big enough to push past 64KB at
+    ~50 chunks. Used to force the Layer 2 routing branch."""
+    return RawContentChunk(
+        source_type="bilibili",
+        raw_text="x",
+        metadata={"start_time": idx * 60.0, "end_time": (idx + 1) * 60.0},
+    )
+
+
+class TestPhase2Windowed:
+    @pytest.mark.asyncio
+    async def test_routes_to_windowed_when_over_budget(self, monkeypatch):
+        # Force the budget check by lowering the budget temporarily — easier
+        # than constructing a 64KB summary payload in the test.
+        import app.services.section_planner as sp_mod
+
+        monkeypatch.setattr(sp_mod, "_SKELETON_BUDGET_BYTES", 200)
+
+        # 60 chunks → 2 windows of [0,30) [27,57) [54,60) but we need
+        # _WINDOW_SIZE = 30. Use _WINDOW_SIZE if needed to confirm.
+        n = 60
+        chunks = [_huge_chunk(i) for i in range(n)]
+        analyses = [_analyzed(f"T{i}", f"Summary number {i}") for i in range(n)]
+        embeddings = [[1.0, 0.0]] * n
+
+        # Build per-window LLM responses so each window gets a valid plan.
+        # Each window has _WINDOW_SIZE chunks except possibly the last.
+        window_responses: list[LLMResponse] = []
+        # Plan per window: 2 buckets each
+        spans = _build_window_spans(n)
+        for span in spans:
+            length = span[1] - span[0]
+            mid = length // 2
+            window_responses.append(_mock_llm_response({
+                "buckets": [
+                    {"id": 0, "topic": f"window-a-{span}"},
+                    {"id": 1, "topic": f"window-b-{span}"},
+                ],
+                "assignments": [
+                    {"chunk_index": i, "bucket_id": 0 if i < mid else 1}
+                    for i in range(length)
+                ],
+            }))
+
+        # Stitch responses: refuse to merge all seams (cleaner assertion).
+        stitch_response = _mock_llm_response({"merge": False, "reason": "different"})
+
+        provider = AsyncMock()
+        # First N calls are window plans; subsequent calls are stitch
+        provider.chat = AsyncMock(
+            side_effect=[*window_responses] + [stitch_response] * 10
+        )
+
+        planner = _planner_with_provider(provider)
+        result = await planner.plan(
+            chunks=chunks,
+            analyses=analyses,
+            embeddings=embeddings,
+            title="big video",
+        )
+
+        assert result.stats["tier_used"] == "windowed"
+        # Each window contributes its non-overlap chunks; total = n
+        assert len(result.assignments) == n
+        # No merge, so distinct buckets = sum of per-window buckets = 2 * len(spans)
+        distinct = sorted({a.bucket_id for a in result.assignments})
+        # but capped at _MAX_BUCKETS = 12
+        assert len(distinct) <= 12
+
+    @pytest.mark.asyncio
+    async def test_stitch_merges_when_llm_says_yes(self, monkeypatch):
+        import app.services.section_planner as sp_mod
+
+        monkeypatch.setattr(sp_mod, "_SKELETON_BUDGET_BYTES", 200)
+
+        n = 40
+        chunks = [_huge_chunk(i) for i in range(n)]
+        analyses = [_analyzed(f"T{i}", f"Summary {i}") for i in range(n)]
+        embeddings = [[1.0, 0.0]] * n
+
+        spans = _build_window_spans(n)
+        assert len(spans) >= 2  # ensure stitch path exercised
+
+        # Each window: single bucket
+        window_responses = []
+        for span in spans:
+            length = span[1] - span[0]
+            window_responses.append(_mock_llm_response({
+                "buckets": [{"id": 0, "topic": "Same theme"}],
+                "assignments": [
+                    {"chunk_index": i, "bucket_id": 0} for i in range(length)
+                ],
+            }))
+
+        # Stitch: always merge
+        stitch_yes = _mock_llm_response({"merge": True, "reason": "continuation"})
+
+        provider = AsyncMock()
+        provider.chat = AsyncMock(
+            side_effect=[*window_responses] + [stitch_yes] * 10
+        )
+
+        planner = _planner_with_provider(provider)
+        result = await planner.plan(
+            chunks=chunks,
+            analyses=analyses,
+            embeddings=embeddings,
+            title="single-theme video",
+        )
+
+        assert result.stats["tier_used"] == "windowed"
+        # All chunks collapsed into one bucket
+        assert {a.bucket_id for a in result.assignments} == {0}
+
+
+# --- Phase 4: embedding-only Layer 3 fallback -----------------------------
+
+
+class TestEmbeddingOnlyLayer:
+    def test_zero_signal_returns_none(self):
+        # All-zero boundary hints → no actionable signal → None
+        result = _run_layer3_embedding_only(
+            boundary_hints=[0.0] * 10,
+            size_unit="duration_sec",
+            sizes=[60.0] * 10,
+            n=10,
+        )
+        assert result is None
+
+    def test_peaks_produce_bucket_boundaries(self):
+        # 10 chunks, strong peaks at indices 3 and 7; total 10 min → k≈1,
+        # raised to floor _EMBEDDING_MIN_BUCKETS = 3 → expect 3 buckets.
+        boundary_hints = [0.0, 0.1, 0.1, 0.9, 0.2, 0.1, 0.1, 0.95, 0.1, 0.1]
+        result = _run_layer3_embedding_only(
+            boundary_hints=boundary_hints,
+            size_unit="duration_sec",
+            sizes=[60.0] * 10,
+            n=10,
+        )
+        assert result is not None
+        distinct = sorted({a.bucket_id for a in result})
+        assert distinct == [0, 1, 2]
+        # Boundary at idx 3 → bucket flip; at idx 7 → another flip
+        ids = [a.bucket_id for a in result]
+        assert ids[2] == 0 and ids[3] == 1  # flip at 3
+        assert ids[6] == 1 and ids[7] == 2  # flip at 7
+        # No LLM means no topic names
+        assert all(a.bucket_topic is None for a in result)
+
+    def test_target_bucket_count_scales_with_total_size(self):
+        # 60 min video, target≈540s per bucket → ~6.7 → 7 buckets.
+        n = 60
+        boundary_hints = [(i / n) for i in range(n)]  # monotonically rising
+        result = _run_layer3_embedding_only(
+            boundary_hints=boundary_hints,
+            size_unit="duration_sec",
+            sizes=[60.0] * n,
+            n=n,
+        )
+        assert result is not None
+        distinct = {a.bucket_id for a in result}
+        # Should pick a count in [3, 12]; for 60 min target we expect ~7
+        assert 3 <= len(distinct) <= 12
+
+    @pytest.mark.asyncio
+    async def test_llm_failure_routes_to_embedding_then_falls_through_to_per_chunk(self):
+        # Provider always errors. Boundary signal is non-trivial so Layer 3
+        # should succeed and tier_used == "embedding_only".
+        n = 30
+        chunks = [_huge_chunk(i) for i in range(n)]
+        analyses = [_analyzed(f"T{i}", f"Summary {i}") for i in range(n)]
+        # Synthesize embeddings with a clear topic-shift around index 15
+        embeddings: list[list[float]] = []
+        for i in range(n):
+            if i < 15:
+                embeddings.append([1.0, 0.0])
+            else:
+                embeddings.append([0.0, 1.0])
+
+        provider = AsyncMock()
+        provider.chat = AsyncMock(side_effect=Exception("LLM unreachable"))
+
+        planner = _planner_with_provider(provider)
+        result = await planner.plan(
+            chunks=chunks,
+            analyses=analyses,
+            embeddings=embeddings,
+            title="vid",
+        )
+        assert result.stats["tier_used"] == "embedding_only"
+        # Error preserved so operators can see WHY LLM was skipped
+        assert result.stats["error"].startswith("llm_error:")
+        # Distinct buckets in [3, 12]
+        distinct = {a.bucket_id for a in result.assignments}
+        assert 3 <= len(distinct) <= 12
+
+    @pytest.mark.asyncio
+    async def test_no_signal_falls_through_to_per_chunk(self):
+        # Provider errors AND embeddings are zero vectors → Layer 4 floor.
+        n = 30
+        chunks = [_huge_chunk(i) for i in range(n)]
+        analyses = [_analyzed(f"T{i}", f"Summary {i}") for i in range(n)]
+        embeddings = [[0.0, 0.0] for _ in range(n)]  # zero vectors
+
+        provider = AsyncMock()
+        provider.chat = AsyncMock(side_effect=Exception("LLM down"))
+
+        planner = _planner_with_provider(provider)
+        result = await planner.plan(
+            chunks=chunks,
+            analyses=analyses,
+            embeddings=embeddings,
+            title="vid",
+        )
+        assert result.stats["tier_used"] == "fallback"
+        # Each chunk gets its own bucket
+        assert [a.bucket_id for a in result.assignments] == list(range(n))

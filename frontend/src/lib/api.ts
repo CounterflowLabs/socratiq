@@ -103,6 +103,21 @@ export interface SourceEmbed {
   reason?: string | null;
 }
 
+export interface SectionPlannerStats {
+  tier_used: "skeleton" | "windowed" | "embedding_only" | "fallback";
+  planner_version: string;
+  bucket_count: number;
+  avg_chunks_per_bucket: number;
+  min_chunks_per_bucket: number;
+  max_chunks_per_bucket: number;
+  topic_uniqueness: number;
+  planning_duration_ms: number;
+  llm_input_tokens: number;
+  llm_output_tokens: number;
+  short_circuit: boolean;
+  error: string | null;
+}
+
 export interface SourceResponse {
   id: string;
   type: string;
@@ -341,6 +356,46 @@ export async function listCourses(): Promise<{
 
 export async function getCourse(id: string): Promise<CourseDetailResponse> {
   const res = await apiFetch(`${API_BASE}/courses/${id}`);
+  if (!res.ok) throw await responseError(res);
+  return res.json();
+}
+
+export interface SectionMergeResponse {
+  surviving_section_id: string;
+  removed_section_id: string;
+  chunks_reassigned: number;
+}
+
+export interface SectionSplitResponse {
+  original_section_id: string;
+  new_section_id: string;
+  chunks_in_original: number;
+  chunks_in_new: number;
+}
+
+export async function mergeSectionWithNext(
+  sectionId: string,
+): Promise<SectionMergeResponse> {
+  const res = await apiFetch(
+    `${API_BASE}/courses/sections/${sectionId}/merge-next`,
+    { method: "POST" },
+  );
+  if (!res.ok) throw await responseError(res);
+  return res.json();
+}
+
+export async function splitSection(
+  sectionId: string,
+  splitAtChunkIndex: number,
+): Promise<SectionSplitResponse> {
+  const res = await apiFetch(
+    `${API_BASE}/courses/sections/${sectionId}/split`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ split_at_chunk_index: splitAtChunkIndex }),
+    },
+  );
   if (!res.ok) throw await responseError(res);
   return res.json();
 }

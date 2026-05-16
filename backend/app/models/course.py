@@ -86,6 +86,31 @@ class RegenerateSectionLessonResponse(BaseModel):
     status: str
 
 
+class SectionSplitRequest(BaseModel):
+    """Body for POST /sections/{id}/split.
+
+    ``split_at_chunk_index`` is the position of the first chunk that moves
+    into the newly-created section (1-based by chunk count, i.e. value 1
+    keeps one chunk in the original).
+    """
+    split_at_chunk_index: int = Field(..., ge=1)
+
+
+class SectionMergeResponse(BaseModel):
+    """Result of POST /sections/{id}/merge-next."""
+    surviving_section_id: uuid.UUID
+    removed_section_id: uuid.UUID
+    chunks_reassigned: int
+
+
+class SectionSplitResponse(BaseModel):
+    """Result of POST /sections/{id}/split."""
+    original_section_id: uuid.UUID
+    new_section_id: uuid.UUID
+    chunks_in_original: int
+    chunks_in_new: int
+
+
 class CourseDetailResponse(BaseModel):
     """Response model for a course with sections."""
     id: uuid.UUID

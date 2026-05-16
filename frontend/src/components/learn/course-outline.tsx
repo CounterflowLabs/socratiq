@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+
 import { IcExercise, IcPanelLeftClose } from "@/components/icons";
 import { Eyebrow } from "@/components/ui/eyebrow";
 import { Ornament } from "@/components/ui/ornament";
@@ -20,6 +22,11 @@ interface CourseOutlineProps {
   lessonWaypoints?: LessonWaypoint[];
   onSelectWaypoint?: (waypointId: string) => void;
   onCollapse?: () => void;
+  // Manual-override hooks. When omitted, the merge/split affordances are
+  // hidden — keeps read-only callers (e.g. preview, embedded outlines)
+  // visually unchanged.
+  onMergeWithNext?: (section: SectionResponse) => Promise<void> | void;
+  onSplit?: (section: SectionResponse) => Promise<void> | void;
 }
 
 function formatTimestamp(seconds: number): string {
@@ -35,7 +42,35 @@ export default function CourseOutline({
   lessonWaypoints = [],
   onSelectWaypoint,
   onCollapse,
+  onMergeWithNext,
+  onSplit,
 }: CourseOutlineProps) {
+  // Per-section "operation in progress" guard so a slow merge call doesn't
+  // let the user double-fire and end up with confusing partial state.
+  const [busySectionId, setBusySectionId] = useState<string | null>(null);
+
+  const handleMerge = async (section: SectionResponse) => {
+    if (!onMergeWithNext || busySectionId) return;
+    setBusySectionId(section.id);
+    try {
+      await onMergeWithNext(section);
+    } finally {
+      setBusySectionId(null);
+    }
+  };
+
+  const handleSplit = async (section: SectionResponse) => {
+    if (!onSplit || busySectionId) return;
+    setBusySectionId(section.id);
+    try {
+      await onSplit(section);
+    } finally {
+      setBusySectionId(null);
+    }
+  };
+
+  const overridesEnabled = Boolean(onMergeWithNext || onSplit);
+
   return (
     <aside
       style={{
@@ -95,53 +130,108 @@ export default function CourseOutline({
       >
         {sections.map((section, index) => {
           const isActive = section.id === currentSectionId;
+          const isLast = index === sections.length - 1;
+          const isBusy = busySectionId === section.id;
           return (
-            <button
+            <div
               key={section.id}
-              type="button"
-              onClick={() => onSelectSection(section)}
-              className="nav-item"
+              className="outline-row"
               style={{
-                fontSize: 13,
-                paddingLeft: 16,
                 position: "relative",
-                color: isActive ? "var(--ink)" : "var(--ink-2)",
-                fontWeight: isActive ? 500 : 400,
+                display: "flex",
+                alignItems: "stretch",
                 background: isActive ? "var(--surface-2)" : "transparent",
-                alignItems: "flex-start",
-                gap: 10,
-                whiteSpace: "normal",
+                borderRadius: 6,
+                opacity: isBusy ? 0.5 : 1,
+                pointerEvents: isBusy ? "none" : undefined,
               }}
             >
-              {isActive ? (
-                <span
-                  style={{
-                    position: "absolute",
-                    left: 4,
-                    top: 12,
-                    bottom: 12,
-                    width: 2,
-                    background: "var(--accent)",
-                    borderRadius: 1,
-                  }}
-                />
-              ) : null}
-              <span
-                className="mono num"
-                style={{ fontSize: 11, color: "var(--ink-4)", marginTop: 2 }}
-              >
-                L{String(index + 1).padStart(2, "0")}
-              </span>
-              <span
+              <button
+                type="button"
+                onClick={() => onSelectSection(section)}
+                className="nav-item"
                 style={{
-                  display: "block",
-                  fontFamily: "var(--serif)",
-                  lineHeight: 1.35,
+                  flex: 1,
+                  fontSize: 13,
+                  paddingLeft: 16,
+                  paddingRight: overridesEnabled ? 56 : undefined,
+                  position: "relative",
+                  color: isActive ? "var(--ink)" : "var(--ink-2)",
+                  fontWeight: isActive ? 500 : 400,
+                  background: "transparent",
+                  alignItems: "flex-start",
+                  gap: 10,
+                  whiteSpace: "normal",
                 }}
               >
-                {section.title}
-              </span>
-            </button>
+                {isActive ? (
+                  <span
+                    style={{
+                      position: "absolute",
+                      left: 4,
+                      top: 12,
+                      bottom: 12,
+                      width: 2,
+                      background: "var(--accent)",
+                      borderRadius: 1,
+                    }}
+                  />
+                ) : null}
+                <span
+                  className="mono num"
+                  style={{ fontSize: 11, color: "var(--ink-4)", marginTop: 2 }}
+                >
+                  L{String(index + 1).padStart(2, "0")}
+                </span>
+                <span
+                  style={{
+                    display: "block",
+                    fontFamily: "var(--serif)",
+                    lineHeight: 1.35,
+                  }}
+                >
+                  {section.title}
+                </span>
+              </button>
+              {overridesEnabled ? (
+                <div
+                  className="outline-row-actions"
+                  style={{
+                    position: "absolute",
+                    right: 6,
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    display: "flex",
+                    gap: 2,
+                  }}
+                >
+                  {onSplit ? (
+                    <button
+                      type="button"
+                      title="在此处拆分章节"
+                      aria-label="拆分章节"
+                      onClick={() => handleSplit(section)}
+                      className="btn btn-ghost btn-icon btn-sm"
+                      style={{ color: "var(--ink-3)" }}
+                    >
+                      ⫶
+                    </button>
+                  ) : null}
+                  {onMergeWithNext && !isLast ? (
+                    <button
+                      type="button"
+                      title="并入下一节"
+                      aria-label="并入下一节"
+                      onClick={() => handleMerge(section)}
+                      className="btn btn-ghost btn-icon btn-sm"
+                      style={{ color: "var(--ink-3)" }}
+                    >
+                      ⤓
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
           );
         })}
 

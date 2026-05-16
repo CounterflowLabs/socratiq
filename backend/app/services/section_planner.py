@@ -1,20 +1,22 @@
 """SectionPlanner — groups consecutive chunks into topic-coherent sections.
 
-Implements Phase 1 of docs/design/section-planning.md:
-  - Layer 1: single-pass skeleton via LLM
-  - Layer 3: per-chunk fallback (zero-LLM, equals legacy behavior)
+Implements docs/design/section-planning.md across all four tiers:
 
-Layer 2 (windowed-skeleton) is reserved for Phase 2; when the Layer 1 input
-exceeds the size budget, we currently fall through to Layer 3.
+  - Layer 1 ("skeleton")        — single-pass LLM call
+  - Layer 2 ("windowed")        — windowed-skeleton + LLM seam stitching
+                                  (kicks in when input exceeds skeleton budget)
+  - Layer 3 ("embedding_only")  — pure TextTiling peak detection, zero LLM
+  - Layer 4 ("fallback")        — per-chunk (bucket_id = chunk_index)
 
 Embeddings are used to compute a per-chunk ``boundary_hint`` (cosine distance
-from the prior chunk, TextTiling-smoothed, [0,1]-normalized) that goes into
-the prompt as a soft prior for the LLM. The planner never decides buckets
-from embeddings alone in this phase.
+from the prior chunk, TextTiling-smoothed, [0,1]-normalized). Layers 1 and 2
+feed it to the LLM as a soft prior; Layer 3 uses it as the bucketing signal
+itself when no LLM route is available.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
@@ -24,22 +26,28 @@ from pathlib import Path
 
 from app.prompt_template import load_prompt
 from app.services.content_analyzer import AnalyzedChunk
-from app.services.llm.base import LLMError, UnifiedMessage
+from app.services.llm.base import LLMError, LLMProvider, UnifiedMessage
 from app.services.llm.router import ModelRouter, TaskType
 from app.tools.extractors.base import RawContentChunk
 
 logger = logging.getLogger(__name__)
 
 _PROMPT = load_prompt(Path(__file__).parent / "prompts" / "section_planning.md")
+_STITCH_PROMPT = load_prompt(Path(__file__).parent / "prompts" / "section_stitch.md")
 
 # Stamp on every plan output. Bump when prompt / model / validator changes
 # materially so historical sources can be diffed by planner generation.
-PLANNER_VERSION = "v1"
+PLANNER_VERSION = "v2"
 
 # Skeleton input size budget. Once a serialized chunk_inputs array crosses
-# this we fall back instead of risking a truncated LLM context. Phase 2's
-# windowed-skeleton fills the gap above this threshold.
+# this we route to Layer 2 (windowed-skeleton) instead of risking a truncated
+# LLM context.
 _SKELETON_BUDGET_BYTES = 64 * 1024
+
+# Windowed-skeleton geometry (Layer 2).
+_WINDOW_SIZE = 30           # chunks per window
+_WINDOW_OVERLAP = 3         # chunks shared with the previous window
+_WINDOW_STEP = _WINDOW_SIZE - _WINDOW_OVERLAP
 
 # Short-circuit thresholds — below these, a single bucket is the honest answer.
 _SHORT_CIRCUIT_DURATION_SEC = 480.0   # 8 minutes
@@ -48,6 +56,12 @@ _SHORT_CIRCUIT_WORD_COUNT = 2000
 # Hard cap on bucket count. The validator clamps overshoots by merging the
 # tail buckets — long videos still get coarse granularity.
 _MAX_BUCKETS = 12
+
+# Layer 3 (embedding-only) bucketing parameters.
+_EMBEDDING_BUCKET_TARGET_SEC = 540.0   # ~9-minute buckets (midpoint of 5–15)
+_EMBEDDING_BUCKET_TARGET_WORDS = 2750  # midpoint of 1500–4000
+_EMBEDDING_MIN_BUCKETS = 3
+_EMBEDDING_MAX_BUCKETS = 12
 
 
 @dataclass
@@ -82,9 +96,14 @@ class SectionPlanner:
     ) -> PlanResult:
         """Return one BucketAssignment per chunk, same order and length.
 
-        Any LLM or parse failure routes to the per-chunk fallback so the
-        caller never raises out of section planning. The pipeline must
-        survive STRUCTURE_PLANNING route misconfiguration silently.
+        Tier routing (degrades on failure):
+          Layer 1 skeleton  → Layer 2 windowed  → Layer 3 embedding-only
+                            → Layer 4 per-chunk
+
+        Layer 1 is the default. Layer 2 takes over when serialized chunk
+        inputs exceed the skeleton budget. Layer 3 catches any LLM failure
+        when embeddings carry usable signal. Layer 4 is the unconditional
+        floor — never raises out of the planner.
         """
         started = time.perf_counter()
         n = len(chunks)
@@ -143,116 +162,503 @@ class SectionPlanner:
             boundary_hints = [0.0] * n
 
         chunk_inputs = _build_chunk_inputs(analyses, boundary_hints, size_unit, sizes)
-        serialized = json.dumps(chunk_inputs, ensure_ascii=False)
-        if len(serialized.encode("utf-8")) > _SKELETON_BUDGET_BYTES:
-            logger.info(
-                "SectionPlanner: skeleton budget exceeded (%d bytes); falling back",
-                len(serialized.encode("utf-8")),
-            )
-            return PlanResult(
-                assignments=_fallback_assignments(n),
-                stats=_build_stats(
-                    tier="fallback",
-                    assignments=_fallback_assignments(n),
-                    elapsed_ms=_elapsed_ms(started),
-                    error="skeleton_budget_exceeded",
-                ),
-            )
+        serialized_size = len(
+            json.dumps(chunk_inputs, ensure_ascii=False).encode("utf-8")
+        )
+        use_windowed = serialized_size > _SKELETON_BUDGET_BYTES
 
+        provider: LLMProvider | None
+        provider_error: str | None = None
         try:
             provider = await self._get_provider()
         except LLMError as exc:
             logger.warning("SectionPlanner: no provider available: %s", exc)
-            return PlanResult(
-                assignments=_fallback_assignments(n),
-                stats=_build_stats(
-                    tier="fallback",
-                    assignments=_fallback_assignments(n),
-                    elapsed_ms=_elapsed_ms(started),
-                    error=f"no_provider:{exc}",
-                ),
-            )
+            provider = None
+            provider_error = f"no_provider:{exc}"
 
-        system_prompt = _PROMPT.render(title=title or "Untitled")
-        user_message = "Chunks (JSON):\n" + serialized
-        messages = [
-            UnifiedMessage(role="system", content=system_prompt),
-            UnifiedMessage(role="user", content=user_message),
-        ]
+        total_input_tokens = 0
+        total_output_tokens = 0
 
-        try:
-            response = await provider.chat(messages, max_tokens=4096, temperature=0.2)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("SectionPlanner: LLM call failed: %s", exc)
-            return PlanResult(
-                assignments=_fallback_assignments(n),
-                stats=_build_stats(
-                    tier="fallback",
-                    assignments=_fallback_assignments(n),
-                    elapsed_ms=_elapsed_ms(started),
-                    error=f"llm_error:{type(exc).__name__}",
-                ),
-            )
+        # --- Layer 1 / Layer 2 ---------------------------------------------
+        if provider is not None:
+            if use_windowed:
+                logger.info(
+                    "SectionPlanner: skeleton budget exceeded (%d bytes); "
+                    "routing to Layer 2 windowed-skeleton",
+                    serialized_size,
+                )
+                validated, error, tokens = await self._run_layer2_windowed(
+                    provider, chunk_inputs, title, n
+                )
+                tier = "windowed"
+            else:
+                validated, error, tokens = await self._run_layer1_skeleton(
+                    provider, chunk_inputs, title, n
+                )
+                tier = "skeleton"
 
-        response_text = "".join(
-            b.text or "" for b in response.content if b.type == "text"
+            total_input_tokens += tokens[0]
+            total_output_tokens += tokens[1]
+
+            if validated is not None:
+                return PlanResult(
+                    assignments=validated,
+                    stats=_build_stats(
+                        tier=tier,
+                        assignments=validated,
+                        elapsed_ms=_elapsed_ms(started),
+                        llm_input_tokens=total_input_tokens,
+                        llm_output_tokens=total_output_tokens,
+                    ),
+                )
+            llm_error = error
+        else:
+            llm_error = provider_error or "no_provider"
+
+        # --- Layer 3 embedding-only -----------------------------------------
+        embedding_result = _run_layer3_embedding_only(
+            boundary_hints=boundary_hints,
+            size_unit=size_unit,
+            sizes=sizes,
+            n=n,
         )
-        input_tokens = response.usage.input_tokens if response.usage else 0
-        output_tokens = response.usage.output_tokens if response.usage else 0
-
-        parsed = _parse_response_json(response_text)
-        if parsed is None:
+        if embedding_result is not None:
             return PlanResult(
-                assignments=_fallback_assignments(n),
+                assignments=embedding_result,
                 stats=_build_stats(
-                    tier="fallback",
-                    assignments=_fallback_assignments(n),
+                    tier="embedding_only",
+                    assignments=embedding_result,
                     elapsed_ms=_elapsed_ms(started),
-                    error="json_parse_failed",
-                    llm_input_tokens=input_tokens,
-                    llm_output_tokens=output_tokens,
+                    llm_input_tokens=total_input_tokens,
+                    llm_output_tokens=total_output_tokens,
+                    error=llm_error,
                 ),
             )
 
-        validated = _validate_and_normalize(parsed, n)
-        if validated is None:
-            return PlanResult(
-                assignments=_fallback_assignments(n),
-                stats=_build_stats(
-                    tier="fallback",
-                    assignments=_fallback_assignments(n),
-                    elapsed_ms=_elapsed_ms(started),
-                    error="validation_failed",
-                    llm_input_tokens=input_tokens,
-                    llm_output_tokens=output_tokens,
-                ),
-            )
-
+        # --- Layer 4 per-chunk fallback ------------------------------------
+        fallback = _fallback_assignments(n)
         return PlanResult(
-            assignments=validated,
+            assignments=fallback,
             stats=_build_stats(
-                tier="skeleton",
-                assignments=validated,
+                tier="fallback",
+                assignments=fallback,
                 elapsed_ms=_elapsed_ms(started),
-                llm_input_tokens=input_tokens,
-                llm_output_tokens=output_tokens,
+                llm_input_tokens=total_input_tokens,
+                llm_output_tokens=total_output_tokens,
+                error=llm_error or "embedding_only_unavailable",
             ),
         )
 
-    async def _get_provider(self):
+    async def _get_provider(self) -> LLMProvider:
         """Resolve STRUCTURE_PLANNING with a one-step fallback to EVALUATION.
 
         Until operators provision a dedicated STRUCTURE_PLANNING route, lean
         on the fast/cheap tier that EVALUATION already points at. Both
-        misses surface as LLMError so the caller hits Layer 3.
+        misses surface as LLMError so the caller can degrade gracefully.
         """
         try:
             return await self._router.get_provider(TaskType.STRUCTURE_PLANNING)
         except LLMError:
             return await self._router.get_provider(TaskType.EVALUATION)
 
+    async def _run_layer1_skeleton(
+        self,
+        provider: LLMProvider,
+        chunk_inputs: list[dict],
+        title: str,
+        expected_n: int,
+    ) -> tuple[list[BucketAssignment] | None, str | None, tuple[int, int]]:
+        """Single-pass skeleton. Returns (assignments | None, error | None, (in_toks, out_toks))."""
+        serialized = json.dumps(chunk_inputs, ensure_ascii=False)
+        system_prompt = _PROMPT.render(title=title or "Untitled")
+        messages = [
+            UnifiedMessage(role="system", content=system_prompt),
+            UnifiedMessage(role="user", content="Chunks (JSON):\n" + serialized),
+        ]
+
+        try:
+            response = await provider.chat(messages, max_tokens=4096, temperature=0.2)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("SectionPlanner: Layer 1 LLM call failed: %s", exc)
+            return None, f"llm_error:{type(exc).__name__}", (0, 0)
+
+        response_text = "".join(
+            b.text or "" for b in response.content if b.type == "text"
+        )
+        in_toks = response.usage.input_tokens if response.usage else 0
+        out_toks = response.usage.output_tokens if response.usage else 0
+
+        parsed = _parse_response_json(response_text)
+        if parsed is None:
+            return None, "json_parse_failed", (in_toks, out_toks)
+
+        validated = _validate_and_normalize(parsed, expected_n)
+        if validated is None:
+            return None, "validation_failed", (in_toks, out_toks)
+
+        return validated, None, (in_toks, out_toks)
+
+    async def _run_layer2_windowed(
+        self,
+        provider: LLMProvider,
+        chunk_inputs: list[dict],
+        title: str,
+        expected_n: int,
+    ) -> tuple[list[BucketAssignment] | None, str | None, tuple[int, int]]:
+        """Windowed skeleton with LLM seam stitching.
+
+        Each window covers ``_WINDOW_SIZE`` chunks and overlaps the previous
+        window by ``_WINDOW_OVERLAP``. The overlap region is owned by the
+        LATER window — earlier windows are truncated at ``end - overlap`` so
+        each chunk appears in the final output exactly once.
+
+        After concatenation with monotonically increasing bucket-id offsets,
+        a per-seam LLM merge pass collapses adjacent buckets that describe
+        the same theme (the design's "窗口缝合方案"). Failed seam calls
+        leave the boundary intact — a false split is the safer default.
+        """
+        windows = _build_window_spans(expected_n)
+        if len(windows) <= 1:
+            # Degenerates to a single window — run Layer 1 directly.
+            return await self._run_layer1_skeleton(
+                provider, chunk_inputs, title, expected_n
+            )
+
+        async def _gen_window(span: tuple[int, int]):
+            start, end = span
+            # Renumber the per-window idx so the prompt's monotonicity rule
+            # is local to this window. The validator also operates on this
+            # local indexing.
+            window_inputs = [
+                {**ci, "idx": j} for j, ci in enumerate(chunk_inputs[start:end])
+            ]
+            return await self._run_layer1_skeleton(
+                provider, window_inputs, title, expected_n=end - start
+            )
+
+        window_results = await asyncio.gather(
+            *(_gen_window(span) for span in windows),
+            return_exceptions=False,
+        )
+
+        # Token accounting first — even on failure we report what we spent.
+        in_toks = sum(r[2][0] for r in window_results)
+        out_toks = sum(r[2][1] for r in window_results)
+
+        if any(r[0] is None for r in window_results):
+            errors = [r[1] for r in window_results if r[1]]
+            return None, f"windowed_failed:{errors[0] if errors else 'unknown'}", (in_toks, out_toks)
+
+        # Concatenate windows, truncating each non-final window at its
+        # non-overlap boundary. The later window owns the overlap chunks.
+        combined: list[BucketAssignment] = []
+        bucket_offset = 0
+        # Track where each window's contribution starts in the combined list,
+        # so the stitching pass can find seam positions.
+        window_starts_in_combined: list[int] = []
+        for w_idx, (span, result) in enumerate(zip(windows, window_results)):
+            start, end = span
+            window_assignments = result[0]
+            assert window_assignments is not None  # checked above
+
+            if w_idx + 1 < len(windows):
+                # Drop the overlap tail — next window owns chunks[end-overlap..end)
+                usable_len = (end - _WINDOW_OVERLAP) - start
+            else:
+                usable_len = end - start
+
+            window_starts_in_combined.append(len(combined))
+            for a in window_assignments[:usable_len]:
+                combined.append(
+                    BucketAssignment(
+                        bucket_id=a.bucket_id + bucket_offset,
+                        bucket_topic=a.bucket_topic,
+                    )
+                )
+
+            # Next window starts a fresh bucket numbering above this one's max.
+            if combined:
+                bucket_offset = max(a.bucket_id for a in combined) + 1
+
+        if len(combined) != expected_n:
+            logger.warning(
+                "SectionPlanner: windowed concat length mismatch %d != %d",
+                len(combined), expected_n,
+            )
+            return None, "windowed_concat_length_mismatch", (in_toks, out_toks)
+
+        # Stitch seams: for each window boundary, ask LLM whether the bucket
+        # ending right before the seam should merge with the bucket starting
+        # at the seam. The two buckets always differ at this point because
+        # bucket_offset bumped on window transition.
+        stitched, stitch_in_toks, stitch_out_toks = await self._stitch_seams(
+            provider=provider,
+            combined=combined,
+            chunk_inputs=chunk_inputs,
+            window_starts=window_starts_in_combined,
+            title=title,
+        )
+        in_toks += stitch_in_toks
+        out_toks += stitch_out_toks
+
+        # Hard cap: even after stitching, never exceed _MAX_BUCKETS.
+        stitched = _clamp_bucket_count(stitched, _MAX_BUCKETS)
+        return stitched, None, (in_toks, out_toks)
+
+    async def _stitch_seams(
+        self,
+        *,
+        provider: LLMProvider,
+        combined: list[BucketAssignment],
+        chunk_inputs: list[dict],
+        window_starts: list[int],
+        title: str,
+    ) -> tuple[list[BucketAssignment], int, int]:
+        """LLM-judged merge at each window seam.
+
+        ``window_starts`` lists the index in ``combined`` where each window
+        contributes its first chunk; seams are at positions [1:] (the very
+        first window has no seam in front of it). We process seams in order,
+        and after each merge the surviving bucket ids stay valid for the
+        remaining seams (smaller ids unaffected).
+        """
+        in_toks_total = 0
+        out_toks_total = 0
+        if len(window_starts) <= 1:
+            return combined, 0, 0
+
+        result = list(combined)
+        for seam_pos in window_starts[1:]:
+            # Find adjacent bucket ids around this seam in the CURRENT result.
+            # seam_pos may be inside a bucket if a previous merge collapsed
+            # things, in which case there's nothing to do for this seam.
+            if seam_pos <= 0 or seam_pos >= len(result):
+                continue
+            prev_bid = result[seam_pos - 1].bucket_id
+            next_bid = result[seam_pos].bucket_id
+            if prev_bid == next_bid:
+                continue  # already merged by a prior seam decision
+
+            decision, in_toks, out_toks = await self._llm_should_merge_seam(
+                provider=provider,
+                topic_a=result[seam_pos - 1].bucket_topic or "(unnamed)",
+                topic_b=result[seam_pos].bucket_topic or "(unnamed)",
+                summaries_a=[
+                    ci.get("summary", "")
+                    for ci in chunk_inputs[max(0, seam_pos - _WINDOW_OVERLAP):seam_pos]
+                ],
+                summaries_b=[
+                    ci.get("summary", "")
+                    for ci in chunk_inputs[seam_pos:seam_pos + _WINDOW_OVERLAP]
+                ],
+                title=title,
+            )
+            in_toks_total += in_toks
+            out_toks_total += out_toks
+            if decision:
+                result = _merge_seam_buckets(result, next_bid, prev_bid)
+
+        return result, in_toks_total, out_toks_total
+
+    async def _llm_should_merge_seam(
+        self,
+        *,
+        provider: LLMProvider,
+        topic_a: str,
+        topic_b: str,
+        summaries_a: list[str],
+        summaries_b: list[str],
+        title: str,
+    ) -> tuple[bool, int, int]:
+        """Ask the LLM whether the two adjacent buckets describe one theme.
+
+        Returns (merge_decision, in_tokens, out_tokens). On any failure the
+        decision defaults to ``False`` (keep boundary) — false-split is the
+        cheaper mistake than false-merge.
+        """
+        sa = "\n".join(f"    - {s}" for s in summaries_a) or "    - (none)"
+        sb = "\n".join(f"    - {s}" for s in summaries_b) or "    - (none)"
+        prompt = _STITCH_PROMPT.render(
+            title=title or "Untitled",
+            topic_a=topic_a,
+            topic_b=topic_b,
+            summaries_a=sa,
+            summaries_b=sb,
+        )
+        messages = [UnifiedMessage(role="system", content=prompt)]
+        try:
+            response = await provider.chat(messages, max_tokens=200, temperature=0.0)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("SectionPlanner: stitch LLM call failed: %s", exc)
+            return False, 0, 0
+        text = "".join(b.text or "" for b in response.content if b.type == "text")
+        in_toks = response.usage.input_tokens if response.usage else 0
+        out_toks = response.usage.output_tokens if response.usage else 0
+        parsed = _parse_response_json(text)
+        if not isinstance(parsed, dict):
+            return False, in_toks, out_toks
+        decision = parsed.get("merge")
+        return bool(decision), in_toks, out_toks
+
 
 # --- helpers ---------------------------------------------------------------
+
+
+def _build_window_spans(n: int) -> list[tuple[int, int]]:
+    """Compute (start, end) windows of size ``_WINDOW_SIZE`` overlapping the
+    previous window by ``_WINDOW_OVERLAP`` chunks.
+
+    For n ≤ _WINDOW_SIZE the caller short-circuits (single window). The last
+    window always reaches ``n`` exactly; we tolerate a final stub window
+    smaller than ``_WINDOW_SIZE`` rather than padding.
+    """
+    if n <= 0:
+        return []
+    if n <= _WINDOW_SIZE:
+        return [(0, n)]
+    spans: list[tuple[int, int]] = []
+    start = 0
+    while True:
+        end = min(start + _WINDOW_SIZE, n)
+        spans.append((start, end))
+        if end == n:
+            break
+        next_start = end - _WINDOW_OVERLAP
+        # Guard against degenerate parameters that would not advance.
+        if next_start <= start:
+            spans.append((end, n))
+            break
+        start = next_start
+    return spans
+
+
+def _merge_seam_buckets(
+    assignments: list[BucketAssignment],
+    seam_bid: int,
+    target_bid: int,
+) -> list[BucketAssignment]:
+    """Collapse bucket ``seam_bid`` into ``target_bid`` and shift larger ids down.
+
+    All chunks that had ``seam_bid`` adopt ``target_bid`` AND ``target_bid``'s
+    topic (so per-bucket topic stays consistent). All ids strictly greater
+    than ``seam_bid`` shift down by one to keep ids contiguous.
+    """
+    target_topic = next(
+        (a.bucket_topic for a in assignments if a.bucket_id == target_bid),
+        None,
+    )
+    new: list[BucketAssignment] = []
+    for a in assignments:
+        if a.bucket_id == seam_bid:
+            new.append(BucketAssignment(bucket_id=target_bid, bucket_topic=target_topic))
+        elif a.bucket_id > seam_bid:
+            new.append(
+                BucketAssignment(bucket_id=a.bucket_id - 1, bucket_topic=a.bucket_topic)
+            )
+        else:
+            new.append(a)
+    return new
+
+
+def _clamp_bucket_count(
+    assignments: list[BucketAssignment],
+    cap: int,
+) -> list[BucketAssignment]:
+    """Cap distinct bucket count at ``cap`` by merging tail buckets into
+    bucket ``cap - 1``. Idempotent when already under the cap."""
+    distinct = sorted({a.bucket_id for a in assignments})
+    if len(distinct) <= cap:
+        return assignments
+    survivor = cap - 1
+    new: list[BucketAssignment] = []
+    survivor_topic: str | None = None
+    for a in assignments:
+        new_id = min(a.bucket_id, survivor)
+        if new_id == survivor and survivor_topic is None and a.bucket_topic:
+            survivor_topic = a.bucket_topic
+        new.append(BucketAssignment(bucket_id=new_id, bucket_topic=a.bucket_topic))
+    # Normalize topic for the merged tail so it reads consistently.
+    return [
+        BucketAssignment(
+            bucket_id=a.bucket_id,
+            bucket_topic=(survivor_topic if a.bucket_id == survivor else a.bucket_topic),
+        )
+        for a in new
+    ]
+
+
+def _run_layer3_embedding_only(
+    *,
+    boundary_hints: list[float],
+    size_unit: str,
+    sizes: list[float],
+    n: int,
+) -> list[BucketAssignment] | None:
+    """TextTiling-style peak-detection bucketing without LLM.
+
+    Computes a target bucket count from the resource's total size, picks the
+    ``K-1`` strongest boundary peaks (avoiding consecutive picks), then walks
+    the chunk sequence assigning a fresh bucket id at each chosen peak.
+    Topic is ``None`` everywhere — no LLM means no human-readable names.
+
+    Returns ``None`` when the boundary signal is degenerate (all zeros) so
+    the caller can drop to Layer 4 per-chunk fallback instead of producing
+    arbitrary equal-sized buckets.
+    """
+    if n <= 1:
+        return None
+    if not boundary_hints or all(h <= 1e-9 for h in boundary_hints):
+        # Zero-vector embeddings or single-chunk source: no signal to act on.
+        return None
+
+    total_size = sum(sizes) if sizes else 0.0
+    if size_unit == "duration_sec":
+        target = total_size / _EMBEDDING_BUCKET_TARGET_SEC
+    else:
+        target = total_size / max(1.0, _EMBEDDING_BUCKET_TARGET_WORDS)
+    k = int(round(target))
+    k = max(_EMBEDDING_MIN_BUCKETS, min(_EMBEDDING_MAX_BUCKETS, k))
+    # Need k-1 boundary picks across positions 1..n-1.
+    k = min(k, n)
+    if k <= 1:
+        return None
+
+    # Score candidate boundary positions (index 0 is excluded — boundary_hint
+    # for the first chunk is the "no prior" floor). We pick top (k-1) peaks
+    # by score, then de-duplicate adjacency to avoid clustering picks.
+    scored = sorted(
+        (
+            (boundary_hints[i], i)
+            for i in range(1, n)
+            if boundary_hints[i] > 0.0
+        ),
+        reverse=True,
+    )
+    if not scored:
+        return None
+
+    picks: list[int] = []
+    for _score, idx in scored:
+        if any(abs(idx - p) < 2 for p in picks):
+            continue
+        picks.append(idx)
+        if len(picks) >= k - 1:
+            break
+    picks.sort()
+
+    if not picks:
+        return None
+
+    assignments: list[BucketAssignment] = []
+    current_bucket = 0
+    pick_set = set(picks)
+    for i in range(n):
+        if i in pick_set:
+            current_bucket += 1
+        assignments.append(
+            BucketAssignment(bucket_id=current_bucket, bucket_topic=None)
+        )
+    return assignments
 
 
 def _detect_size_unit(

@@ -20,8 +20,7 @@ from typing import Any
 from uuid import UUID
 
 from app.services.source_tasks import mark_source_task
-from app.worker.celery_app import celery_app
-from app.worker.resources import _create_worker_resources
+from app.worker._compat import task_shim
 
 logger = logging.getLogger(__name__)
 
@@ -75,32 +74,18 @@ def build_directive_from_config(config: dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
-@celery_app.task(
-    bind=True,
-    name="course_generation.generate_multi",
-    max_retries=1,
-    default_retry_delay=30,
-)
-def generate_multi_course_task(
-    self,
+async def generate_multi(
+    ctx: dict,
     payload: dict[str, Any],
     user_id: str | None = None,
 ) -> dict:
-    """Celery entry: synthesize one course from multiple sources."""
+    """ARQ entry: synthesize one course from multiple sources."""
     source_ids = payload["source_ids"]
     title = payload.get("title")
     config = payload.get("config", {})
-
-    async def _runner():
-        resources = _create_worker_resources()
-        try:
-            return await _generate_multi_async(
-                self, source_ids, title, config, user_id, resources
-            )
-        finally:
-            await resources.engine.dispose()
-
-    return asyncio.run(_runner())
+    return await _generate_multi_async(
+        task_shim(ctx), source_ids, title, config, user_id, ctx["resources"]
+    )
 
 
 async def _generate_multi_async(

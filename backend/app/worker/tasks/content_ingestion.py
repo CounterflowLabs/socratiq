@@ -1,9 +1,11 @@
 """Content ingestion Celery tasks."""
 
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 from uuid import UUID
 
+import redis.asyncio as aioredis
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -18,69 +20,97 @@ from app.services.source_tasks import (
     raise_if_cancelled,
     recover_course_generation_dispatch_failure,
 )
-from app.worker.celery_app import celery_app
-from app.worker.resources import _create_worker_resources
+from app.worker._compat import task_shim
 
 logger = logging.getLogger(__name__)
 
+# 60-minute TTL guards against worker death without a release — long enough
+# for the slowest realistic ingest (large PDFs, full Whisper transcription)
+# yet short enough that a stuck lock self-clears within an hour.
+INGEST_LOCK_TTL_SECONDS = 60 * 60
 
-@celery_app.task(
-    bind=True,
-    name="content_ingestion.ingest_source",
-    max_retries=2,
-    default_retry_delay=30,
-)
-def ingest_source(self, source_id: str) -> dict:
-    """Main content ingestion pipeline task.
 
-    Orchestrates: extract -> analyze -> store -> embed.
+@asynccontextmanager
+async def _ingest_lock(source_id: str):
+    """Acquire a per-source distributed lock via Redis SET NX EX.
+
+    Yields ``True`` on success and ``False`` if another worker holds the
+    lock. The lock is released in ``finally`` so success, exception, and
+    cancellation paths all unlock. We use a per-acquisition token so a
+    redelivered/late worker doesn't release a lock owned by a fresher run.
     """
-    import asyncio
-
-    async def _runner():
-        resources = _create_worker_resources()
+    settings = get_settings()
+    client = aioredis.from_url(settings.redis_url)
+    key = f"ingest_lock:{source_id}"
+    token = uuid_token()
+    try:
+        acquired = await client.set(key, token, nx=True, ex=INGEST_LOCK_TTL_SECONDS)
         try:
-            return await _ingest_source_async(self, source_id, resources)
+            yield bool(acquired)
         finally:
-            await resources.engine.dispose()
+            if acquired:
+                # Compare-and-delete so we never release someone else's lock
+                # if our run somehow outlived the TTL.
+                stored = await client.get(key)
+                stored_str = stored.decode() if isinstance(stored, bytes) else stored
+                if stored_str == token:
+                    await client.delete(key)
+    finally:
+        await client.aclose()
 
-    return asyncio.run(_runner())
+
+def uuid_token() -> str:
+    """Generate an opaque per-acquisition token."""
+    from uuid import uuid4
+
+    return uuid4().hex
 
 
-@celery_app.task(
-    bind=True,
-    name="content_ingestion.clone_source",
-    max_retries=1,
-    default_retry_delay=10,
-    soft_time_limit=120,
-    time_limit=150,
-)
-def clone_source(self, source_id: str, ref_source_id: str) -> dict:
+async def ingest_source(ctx: dict, source_id: str) -> dict:
+    """Main content ingestion pipeline task (extract → analyze → store → embed)."""
+    return await _ingest_source_async(task_shim(ctx), source_id, ctx["resources"])
+
+
+async def clone_source(ctx: dict, source_id: str, ref_source_id: str) -> dict:
     """Clone already extracted content from a ready donor source."""
-    import asyncio
-
-    async def _runner():
-        resources = _create_worker_resources()
-        try:
-            return await _clone_source_async(self, source_id, ref_source_id, resources)
-        finally:
-            await resources.engine.dispose()
-
-    return asyncio.run(_runner())
+    return await _clone_source_async(
+        task_shim(ctx), source_id, ref_source_id, ctx["resources"]
+    )
 
 
 async def _clone_source_async(
     task, source_id: str, ref_source_id: str, resources
 ) -> dict:
     """Async implementation of source cloning."""
+    sid = UUID(source_id)
+    ref_sid = UUID(ref_source_id)
+
+    async with _ingest_lock(source_id) as acquired:
+        if not acquired:
+            logger.info(
+                "Skipping clone for source %s: another worker holds the lock",
+                source_id,
+            )
+            return {"source_id": source_id, "status": "skipped_locked"}
+        return await _clone_source_locked(
+            task, source_id, ref_source_id, resources, sid, ref_sid
+        )
+
+
+async def _clone_source_locked(
+    task,
+    source_id: str,
+    ref_source_id: str,
+    resources,
+    sid: UUID,
+    ref_sid: UUID,
+) -> dict:
+    """Locked clone body. Extracted so the lock wrapper stays small."""
     from sqlalchemy import select
 
     from app.db.models.concept import ConceptSource
     from app.db.models.content_chunk import ContentChunk as ContentChunkModel
     from app.db.models.source import Source
-
-    sid = UUID(source_id)
-    ref_sid = UUID(ref_source_id)
 
     async with resources.session_factory() as db:
         target = await db.get(Source, sid)
@@ -188,7 +218,7 @@ async def _clone_source_async(
     if completion is None:
         raise RuntimeError("Clone finished without preparing course generation")
     try:
-        dispatch_course_generation(
+        await dispatch_course_generation(
             payload=completion.course_dispatch.payload,
             task_id=completion.course_dispatch.task_id,
             user_id=completion.course_dispatch.user_id,
@@ -213,6 +243,18 @@ async def _clone_source_async(
 
 async def _ingest_source_async(task, source_id: str, resources) -> dict:
     """Async implementation of the ingestion pipeline."""
+    async with _ingest_lock(source_id) as acquired:
+        if not acquired:
+            logger.info(
+                "Skipping ingest for source %s: another worker holds the lock",
+                source_id,
+            )
+            return {"source_id": source_id, "status": "skipped_locked"}
+        return await _ingest_source_locked(task, source_id, resources)
+
+
+async def _ingest_source_locked(task, source_id: str, resources) -> dict:
+    """Locked ingest body. Extracted so the lock wrapper stays small."""
     from sqlalchemy import select
 
     from app.db.models.concept import Concept, ConceptSource
@@ -524,7 +566,7 @@ async def _ingest_source_async(task, source_id: str, resources) -> dict:
     if completion is None:
         raise RuntimeError("Ingestion finished without preparing course generation")
     try:
-        dispatch_course_generation(
+        await dispatch_course_generation(
             payload=completion.course_dispatch.payload,
             task_id=completion.course_dispatch.task_id,
             user_id=completion.course_dispatch.user_id,

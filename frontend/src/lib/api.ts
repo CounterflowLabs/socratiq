@@ -446,13 +446,29 @@ export interface Citation {
   page_start: number | null;
 }
 
-export interface ChatStreamEvent {
-  event: "text_delta" | "tool_start" | "tool_end" | "message_end" | "citations" | "error";
-  text?: string;
-  conversation_id?: string;
-  message?: string;
-  tool?: string;
-  citations?: Citation[];
+/**
+ * One AG-UI protocol event. The chat stream is a sequence of these, each
+ * discriminated by `type` (RUN_STARTED, TEXT_MESSAGE_CONTENT, TOOL_CALL_START,
+ * TOOL_CALL_RESULT, CUSTOM, RUN_FINISHED, RUN_ERROR, …). Fields are camelCase
+ * per the AG-UI wire format; only the ones the UI reads are typed here.
+ */
+export interface AGUIEvent {
+  type: string;
+  // text message
+  messageId?: string;
+  delta?: string;
+  // tool call
+  toolCallId?: string;
+  toolCallName?: string;
+  content?: string;
+  // run lifecycle
+  threadId?: string;
+  runId?: string;
+  message?: string; // RUN_ERROR
+  code?: string;
+  // custom (e.g. {name:"citations", value:[...]})
+  name?: string;
+  value?: unknown;
 }
 
 interface StreamChatOptions {
@@ -463,7 +479,7 @@ interface StreamChatOptions {
   signal?: AbortSignal;
 }
 
-export async function* streamChat(opts: StreamChatOptions): AsyncGenerator<ChatStreamEvent> {
+export async function* streamChat(opts: StreamChatOptions): AsyncGenerator<AGUIEvent> {
   const { streamSSE } = await import("./sse");
 
   for await (const evt of streamSSE(
@@ -476,9 +492,10 @@ export async function* streamChat(opts: StreamChatOptions): AsyncGenerator<ChatS
     },
     opts.signal
   )) {
+    // AG-UI frames are unnamed SSE `data:` events; the event kind is the
+    // `type` field inside the JSON payload.
     try {
-      const data = JSON.parse(evt.data);
-      yield { event: evt.event as ChatStreamEvent["event"], ...data };
+      yield JSON.parse(evt.data) as AGUIEvent;
     } catch {
       // skip malformed events
     }

@@ -19,16 +19,13 @@ Two reapers run on ``worker_ready``:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import datetime, timedelta
 
-from celery.signals import worker_ready
 from sqlalchemy import select
 
 from app.db.models.source import Source
 from app.db.models.source_task import SourceTask
-from app.worker.resources import _create_worker_resources
 
 logger = logging.getLogger(__name__)
 
@@ -48,61 +45,57 @@ _SOURCE_PROCESSING_ACTIVE_STATUSES = (
 _STARTUP_INTERRUPT_MESSAGE = "服务重启中断，请重试"
 
 
-async def _reap_pending_course_tasks() -> int:
+async def _reap_pending_course_tasks(resources) -> int:
     """Re-dispatch pending course_generation tasks older than the grace window."""
     from app.services.source_tasks import dispatch_course_generation
 
-    resources = _create_worker_resources()
     # source_tasks.created_at is TIMESTAMP WITHOUT TIME ZONE; compare with naive UTC.
     cutoff = datetime.utcnow() - _REAPER_GRACE
     redispatched = 0
 
-    try:
-        async with resources.session_factory() as db:
-            rows = (
-                await db.execute(
-                    select(SourceTask)
-                    .where(
-                        SourceTask.task_type == "course_generation",
-                        SourceTask.status == "pending",
-                        SourceTask.created_at < cutoff,
-                    )
+    async with resources.session_factory() as db:
+        rows = (
+            await db.execute(
+                select(SourceTask)
+                .where(
+                    SourceTask.task_type == "course_generation",
+                    SourceTask.status == "pending",
+                    SourceTask.created_at < cutoff,
                 )
-            ).scalars().all()
+            )
+        ).scalars().all()
 
-            for task in rows:
-                if not task.celery_task_id:
-                    continue
-                payload = {"source_id": str(task.source_id)}
-                user_id = (
-                    task.metadata_.get("pending_user_id")
-                    if isinstance(task.metadata_, dict)
-                    else None
+        for task in rows:
+            if not task.celery_task_id:
+                continue
+            payload = {"source_id": str(task.source_id)}
+            user_id = (
+                task.metadata_.get("pending_user_id")
+                if isinstance(task.metadata_, dict)
+                else None
+            )
+            try:
+                await dispatch_course_generation(
+                    payload=payload,
+                    task_id=task.celery_task_id,
+                    user_id=user_id,
                 )
-                try:
-                    dispatch_course_generation(
-                        payload=payload,
-                        task_id=task.celery_task_id,
-                        user_id=user_id,
-                    )
-                    redispatched += 1
-                    logger.info(
-                        "Reaper re-dispatched course_generation task %s (source %s)",
-                        task.celery_task_id,
-                        task.source_id,
-                    )
-                except Exception:
-                    logger.exception(
-                        "Reaper failed to re-dispatch task %s",
-                        task.celery_task_id,
-                    )
-    finally:
-        await resources.engine.dispose()
+                redispatched += 1
+                logger.info(
+                    "Reaper re-dispatched course_generation task %s (source %s)",
+                    task.celery_task_id,
+                    task.source_id,
+                )
+            except Exception:
+                logger.exception(
+                    "Reaper failed to re-dispatch task %s",
+                    task.celery_task_id,
+                )
 
     return redispatched
 
 
-async def _reap_stuck_source_processing() -> int:
+async def _reap_stuck_source_processing(resources) -> int:
     """Mark source-processing tasks orphaned by a worker crash as failed.
 
     On worker boot, any SourceTask still in ``running`` is by definition stale
@@ -111,11 +104,10 @@ async def _reap_stuck_source_processing() -> int:
     to ``failure`` and the parent Source to ``error`` with a clear message so
     the UI surfaces a retry button.
     """
-    resources = _create_worker_resources()
     cutoff = datetime.utcnow() - _REAPER_GRACE
     repaired = 0
 
-    try:
+    if resources is not None:
         async with resources.session_factory() as db:
             rows = (
                 await db.execute(
@@ -153,28 +145,29 @@ async def _reap_stuck_source_processing() -> int:
 
             if repaired:
                 await db.commit()
-    finally:
-        await resources.engine.dispose()
 
     return repaired
 
 
-@worker_ready.connect
-def _on_worker_ready(**_kwargs) -> None:
-    """Run once when the worker boots — clears any pending backlog."""
+async def run_startup_reapers(resources) -> None:
+    """Run both reapers once at ARQ worker startup (was Celery worker_ready).
+
+    Uses the worker's shared resources; never raises (each reaper is isolated)
+    so a reaper failure can't prevent the worker from coming up.
+    """
     try:
-        count = asyncio.run(_reap_pending_course_tasks())
+        count = await _reap_pending_course_tasks(resources)
         if count:
             logger.info("Reaper re-dispatched %d pending course tasks at startup", count)
     except Exception:
-        logger.exception("Course-generation reaper failed during worker_ready")
+        logger.exception("Course-generation reaper failed at startup")
 
     try:
-        count = asyncio.run(_reap_stuck_source_processing())
+        count = await _reap_stuck_source_processing(resources)
         if count:
             logger.info(
                 "Reaper marked %d stuck source_processing tasks as failed at startup",
                 count,
             )
     except Exception:
-        logger.exception("Source-processing reaper failed during worker_ready")
+        logger.exception("Source-processing reaper failed at startup")

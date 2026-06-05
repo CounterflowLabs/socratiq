@@ -12,7 +12,6 @@ from __future__ import annotations
 import uuid
 from typing import Annotated, Literal
 
-from celery.result import AsyncResult
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import Select, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,7 +28,7 @@ from app.models.task import (
     map_task_status,
     map_task_type,
 )
-from app.worker.celery_app import celery_app
+from app.worker.queue import abort_job, enqueue, get_job_state
 
 router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
 
@@ -203,9 +202,6 @@ async def cancel_task(
     ``celery_task_id`` — the unified queue returns the former while
     legacy callers may pass the latter.
     """
-    from uuid import UUID as _UUID
-    from celery.result import AsyncResult
-
     task = await _find_task_for_user(db, user, task_id)
     if task is None:
         raise HTTPException(404, f"Task {task_id} not found")
@@ -215,10 +211,7 @@ async def cancel_task(
 
     task.cancel_requested = True
     if task.celery_task_id:
-        try:
-            AsyncResult(task.celery_task_id, app=celery_app).revoke(terminate=False)
-        except Exception:
-            pass
+        await abort_job(task.celery_task_id)
     await db.commit()
     return {"task_id": str(task.id), "cancelled": True}
 
@@ -239,8 +232,6 @@ async def retry_task(
 
     from app.db.models.source_task import SourceTask
     from app.services.source_tasks import create_source_task, dispatch_course_generation
-    from app.worker.tasks.content_ingestion import ingest_source
-    from app.worker.tasks.course_generation_multi import generate_multi_course_task
 
     task = await _find_task_for_user(db, user, task_id)
     if task is None:
@@ -262,16 +253,16 @@ async def retry_task(
             new_meta = dict(source.metadata_)
             new_meta.pop("error", None)
             source.metadata_ = new_meta
-        celery_handle = ingest_source.apply_async(args=[str(source.id)], task_id=new_task_id)
+        await enqueue("ingest_source", str(source.id), job_id=new_task_id)
         await create_source_task(
             db,
             source_id=source.id,
             task_type="source_processing",
-            celery_task_id=celery_handle.id,
+            celery_task_id=new_task_id,
             status="pending",
         )
         await db.commit()
-        return {"task_id": celery_handle.id, "status": "dispatched"}
+        return {"task_id": new_task_id, "status": "dispatched"}
 
     if task.task_type == "course_generation":
         meta = task.metadata_ or {}
@@ -291,22 +282,21 @@ async def retry_task(
         await db.commit()
         if len(source_ids) == 1 and not config:
             # Legacy single-source row pattern — keep using the simple wrapper
-            dispatch_course_generation(
+            await dispatch_course_generation(
                 payload={"source_id": source_ids[0]},
                 task_id=new_task_id,
                 user_id=str(user.id),
             )
         else:
-            generate_multi_course_task.apply_async(
-                args=[
-                    {
-                        "source_ids": source_ids,
-                        "title": meta.get("title"),
-                        "config": config,
-                    }
-                ],
-                kwargs={"user_id": str(user.id)},
-                task_id=new_task_id,
+            await enqueue(
+                "generate_multi",
+                {
+                    "source_ids": source_ids,
+                    "title": meta.get("title"),
+                    "config": config,
+                },
+                user_id=str(user.id),
+                job_id=new_task_id,
             )
         return {"task_id": new_task_id, "status": "dispatched"}
 
@@ -379,18 +369,7 @@ async def get_task_status(task_id: str, response: Response) -> dict:
         '</api/v1/sources/{source_id}/progress>; rel="successor-version"'
     )
 
-    result = AsyncResult(task_id, app=celery_app)
-
-    payload = {
-        "task_id": task_id,
-        "state": result.state,
-    }
-
-    if result.state == "SUCCESS":
-        payload["result"] = result.result
-    elif result.state == "FAILURE":
-        payload["error"] = str(result.result)
-    elif result.state == "PROGRESS" and result.info:
-        payload["progress"] = result.info
-
-    return payload
+    # Transport-level job state only (pending/running/success/unknown). The
+    # authoritative result/progress lives in the SourceTask rows surfaced by
+    # GET /sources/{source_id}/progress.
+    return {"task_id": task_id, "state": await get_job_state(task_id)}

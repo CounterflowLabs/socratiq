@@ -7,21 +7,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.agent.mentor import MentorAgent
+from app.agent.hooks import CitationHook
 from app.agent.tools.knowledge import KnowledgeSearchTool
 from app.models.citation import Citation
 from app.services.rag import RAGService
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _make_agent() -> MentorAgent:
-    """Create a MentorAgent with minimal state for unit testing."""
-    agent = object.__new__(MentorAgent)
-    agent._collected_citations = []
-    return agent
 
 
 # ---------------------------------------------------------------------------
@@ -232,78 +221,70 @@ def test_citation_model_from_dict():
 
 
 # ---------------------------------------------------------------------------
-# MentorAgent._extract_citations: strip markers & collect citations
+# CitationHook.extract: strip markers & collect citations
 # ---------------------------------------------------------------------------
 
-class TestMentorExtractCitations:
-    """Test that MentorAgent._extract_citations parses and strips citation markers."""
+class TestCitationHookExtract:
+    """CitationHook.extract parses and strips the CITATIONS markers."""
 
     def test_extracts_single_citation_block(self):
-        agent = _make_agent()
         citations = [{"chunk_id": "abc", "title": "Intro", "score": 0.92}]
         raw = f"Some result text<!-- CITATIONS:{json.dumps(citations)}-->"
 
-        cleaned = agent._extract_citations(raw)
+        cleaned, parsed = CitationHook.extract(raw)
 
         assert cleaned == "Some result text"
-        assert agent._collected_citations == citations
+        assert parsed == citations
 
     def test_extracts_multiple_citation_blocks(self):
-        agent = _make_agent()
         c1 = [{"chunk_id": "a"}]
         c2 = [{"chunk_id": "b"}, {"chunk_id": "c"}]
         raw = f"Part1<!-- CITATIONS:{json.dumps(c1)}-->Part2<!-- CITATIONS:{json.dumps(c2)}-->"
 
-        cleaned = agent._extract_citations(raw)
+        cleaned, parsed = CitationHook.extract(raw)
 
         assert cleaned == "Part1Part2"
-        assert len(agent._collected_citations) == 3
+        assert len(parsed) == 3
 
     def test_no_citations_returns_unchanged(self):
-        agent = _make_agent()
         raw = "Just a plain tool result with no markers."
 
-        cleaned = agent._extract_citations(raw)
+        cleaned, parsed = CitationHook.extract(raw)
 
         assert cleaned == raw
-        assert agent._collected_citations == []
+        assert parsed == []
 
     def test_malformed_json_is_skipped(self):
-        agent = _make_agent()
-        raw = "Result<!-- CITATIONS:not valid json-->rest"
-
-        cleaned = agent._extract_citations(raw)
+        cleaned, parsed = CitationHook.extract("Result<!-- CITATIONS:not valid json-->rest")
 
         assert cleaned == "Resultrest"
-        assert agent._collected_citations == []
+        assert parsed == []
 
     def test_non_list_json_is_skipped(self):
-        agent = _make_agent()
         raw = f'Result<!-- CITATIONS:{json.dumps({"key": "value"})}-->rest'
 
-        cleaned = agent._extract_citations(raw)
+        cleaned, parsed = CitationHook.extract(raw)
 
         assert cleaned == "Resultrest"
-        assert agent._collected_citations == []
-
-    def test_citations_accumulate_across_calls(self):
-        agent = _make_agent()
-        c1 = [{"chunk_id": "first"}]
-        c2 = [{"chunk_id": "second"}]
-
-        agent._extract_citations(f"<!-- CITATIONS:{json.dumps(c1)}-->")
-        agent._extract_citations(f"<!-- CITATIONS:{json.dumps(c2)}-->")
-
-        assert len(agent._collected_citations) == 2
-        assert agent._collected_citations[0]["chunk_id"] == "first"
-        assert agent._collected_citations[1]["chunk_id"] == "second"
+        assert parsed == []
 
     def test_multiline_citation_json(self):
-        agent = _make_agent()
         citations = [{"chunk_id": "x", "title": "A long title"}]
         raw = f"Result<!-- CITATIONS:\n{json.dumps(citations, indent=2)}\n-->done"
 
-        cleaned = agent._extract_citations(raw)
+        cleaned, parsed = CitationHook.extract(raw)
 
         assert cleaned == "Resultdone"
-        assert agent._collected_citations == citations
+        assert parsed == citations
+
+    @pytest.mark.asyncio
+    async def test_after_tool_call_attaches_citations_and_strips(self):
+        from app.agentcore.tools.base import ToolCall, ToolContext, ToolResult
+
+        citations = [{"chunk_id": "abc"}]
+        result = ToolResult(content=f"text<!-- CITATIONS:{json.dumps(citations)}-->")
+        out = await CitationHook().after_tool_call(
+            ToolCall(id="t", name="search", input={}), result, ToolContext()
+        )
+        assert out.content == "text"
+        assert out.citations == citations

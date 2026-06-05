@@ -12,7 +12,7 @@ import {
   IcSparkle,
   SocratiqMark,
 } from "@/components/icons";
-import { streamChat } from "@/lib/api";
+import { streamChat, type Citation } from "@/lib/api";
 import { useChatStore } from "@/lib/stores";
 import { useT } from "@/lib/i18n";
 import CitationCards from "@/components/citation-card";
@@ -95,20 +95,31 @@ export default function MentorPanel({
         courseId: courseId || undefined,
         sectionId: sectionId || undefined,
       })) {
-        if (event.event === "text_delta" && event.text) {
-          appendToLast(event.text);
-        } else if (event.event === "tool_start") {
-          appendToLast(
-            lang === "zh"
-              ? "\n\n_正在搜索知识库…_\n\n"
-              : "\n\n_Searching the knowledge base…_\n\n",
-          );
-        } else if (event.event === "message_end" && event.conversation_id) {
-          setConversationId(event.conversation_id);
-        } else if (event.event === "citations" && event.citations) {
-          setCitationsOnLast(event.citations);
-        } else if (event.event === "error") {
-          appendToLast(`\n\n_Error: ${event.message}_`);
+        switch (event.type) {
+          case "RUN_STARTED":
+            // The conversation id is carried as the run's thread id.
+            if (event.threadId) setConversationId(event.threadId);
+            break;
+          case "TEXT_MESSAGE_CONTENT":
+            if (event.delta) appendToLast(event.delta);
+            break;
+          case "TOOL_CALL_START":
+            appendToLast(
+              lang === "zh"
+                ? "\n\n_正在搜索知识库…_\n\n"
+                : "\n\n_Searching the knowledge base…_\n\n",
+            );
+            break;
+          case "CUSTOM":
+            if (event.name === "citations" && Array.isArray(event.value)) {
+              setCitationsOnLast(event.value as Citation[]);
+            }
+            break;
+          case "RUN_ERROR":
+            appendToLast(`\n\n_Error: ${event.message}_`);
+            break;
+          default:
+            break;
         }
       }
     } catch (e) {

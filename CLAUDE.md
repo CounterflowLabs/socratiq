@@ -35,7 +35,7 @@ uvicorn app.main:app --reload --reload-dir app --port 8000  # 开发服务器
 pytest                                            # 运行全部测试
 pytest tests/test_xxx.py                          # 运行单个测试文件
 pytest -k "test_name"                             # 按名称匹配运行测试
-celery -A app.worker.celery_app worker --loglevel=info  # Celery worker
+arq app.worker.arq_app.WorkerSettings             # ARQ worker (async tasks; replaced Celery)
 alembic upgrade head                              # 应用数据库迁移
 alembic revision --autogenerate -m "message"      # 生成新迁移
 ```

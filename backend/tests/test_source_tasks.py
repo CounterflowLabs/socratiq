@@ -84,26 +84,29 @@ async def test_finish_source_processing_enqueues_course_generation_task(
     assert task_by_type["course_generation"].status == "pending"
 
 
-def test_dispatch_course_generation_uses_preallocated_task_id(monkeypatch):
+@pytest.mark.asyncio
+async def test_dispatch_course_generation_uses_preallocated_task_id(monkeypatch):
     captured: dict[str, object] = {}
 
-    monkeypatch.setattr(
-        "app.services.source_tasks.generate_course_task.apply_async",
-        lambda args=None, kwargs=None, task_id=None: captured.update(
-            {"args": args, "kwargs": kwargs, "task_id": task_id}
-        ),
-    )
+    async def fake_enqueue(name, *args, job_id=None, **kwargs):
+        captured.update(
+            {"name": name, "args": args, "job_id": job_id, "kwargs": kwargs}
+        )
+        return job_id
 
-    dispatch_course_generation(
+    monkeypatch.setattr("app.worker.queue.enqueue", fake_enqueue)
+
+    await dispatch_course_generation(
         payload={"source_id": "source-1"},
         task_id="course-1",
         user_id="user-1",
     )
 
     assert captured == {
-        "args": [{"source_id": "source-1"}],
+        "name": "generate_course",
+        "args": ({"source_id": "source-1"},),
+        "job_id": "course-1",
         "kwargs": {"user_id": "user-1"},
-        "task_id": "course-1",
     }
 
 
@@ -335,15 +338,18 @@ async def test_course_generator_sorts_bucket_chunks_by_source_time(
     )
 
 
-def test_generate_course_task_ignores_legacy_goal_kwarg(monkeypatch):
+@pytest.mark.asyncio
+async def test_generate_course_ignores_legacy_goal_kwarg(monkeypatch):
     captured: dict[str, object] = {}
 
-    async def fake_generate_course_async(task, source_id, user_id, resources):
+    async def fake_generate_course_async(
+        task, source_id, user_id, resources, event_bus=None
+    ):
         captured.update(
             {
-                "task": task,
                 "source_id": source_id,
                 "user_id": user_id,
+                "resources": resources,
             }
         )
         return {"status": "ready"}
@@ -354,8 +360,9 @@ def test_generate_course_task_ignores_legacy_goal_kwarg(monkeypatch):
         fake_generate_course_async,
     )
 
-    task_obj = course_generation.generate_course_task
-    result = task_obj.run(
+    ctx = {"resources": "RES", "job_id": "job-1"}
+    result = await course_generation.generate_course(
+        ctx,
         {"source_id": "source-1"},
         user_id="user-1",
         goal="legacy-goal",
@@ -363,9 +370,9 @@ def test_generate_course_task_ignores_legacy_goal_kwarg(monkeypatch):
 
     assert result == {"status": "ready"}
     assert captured == {
-        "task": task_obj,
         "source_id": "source-1",
         "user_id": "user-1",
+        "resources": "RES",
     }
 
 
@@ -536,12 +543,6 @@ async def test_generate_course_marks_task_success_with_course_id(
         ),
     )
 
-    monkeypatch.setattr(
-        course_generation,
-        "_create_worker_resources",
-        lambda: fake_resources,
-    )
-
     task_updates: list[tuple[str, dict]] = []
 
     class FakeTask:
@@ -570,6 +571,124 @@ async def test_generate_course_marks_task_success_with_course_id(
     assert task_row.stage == "ready"
     assert task_row.metadata_["course_id"] == result["course_id"]
     assert any(meta.get("stage") == "assembling_course" for _, meta in task_updates)
+
+
+@pytest.mark.asyncio
+async def test_generate_course_skip_branch_marks_current_task_success(
+    monkeypatch, db_session, demo_user
+):
+    """Regression: redelivered course_generation that hits the idempotency
+    skip must still mark its own preallocated SourceTask row as success.
+
+    Before the fix, the loser of a concurrent-ingest race left its row
+    pending forever and /sources/{id}/progress reported "课程生成中".
+    """
+    source = Source(
+        type="youtube",
+        url="https://www.youtube.com/watch?v=test-skip",
+        title="Skip Branch Source",
+        status="ready",
+        metadata_={},
+        created_by=demo_user.id,
+    )
+    db_session.add(source)
+    await db_session.flush()
+
+    # The first run produced the course and marked its row success.
+    existing_course_id = "00000000-0000-0000-0000-0000000000aa"
+    from datetime import datetime, timedelta
+
+    first_row = SourceTask(
+        source_id=source.id,
+        task_type="course_generation",
+        status="success",
+        stage="ready",
+        celery_task_id="course-first-run",
+        metadata_={"course_id": existing_course_id},
+    )
+    first_row.created_at = datetime(2026, 1, 1, 12, 0, 0)
+    # The second (concurrent) run preallocated a pending row — this is the
+    # one we expect the skip branch to fix up. Force the timestamp so it
+    # genuinely sorts after the success row (server_default=now() ties when
+    # two rows insert in the same transaction).
+    second_row = SourceTask(
+        source_id=source.id,
+        task_type="course_generation",
+        status="pending",
+        stage="pending",
+        celery_task_id="course-second-run",
+    )
+    second_row.created_at = datetime(2026, 1, 1, 12, 0, 0) + timedelta(seconds=5)
+    db_session.add_all([first_row, second_row])
+    await db_session.flush()
+
+    class FakeAsyncContext:
+        def __init__(self, session):
+            self._session = session
+
+        async def __aenter__(self):
+            return self._session
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeSessionFactory:
+        def __init__(self, session):
+            self._session = session
+
+        def __call__(self):
+            return FakeAsyncContext(self._session)
+
+    class FakeEngine:
+        async def dispose(self):
+            return None
+
+    fake_resources = SimpleNamespace(
+        settings=SimpleNamespace(),
+        engine=FakeEngine(),
+        session_factory=FakeSessionFactory(db_session),
+        model_router=SimpleNamespace(get_provider=AsyncMock()),
+    )
+
+    # _generate_course_async is called directly with fake_resources below, so
+    # no worker-resources factory patching is needed (ARQ passes resources via
+    # the job ctx in production).
+
+    class FakeTask:
+        def update_state(self, *_args, **_kwargs):
+            return None
+
+    result = await course_generation._generate_course_async(
+        FakeTask(),
+        str(source.id),
+        str(demo_user.id),
+        fake_resources,
+    )
+
+    assert result == {
+        "source_id": str(source.id),
+        "course_id": existing_course_id,
+        "status": "ready",
+        "skipped": True,
+    }
+
+    # The latest-by-created_at row (the second-run preallocated row) must
+    # now be success with course_id pointing at the existing course.
+    latest = (
+        await db_session.execute(
+            select(SourceTask)
+            .where(
+                SourceTask.source_id == source.id,
+                SourceTask.task_type == "course_generation",
+            )
+            .order_by(SourceTask.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one()
+    assert latest.celery_task_id == "course-second-run"
+    assert latest.status == "success"
+    assert latest.stage == "ready"
+    assert latest.metadata_["course_id"] == existing_course_id
 
 
 @pytest.mark.asyncio
@@ -668,11 +787,9 @@ async def test_generate_course_legacy_metadata_without_asset_plan_still_creates_
         ),
     )
 
-    monkeypatch.setattr(
-        course_generation,
-        "_create_worker_resources",
-        lambda: fake_resources,
-    )
+    # _generate_course_async is called directly with fake_resources below, so
+    # no worker-resources factory patching is needed (ARQ passes resources via
+    # the job ctx in production).
 
     class FakeTask:
         def update_state(self, *_args, **_kwargs):

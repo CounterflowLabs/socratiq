@@ -20,9 +20,13 @@ dependencies = [
     "openai>=1.50",
     "tiktoken>=0.7",
 
-    # Async tasks
-    "celery[redis]",
+    # Async tasks (migrated off Celery → ARQ in Phase 3)
+    "arq>=0.26",
     "redis",
+
+    # Agent event protocol (AG-UI standard). Pinned: 0.x, active churn —
+    # wrapped behind app/agentcore/events to contain breaking changes.
+    "ag-ui-protocol==0.1.18",
 
     # Security
     "cryptography",

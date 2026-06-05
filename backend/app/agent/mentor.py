@@ -1,28 +1,36 @@
-"""MentorAgent — the core agent loop for adaptive tutoring."""
+"""MentorAgent — adaptive tutoring agent, now a thin agentcore consumer.
 
-import json
+The hand-rolled stream/tool loop moved into ``app.agentcore`` (AgentLoop /
+AgentRunner / RouterLLMClient). MentorAgent just wires Socratiq's pieces —
+system prompt, tools, citation hook, MENTOR_CHAT routing — and yields AG-UI
+events. Citation extraction is a ToolExecutor hook; the async profile update
+fires after the run completes (unchanged behavior, own db session).
+"""
+
+from __future__ import annotations
+
+import asyncio
 import logging
-import re
-import time
 import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.tools.base import AgentTool, is_tool_error, tool_error
+from app.agent.hooks import CitationHook
 from app.agent.prompts.mentor import build_system_prompt
+from app.agent.tools.base import AgentTool
+from app.agentcore.events import EventType, TracerEventSink
+from app.agentcore.events.types import AGUIEvent
+from app.agentcore.llm.router_client import RouterLLMClient
+from app.agentcore.runtime import AgentLoop, AgentRunner, LoopConfig
+from app.agentcore.tools.base import AgentToolAdapter, ToolContext
+from app.agentcore.tools.executor import ToolExecutor
 from app.prompt_template import load_prompt
-from app.services.llm.base import (
-    ContentBlock,
-    LLMProvider,
-    StreamChunk,
-    ToolDefinition,
-    UnifiedMessage,
-)
+from app.services.llm.base import UnifiedMessage
 from app.services.llm.router import ModelRouter, TaskType
 from app.services.llm.runtime import Tracer, get_default_tracer
-from app.services.profile import StudentProfile, load_profile
+from app.services.profile import load_profile
 
 logger = logging.getLogger(__name__)
 
@@ -30,16 +38,11 @@ _PROFILE_PROMPTS_DIR = Path(__file__).parent / "prompts"
 _PROFILE_ANALYSIS_SYSTEM = load_prompt(_PROFILE_PROMPTS_DIR / "profile_analysis_system.md")
 _PROFILE_ANALYSIS_USER = load_prompt(_PROFILE_PROMPTS_DIR / "profile_analysis_user.md")
 
+MAX_TOOL_LOOPS = 10  # preserved bound, now LoopConfig.max_iterations
+
 
 class MentorAgent:
-    """Core agent loop: stream LLM → detect tool_use → execute → loop.
-
-    The MentorAgent yields StreamChunks in real-time for SSE streaming.
-    When the LLM requests a tool call, the agent executes the tool,
-    feeds the result back, and continues the loop.
-    """
-
-    MAX_TOOL_LOOPS = 10  # Safety limit to prevent infinite tool loops
+    """Wires Socratiq tutoring onto the agentcore runtime; yields AG-UI events."""
 
     def __init__(
         self,
@@ -52,8 +55,7 @@ class MentorAgent:
         self._router = model_router
         self._db = db
         self._user_id = user_id
-        self._tools = {t.name: t for t in tools}
-        self._tool_definitions = [t.to_tool_definition() for t in tools]
+        self._tools = tools
         self._tracer = tracer or get_default_tracer()
 
     async def process(
@@ -62,258 +64,65 @@ class MentorAgent:
         conversation_history: list[UnifiedMessage],
         course_id: uuid.UUID | None = None,
         system_prompt_extra: str = "",
-    ) -> AsyncIterator[StreamChunk]:
-        """Process a user message and yield streaming response chunks.
-
-        Args:
-            user_message: The user's input message.
-            conversation_history: Previous messages in the conversation.
-            course_id: Optional course context for RAG filtering.
-
-        Yields:
-            StreamChunk objects for SSE streaming to the frontend.
-        """
-        self._collected_citations: list[dict] = []
-
-        # Load student profile for system prompt
+        conversation_id: uuid.UUID | None = None,
+    ) -> AsyncIterator[AGUIEvent]:
+        """Run one mentor turn, yielding AG-UI events for SSE streaming."""
         profile = await load_profile(self._db, self._user_id)
-
-        # Build system prompt with profile injection
         system_prompt = build_system_prompt(
-            profile=profile,
-            course_id=course_id,
-            tools=list(self._tools.values()),
+            profile=profile, course_id=course_id, tools=self._tools
         )
         if system_prompt_extra:
             system_prompt += system_prompt_extra
 
-        # Build messages
         messages = [
             UnifiedMessage(role="system", content=system_prompt),
             *conversation_history,
             UnifiedMessage(role="user", content=user_message),
         ]
 
-        # Get LLM provider
-        provider = await self._router.get_provider(TaskType.MENTOR_CHAT)
-
-        turn_started = time.perf_counter()
-        provider_id = self._safe_model_id(provider)
-        self._tracer.emit(
-            "agent_turn_start",
-            phase="mentor",
-            user_id=str(self._user_id),
-            course_id=str(course_id) if course_id else None,
-            provider=provider_id,
-            tool_count=len(self._tools),
-            history_messages=len(conversation_history),
+        llm = RouterLLMClient(
+            self._router, primary=TaskType.MENTOR_CHAT, tracer=self._tracer
+        )
+        executor = ToolExecutor(
+            [AgentToolAdapter(t) for t in self._tools],
+            hooks=[CitationHook()],
+            parallel=False,  # tools share the request db session
+        )
+        loop = AgentLoop(
+            llm=llm,
+            tools=executor,
+            tool_ctx=ToolContext(db=self._db, user_id=self._user_id),
+            config=LoopConfig(max_iterations=MAX_TOOL_LOOPS, max_tokens=4096, temperature=0.7),
+        )
+        runner = AgentRunner(
+            loop=loop,
+            sinks=[TracerEventSink(self._tracer)],
+            thread_id=str(conversation_id) if conversation_id else None,
         )
 
-        # Agent loop
-        loop_count = 0
-        total_tool_calls = 0
-        full_assistant_text = ""
-        loop_status = "text_complete"
+        assistant_text_parts: list[str] = []
+        async for event in runner.run(messages):
+            if event.type == EventType.TEXT_MESSAGE_CONTENT and event.delta:
+                assistant_text_parts.append(event.delta)
+            yield event
 
-        while loop_count < self.MAX_TOOL_LOOPS:
-            loop_count += 1
-            iter_started = time.perf_counter()
-
-            # Accumulate streaming response
-            current_text = ""
-            current_reasoning_content = ""
-            tool_calls: list[dict] = []
-            current_tool_input_json = ""
-            current_tool_name = ""
-            current_tool_id = ""
-
-            async for chunk in provider.chat_stream(
-                messages,
-                tools=self._tool_definitions if self._tools else None,
-                max_tokens=4096,
-                temperature=0.7,
-            ):
-                if chunk.type == "text_delta":
-                    current_text += chunk.text or ""
-                    full_assistant_text += chunk.text or ""
-                    yield chunk  # Stream text to client immediately
-
-                elif chunk.type == "reasoning_delta":
-                    current_reasoning_content += chunk.reasoning_content or ""
-
-                elif chunk.type == "tool_use_start":
-                    current_tool_name = chunk.tool_name or ""
-                    current_tool_id = chunk.tool_use_id or ""
-                    current_tool_input_json = ""
-
-                elif chunk.type == "tool_use_delta":
-                    current_tool_input_json += chunk.tool_input_delta or ""
-
-                elif chunk.type == "tool_use_end":
-                    # Parse tool input
-                    try:
-                        tool_input = json.loads(current_tool_input_json) if current_tool_input_json else {}
-                    except json.JSONDecodeError:
-                        tool_input = {}
-
-                    tool_calls.append({
-                        "id": current_tool_id,
-                        "name": current_tool_name,
-                        "input": tool_input,
-                    })
-
-                elif chunk.type == "message_end":
-                    yield chunk
-
-            self._tracer.emit(
-                "agent_loop_iter",
-                phase="mentor",
-                iteration=loop_count,
-                provider=provider_id,
-                text_chars=len(current_text),
-                reasoning_chars=len(current_reasoning_content),
-                tool_calls=len(tool_calls),
-                elapsed_ms=(time.perf_counter() - iter_started) * 1000.0,
-            )
-
-            # If no tool calls, we're done
-            if not tool_calls:
-                break
-
-            total_tool_calls += len(tool_calls)
-
-            # Execute tool calls and build tool_result messages
-            # First, add assistant response with tool_use blocks
-            content_blocks: list[ContentBlock] = []
-            if current_text:
-                content_blocks.append(ContentBlock(type="text", text=current_text))
-            for tc in tool_calls:
-                content_blocks.append(ContentBlock(
-                    type="tool_use",
-                    tool_use_id=tc["id"],
-                    tool_name=tc["name"],
-                    tool_input=tc["input"],
-                ))
-
-            messages.append(UnifiedMessage(
-                role="assistant",
-                content=content_blocks,
-                reasoning_content=current_reasoning_content or None,
-            ))
-
-            # Execute each tool and add results
-            for tc in tool_calls:
-                tool_started = time.perf_counter()
-                tool_result = await self._execute_tool(tc["name"], tc["input"])
-                tool_status = "error" if is_tool_error(tool_result) else "ok"
-                tool_result = self._extract_citations(tool_result)
-                self._tracer.emit(
-                    "agent_tool_result",
-                    phase="mentor.tool",
-                    iteration=loop_count,
-                    tool_name=tc["name"],
-                    tool_use_id=tc["id"],
-                    status=tool_status,
-                    result_chars=len(tool_result),
-                    elapsed_ms=(time.perf_counter() - tool_started) * 1000.0,
-                )
-                messages.append(UnifiedMessage(
-                    role="tool_result",
-                    content=[ContentBlock(
-                        type="tool_result",
-                        tool_use_id=tc["id"],
-                        tool_result_content=tool_result,
-                    )],
-                ))
-        else:
-            # while-loop hit MAX_TOOL_LOOPS without breaking — likely a tool-use
-            # ping-pong. Surface in the trace; the user just sees the truncated
-            # response, but operators can spot the runaway in logs.
-            loop_status = "loop_limit_reached"
-
-        self._tracer.emit(
-            "agent_turn_end",
-            phase="mentor",
-            status=loop_status,
-            iterations=loop_count,
-            total_tool_calls=total_tool_calls,
-            response_chars=len(full_assistant_text),
-            elapsed_ms=(time.perf_counter() - turn_started) * 1000.0,
-        )
-
-        # Async profile update (don't block the response)
-        if full_assistant_text:
-            import asyncio
-            asyncio.create_task(self._maybe_update_profile(full_assistant_text, user_message))
-
-    _CITATION_RE = re.compile(r"<!-- CITATIONS:(.*?)-->", re.DOTALL)
-
-    def _extract_citations(self, tool_result: str) -> str:
-        """Extract citation markers from a tool result and collect them.
-
-        Returns the tool result with citation markers stripped.
-        """
-        for match in self._CITATION_RE.finditer(tool_result):
-            try:
-                citations = json.loads(match.group(1))
-                if isinstance(citations, list):
-                    self._collected_citations.extend(citations)
-            except (json.JSONDecodeError, TypeError):
-                logger.warning("Failed to parse citation JSON from tool result")
-        return self._CITATION_RE.sub("", tool_result)
-
-    async def _execute_tool(self, tool_name: str, params: dict) -> str:
-        """Execute a tool and return its result string."""
-        tool = self._tools.get(tool_name)
-        if not tool:
-            return tool_error(
-                message=f"No tool named {tool_name!r}",
-                reason="unknown_tool",
-                suggestion=(
-                    "Available tools: " + ", ".join(self._tools)
-                    + ". Pick one of these by exact name."
-                ),
-            )
-
-        try:
-            return await tool.execute(**params)
-        except Exception as e:
-            logger.error(f"Tool '{tool_name}' execution error: {e}", exc_info=True)
-            return tool_error(
-                message=f"{tool_name} crashed: {e}",
-                reason="tool_exception",
-                suggestion=(
-                    "This is a backend error, not a wrong call. Don't retry the same "
-                    "call immediately — try a different approach (different parameters, "
-                    "a different tool, or just answer from your own knowledge)."
-                ),
-            )
-
-    @staticmethod
-    def _safe_model_id(provider: LLMProvider) -> str:
-        try:
-            return provider.model_id()
-        except Exception:  # noqa: BLE001
-            return type(provider).__name__
+        full_text = "".join(assistant_text_parts)
+        if full_text:
+            # Fire-and-forget profile update (own db session; never blocks chat).
+            asyncio.create_task(self._maybe_update_profile(full_text, user_message))
 
     async def _maybe_update_profile(self, assistant_text: str, user_message: str) -> None:
-        """Asynchronously update student profile based on conversation.
-
-        Uses its own database session since the request session may be closed.
-        """
+        """Asynchronously update the student profile based on the conversation."""
         from app.db.database import async_session_factory
-        from app.services.profile import load_profile, apply_profile_updates
+        from app.services.profile import apply_profile_updates, load_profile
 
         try:
             async with async_session_factory() as db:
-                # Load current profile for context
                 profile = await load_profile(db, self._user_id)
-
                 provider = await self._router.get_provider(TaskType.CONTENT_ANALYSIS)
                 messages = [
                     UnifiedMessage(
-                        role="system",
-                        content=_PROFILE_ANALYSIS_SYSTEM.render(),
+                        role="system", content=_PROFILE_ANALYSIS_SYSTEM.render()
                     ),
                     UnifiedMessage(
                         role="user",
@@ -330,5 +139,5 @@ class MentorAgent:
                 )
                 await apply_profile_updates(db, self._user_id, response_text)
                 await db.commit()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(f"Profile update failed (non-critical): {e}")

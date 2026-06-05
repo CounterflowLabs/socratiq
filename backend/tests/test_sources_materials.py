@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy import select
@@ -16,10 +16,8 @@ from app.services.llm.encryption import encrypt_api_key
 
 @pytest.mark.asyncio
 async def test_create_source_persists_processing_task(client, db_session):
-    with patch("app.api.routes.sources.ingest_source") as mock_task:
-        mock_result = MagicMock()
-        mock_result.id = "fake-task-001"
-        mock_task.delay.return_value = mock_result
+    with patch("app.api.routes.sources.enqueue", new_callable=AsyncMock) as mock_task:
+        mock_task.return_value = "fake-task-001"
 
         res = await client.post("/api/v1/sources", data={
             "url": "https://www.youtube.com/watch?v=kCc8FmEb1nY",
@@ -46,7 +44,7 @@ async def test_create_bilibili_source_requires_credential(
     settings = get_settings()
     monkeypatch.setattr(settings, "bilibili_sessdata", "")
 
-    with patch("app.api.routes.sources.ingest_source") as mock_task:
+    with patch("app.api.routes.sources.enqueue", new_callable=AsyncMock) as mock_task:
         res = await client.post("/api/v1/sources", data={
             "url": "https://www.bilibili.com/video/BV1xx411c7XW",
         })
@@ -57,7 +55,7 @@ async def test_create_bilibili_source_requires_credential(
 
     sources = (await db_session.execute(select(Source))).scalars().all()
     assert sources == []
-    mock_task.delay.assert_not_called()
+    mock_task.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -77,17 +75,15 @@ async def test_create_bilibili_source_passes_when_db_credential_present(
     )
     await db_session.flush()
 
-    with patch("app.api.routes.sources.ingest_source") as mock_task:
-        mock_result = MagicMock()
-        mock_result.id = "fake-bili-task"
-        mock_task.delay.return_value = mock_result
+    with patch("app.api.routes.sources.enqueue", new_callable=AsyncMock) as mock_task:
+        mock_task.return_value = "fake-bili-task"
 
         res = await client.post("/api/v1/sources", data={
             "url": "https://www.bilibili.com/video/BV1xx411c7XW",
         })
 
     assert res.status_code == 201
-    mock_task.delay.assert_called_once()
+    mock_task.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -97,17 +93,15 @@ async def test_create_bilibili_source_passes_when_env_credential_present(
     settings = get_settings()
     monkeypatch.setattr(settings, "bilibili_sessdata", "env-sessdata")
 
-    with patch("app.api.routes.sources.ingest_source") as mock_task:
-        mock_result = MagicMock()
-        mock_result.id = "fake-bili-env-task"
-        mock_task.delay.return_value = mock_result
+    with patch("app.api.routes.sources.enqueue", new_callable=AsyncMock) as mock_task:
+        mock_task.return_value = "fake-bili-env-task"
 
         res = await client.post("/api/v1/sources", data={
             "url": "https://www.bilibili.com/video/BV1xx411c7XW",
         })
 
     assert res.status_code == 201
-    mock_task.delay.assert_called_once()
+    mock_task.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -126,19 +120,17 @@ async def test_create_source_returns_existing_for_same_user_duplicate(
     await db_session.flush()
 
     with patch("app.api.routes.sources.extract_content_key", return_value="shared-key"):
-        with patch("app.api.routes.sources.ingest_source") as mock_ingest:
-            with patch("app.api.routes.sources.clone_source") as mock_clone:
-                res = await client.post("/api/v1/sources", data={
-                    "url": "https://www.youtube.com/watch?v=kCc8FmEb1nY",
-                })
+        with patch("app.api.routes.sources.enqueue", new_callable=AsyncMock) as mock_enqueue:
+            res = await client.post("/api/v1/sources", data={
+                "url": "https://www.youtube.com/watch?v=kCc8FmEb1nY",
+            })
 
     assert res.status_code == 200
     data = res.json()
     assert data["id"] == str(existing.id)
     assert data["duplicate_of_source_id"] == str(existing.id)
     assert data["duplicate_reason"] == "user_existing"
-    mock_ingest.delay.assert_not_called()
-    mock_clone.delay.assert_not_called()
+    mock_enqueue.assert_not_awaited()
 
     sources = (await db_session.execute(select(Source))).scalars().all()
     assert sources == [existing]
@@ -172,10 +164,8 @@ async def test_create_clone_source_persists_processing_task(client, db_session, 
     await db_session.flush()
 
     with patch("app.api.routes.sources.extract_content_key", return_value="shared-key"):
-        with patch("app.api.routes.sources.clone_source") as mock_task:
-            mock_result = MagicMock()
-            mock_result.id = "fake-clone-task-001"
-            mock_task.delay.return_value = mock_result
+        with patch("app.api.routes.sources.enqueue", new_callable=AsyncMock) as mock_task:
+            mock_task.return_value = "fake-clone-task-001"
 
             res = await client.post("/api/v1/sources", data={
                 "url": "https://www.youtube.com/watch?v=kCc8FmEb1nY",
@@ -652,3 +642,54 @@ async def test_list_sources_sorts_actionable_before_recent(
     assert recent_res.status_code == 200
     recent_ids = [item["id"] for item in recent_res.json()["items"]]
     assert recent_ids[:3] == [str(recent.id), str(processing.id), str(failure.id)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("starting_status", ["error", "cancelled", "pending"])
+async def test_retry_revokes_in_flight_celery_task_before_redispatch(
+    client, db_session, demo_user, starting_status
+):
+    """The retry endpoint must revoke the previous celery task id even when
+    the source is in ``error`` or ``cancelled``. Celery's acks_late +
+    visibility_timeout can otherwise redeliver the original task and race
+    the new one, producing duplicate course_generation rows.
+    """
+    source = Source(
+        type="youtube",
+        url="https://www.youtube.com/watch?v=retry-revoke",
+        title="Retry source",
+        status=starting_status,
+        celery_task_id="stuck-task-original",
+        metadata_={"error": "服务重启中断"} if starting_status == "error" else {},
+        created_by=demo_user.id,
+    )
+    db_session.add(source)
+    await db_session.flush()
+    db_session.add(
+        SourceTask(
+            source_id=source.id,
+            task_type="source_processing",
+            status="failure" if starting_status == "error" else starting_status,
+            stage=starting_status,
+            celery_task_id="stuck-task-original",
+        )
+    )
+    await db_session.commit()
+
+    revoked: list[str] = []
+
+    async def _fake_abort(job_id):
+        revoked.append(job_id)
+        return True
+
+    with patch("app.api.routes.sources.abort_job", new=_fake_abort):
+        with patch("app.api.routes.sources.enqueue", new_callable=AsyncMock) as mock_task:
+            mock_task.return_value = "new-task-id"
+
+            res = await client.post(f"/api/v1/sources/{source.id}/retry")
+
+    assert res.status_code == 202
+    assert revoked == ["stuck-task-original"]
+    refreshed = await db_session.get(Source, source.id)
+    assert refreshed.status == "pending"
+    assert refreshed.celery_task_id == "new-task-id"

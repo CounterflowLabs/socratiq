@@ -19,36 +19,21 @@ from app.db.models.course import Course, CourseSource
 from app.services.course_generator import CourseGenerator
 from app.services.profile import load_profile
 from app.services.source_tasks import mark_source_task
-from app.worker.celery_app import celery_app
-from app.worker.resources import _create_worker_resources
+from app.worker._compat import task_shim
 
 logger = logging.getLogger(__name__)
 
 
-@celery_app.task(
-    bind=True,
-    name="course_regeneration.regenerate_course",
-    max_retries=1,
-    default_retry_delay=30,
-)
-def regenerate_course(
-    self,
+async def regenerate_course(
+    ctx: dict,
     parent_course_id: str,
     user_directive: str,
     user_id: str,
 ) -> dict:
-    """Celery entry point. Returns ``{course_id, parent_course_id, status}``."""
-
-    async def _runner():
-        resources = _create_worker_resources()
-        try:
-            return await _regenerate_course_async(
-                self, parent_course_id, user_directive, user_id, resources
-            )
-        finally:
-            await resources.engine.dispose()
-
-    return asyncio.run(_runner())
+    """ARQ entry point. Returns ``{course_id, parent_course_id, status}``."""
+    return await _regenerate_course_async(
+        task_shim(ctx), parent_course_id, user_directive, user_id, ctx["resources"]
+    )
 
 
 async def _regenerate_course_async(

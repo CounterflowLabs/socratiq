@@ -36,6 +36,15 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from app.services.llm._call_support import (
+    ProviderRef,
+    build_retry_message as _build_retry_message,
+    extract_text as _extract_text,
+    ms_since as _ms_since,
+    repr_provider_ref as _repr_provider_ref,
+    resolve_provider as _resolve_provider,
+    usage_tokens as _usage_tokens,
+)
 from app.services.llm.base import (
     LLMError,
     LLMProvider,
@@ -168,10 +177,9 @@ class CallResult:
 
 
 # --- Runtime --------------------------------------------------------------
-
-
-ProviderRef = LLMProvider | TaskType
-"""Either a concrete provider, or a ``TaskType`` resolved via ``ModelRouter``."""
+# ``ProviderRef`` is defined in ``_call_support`` and re-imported above so
+# callers that do ``from app.services.llm.runtime import ProviderRef`` keep
+# working.
 
 
 class AgentRuntime:
@@ -335,16 +343,7 @@ class AgentRuntime:
         raise LLMError("AgentRuntime.call invoked with empty provider chain")
 
     async def _resolve(self, ref: ProviderRef) -> LLMProvider:
-        if isinstance(ref, TaskType):
-            if self._router is None:
-                raise LLMError(
-                    f"AgentRuntime needs a ModelRouter to resolve TaskType.{ref.name}"
-                )
-            return await self._router.get_provider(ref)
-        # Anything else is treated as a provider — duck-typed so AsyncMocks
-        # work in tests without a ``spec=LLMProvider`` ceremony. The actual
-        # ``await ref.chat(...)`` call will raise if it isn't really a provider.
-        return ref  # type: ignore[return-value]
+        return await _resolve_provider(ref, self._router)
 
     async def _call_with_validation(
         self,
@@ -374,11 +373,10 @@ class AgentRuntime:
                 max_tokens=max_tokens,
                 temperature=temperature,
             )
-            in_toks = response.usage.input_tokens if response.usage else 0
-            out_toks = response.usage.output_tokens if response.usage else 0
+            in_toks, out_toks = _usage_tokens(response)
             cumulative_in += in_toks
             cumulative_out += out_toks
-            text = "".join(b.text or "" for b in response.content if b.type == "text")
+            text = _extract_text(response)
             elapsed_ms = _ms_since(call_started)
 
             self._tracer.emit(
@@ -449,33 +447,8 @@ class AgentRuntime:
             )
 
 
-# --- helpers --------------------------------------------------------------
-
-
-def _repr_provider_ref(ref: ProviderRef) -> str:
-    if isinstance(ref, TaskType):
-        return f"task:{ref.value}"
-    if isinstance(ref, LLMProvider):
-        try:
-            return f"provider:{ref.model_id()}"
-        except Exception:  # noqa: BLE001
-            return f"provider:{type(ref).__name__}"
-    return repr(ref)
-
-
-def _ms_since(started: float) -> float:
-    return (time.perf_counter() - started) * 1000.0
-
-
-def _build_retry_message(
-    *, reason: str, hint: str | None, override: str | None
-) -> str:
-    if override:
-        return override
-    base = (
-        "Your previous response did not pass validation: "
-        f"{reason}. Please respond again, this time fixing the issue."
-    )
-    if hint:
-        return f"{base}\n\nHint: {hint}"
-    return base
+# Call-support helpers (``_repr_provider_ref``, ``_ms_since``,
+# ``_build_retry_message``, ``_extract_text``, ``_usage_tokens``,
+# ``_resolve_provider``) now live in ``app.services.llm._call_support`` and are
+# imported under the same private names at the top of this module so both the
+# streaming and non-streaming paths share one implementation.

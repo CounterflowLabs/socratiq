@@ -6,7 +6,6 @@ from datetime import datetime
 from math import inf
 from typing import Annotated, Any
 
-from celery.result import AsyncResult
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,7 +15,7 @@ from app.db.models.course import Course, CourseSource, Section
 from app.db.models.source import Source
 from app.db.models.source_task import SourceTask
 from app.models.source import SourceTaskProgress
-from app.worker.celery_app import celery_app
+from app.worker.queue import abort_job, enqueue, get_job_state
 from app.models.course import (
     CourseGenerateRequest,
     CourseGenerateResponse,
@@ -138,9 +137,6 @@ async def generate_course(
 
     from app.db.models.source_task import SourceTask
     from app.services.source_tasks import create_source_task
-    from app.worker.tasks.course_generation_multi import (
-        generate_multi_course_task,
-    )
 
     sources = (
         await db.execute(
@@ -220,16 +216,15 @@ async def generate_course(
         )
     await db.commit()
 
-    generate_multi_course_task.apply_async(
-        args=[
-            {
-                "source_ids": [str(s) for s in request.source_ids],
-                "title": request.title,
-                "config": config,
-            }
-        ],
-        kwargs={"user_id": str(user.id)},
-        task_id=task_id,
+    await enqueue(
+        "generate_multi",
+        {
+            "source_ids": [str(s) for s in request.source_ids],
+            "title": request.title,
+            "config": config,
+        },
+        user_id=str(user.id),
+        job_id=task_id,
     )
 
     return CourseGenerateResponse(
@@ -454,10 +449,7 @@ async def regenerate_course_endpoint(
             )
 
     if course.active_regeneration_task_id:
-        existing = AsyncResult(
-            course.active_regeneration_task_id, app=celery_app
-        )
-        if existing.state in {"PENDING", "PROGRESS", "STARTED", "RETRY"}:
+        if await get_job_state(course.active_regeneration_task_id) in {"pending", "running"}:
             return RegenerateCourseResponse(
                 task_id=course.active_regeneration_task_id,
                 parent_course_id=course.id,
@@ -469,17 +461,15 @@ async def regenerate_course_endpoint(
             429, "Daily LLM budget exceeded for course regeneration."
         )
 
-    from app.worker.tasks.course_regeneration import regenerate_course
-
     directive = (request.directive or "").strip()
-    celery_task = regenerate_course.delay(
-        str(course.id), directive, str(user.id)
+    job_id = await enqueue(
+        "regenerate_course", str(course.id), directive, str(user.id)
     )
-    course.active_regeneration_task_id = celery_task.id
+    course.active_regeneration_task_id = job_id
     await db.commit()
 
     return RegenerateCourseResponse(
-        task_id=celery_task.id,
+        task_id=job_id,
         parent_course_id=course.id,
     )
 
@@ -515,8 +505,6 @@ async def cancel_regeneration(
     user: Annotated[User, Depends(get_local_user)],
 ) -> dict:
     """Request cooperative cancellation of an in-flight regeneration."""
-    from celery.result import AsyncResult
-
     course = (
         await db.execute(
             select(Course).where(Course.id == course_id, Course.created_by == user.id)
@@ -547,12 +535,7 @@ async def cancel_regeneration(
     for row in rows:
         row.cancel_requested = True
 
-    try:
-        AsyncResult(course.active_regeneration_task_id, app=celery_app).revoke(
-            terminate=False
-        )
-    except Exception:
-        pass
+    await abort_job(course.active_regeneration_task_id)
 
     await db.commit()
     return {"cancelled": True, "course_id": str(course_id)}
@@ -576,32 +559,9 @@ async def get_regeneration_status(
         '</api/v1/courses/{course_id}/task-progress>; rel="successor-version"'
     )
 
-    result = AsyncResult(task_id, app=celery_app)
-    state = result.state
-
-    payload: dict = {"status": state.lower(), "stage": None}
-    info = result.info if result.info is not None else {}
-    if isinstance(info, dict):
-        payload["stage"] = info.get("stage")
-        if "current" in info:
-            payload["current"] = info["current"]
-        if "total" in info:
-            payload["total"] = info["total"]
-
-    if state == "SUCCESS":
-        payload["status"] = "success"
-        if isinstance(result.result, dict):
-            payload["course_id"] = result.result.get("course_id")
-            payload["parent_course_id"] = result.result.get("parent_course_id")
-    elif state == "FAILURE":
-        payload["status"] = "failure"
-        payload["error"] = str(result.result) if result.result else "Unknown error"
-    elif state == "PROGRESS":
-        payload["status"] = "running"
-    elif state == "PENDING":
-        payload["status"] = "pending"
-
-    return payload
+    # Transport-level job state only; authoritative progress/result live in the
+    # SourceTask rows surfaced by GET /courses/{course_id}/task-progress.
+    return {"status": await get_job_state(task_id), "stage": None}
 
 
 @router.get("/{course_id}/task-progress", response_model=CourseProgressResponse)
@@ -692,8 +652,6 @@ async def regenerate_section_lesson_endpoint(
     Per-section lock: at most one in-flight retry per section. The active
     task id is also returned so the UI can poll for completion.
     """
-    from app.worker.tasks.lesson_regeneration import regenerate_section_lesson_task
-
     section = await db.get(Section, section_id)
     if section is None:
         raise HTTPException(404, f"Section {section_id} not found")
@@ -704,23 +662,22 @@ async def regenerate_section_lesson_endpoint(
         raise HTTPException(404, f"Section {section_id} not found")
 
     if section.active_lesson_task_id:
-        existing = AsyncResult(section.active_lesson_task_id, app=celery_app)
-        if existing.state in {"PENDING", "STARTED", "PROGRESS", "RETRY"}:
+        if await get_job_state(section.active_lesson_task_id) in {"pending", "running"}:
             return RegenerateSectionLessonResponse(
                 task_id=section.active_lesson_task_id,
                 section_id=section_id,
                 status="in_flight",
             )
 
-    celery_task = regenerate_section_lesson_task.delay(
-        str(section_id), str(user.id)
+    job_id = await enqueue(
+        "regenerate_section_lesson", str(section_id), str(user.id)
     )
-    section.active_lesson_task_id = celery_task.id
+    section.active_lesson_task_id = job_id
     section.lesson_generation_error = None
     await db.commit()
 
     return RegenerateSectionLessonResponse(
-        task_id=celery_task.id,
+        task_id=job_id,
         section_id=section_id,
         status="dispatched",
     )

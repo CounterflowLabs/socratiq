@@ -1,4 +1,4 @@
-"""Tests for MentorAgent tool-loop message handling."""
+"""Tests for MentorAgent (now an agentcore consumer emitting AG-UI events)."""
 
 import uuid
 from unittest.mock import AsyncMock, patch
@@ -45,8 +45,14 @@ class FakeProvider:
     def __init__(self):
         self.calls = []
 
+    def supports_streaming(self) -> bool:
+        return True
+
+    def model_id(self) -> str:
+        return "fake-model"
+
     async def chat_stream(self, messages, **kwargs):
-        self.calls.append(messages.copy())
+        self.calls.append([m.model_copy(deep=True) for m in messages])
         if len(self.calls) == 1:
             yield StreamChunk(
                 type="reasoning_delta",
@@ -68,7 +74,7 @@ class FakeProvider:
 
 
 @pytest.mark.asyncio
-async def test_tool_loop_preserves_reasoning_content_for_same_turn():
+async def test_tool_loop_emits_agui_and_preserves_reasoning_content():
     provider = FakeProvider()
     agent = MentorAgent(
         model_router=FakeRouter(provider),
@@ -78,15 +84,27 @@ async def test_tool_loop_preserves_reasoning_content_for_same_turn():
     )
 
     with patch("app.agent.mentor.load_profile", AsyncMock(return_value=StudentProfile())):
-        chunks = [
-            chunk
-            async for chunk in agent.process(
+        events = [
+            event
+            async for event in agent.process(
                 user_message="question",
                 conversation_history=[],
             )
         ]
 
-    assert [chunk.type for chunk in chunks] == ["message_end", "message_end"]
+    types = [e.type.value for e in events]
+    assert types[0] == "RUN_STARTED"
+    assert types[-1] == "RUN_FINISHED"
+    assert "REASONING_MESSAGE_START" in types
+    assert "TOOL_CALL_START" in types
+    assert "TOOL_CALL_RESULT" in types
+
+    # The tool result reached the model, and reasoning_content is preserved on
+    # the assistant message sent on the second turn.
+    result_ev = next(e for e in events if e.type.value == "TOOL_CALL_RESULT")
+    assert result_ev.content == "result for weather"
+
+    assert len(provider.calls) == 2
     second_call_messages = provider.calls[1]
     assistant_message = next(
         message for message in second_call_messages if message.role == "assistant"

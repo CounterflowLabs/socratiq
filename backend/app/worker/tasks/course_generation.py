@@ -3,48 +3,70 @@
 import logging
 from uuid import UUID
 
+import redis.asyncio as aioredis
+
+from app.agentcore.events import (
+    EventBus,
+    RedisEventSink,
+    TracerEventSink,
+    run_error,
+    run_finished,
+    run_started,
+)
+from app.config import get_settings
 from app.services.source_tasks import mark_source_task
-from app.worker.celery_app import celery_app
-from app.worker.resources import _create_worker_resources
+from app.worker._compat import task_shim
 
 logger = logging.getLogger(__name__)
 
 
-@celery_app.task(
-    bind=True,
-    name="course_generation.generate_course",
-    max_retries=1,
-    default_retry_delay=30,
-)
-def generate_course_task(
-    self,
+async def generate_course(
+    ctx: dict,
     ingest_result: dict,
     user_id: str | None = None,
     goal: str | None = None,
 ) -> dict:
-    """Generate course from an ingested source.
+    """Generate a course from an ingested source.
+
+    Wraps the generation with an AG-UI run: a per-run Redis event stream
+    (``RedisEventSink``) lets the web process re-stream live progress over SSE
+    (replacing polling). ``run_id`` is the ARQ job id, which the frontend
+    already holds as the course task id.
 
     Args:
-        ingest_result: Result dict from ingest_source or clone_source (contains source_id).
+        ctx: ARQ job context (carries shared ``resources`` and ``job_id``).
+        ingest_result: Result dict from ingest_source/clone_source (has source_id).
         user_id: User UUID string for course ownership.
-        goal: Legacy compatibility kwarg from older producers; ignored by the worker.
+        goal: Legacy compatibility kwarg from older producers; ignored.
     """
-    import asyncio
-
     source_id = ingest_result["source_id"]
-
-    async def _runner():
-        resources = _create_worker_resources()
-        try:
-            return await _generate_course_async(self, source_id, user_id, resources)
-        finally:
-            await resources.engine.dispose()
-
-    return asyncio.run(_runner())
+    run_id = ctx.get("job_id") or source_id
+    redis = aioredis.from_url(get_settings().redis_url)
+    bus = EventBus(
+        thread_id=source_id,
+        run_id=run_id,
+        sinks=[RedisEventSink(redis, run_id), TracerEventSink()],
+    )
+    await bus.emit(run_started(thread_id=source_id, run_id=run_id))
+    try:
+        result = await _generate_course_async(
+            task_shim(ctx), source_id, user_id, ctx["resources"], event_bus=bus
+        )
+    except Exception as exc:  # noqa: BLE001
+        await bus.emit(run_error(message=str(exc)))
+        await bus.aclose()
+        await redis.aclose()
+        raise
+    await bus.emit(
+        run_finished(thread_id=source_id, run_id=run_id, result=result)
+    )
+    await bus.aclose()
+    await redis.aclose()
+    return result
 
 
 async def _generate_course_async(
-    task, source_id: str, user_id: str | None, resources
+    task, source_id: str, user_id: str | None, resources, event_bus=None
 ) -> dict:
     """Async implementation of course generation."""
     from sqlalchemy import select
@@ -70,6 +92,8 @@ async def _generate_course_async(
                     f"course_generation cancelled for source {source_id}"
                 )
 
+    from app.agentcore.events import state_snapshot
+
     async def _report_section_progress(_source_id: UUID, progress: dict) -> None:
         async with resources.session_factory() as progress_db:
             await mark_source_task(
@@ -81,6 +105,10 @@ async def _generate_course_async(
                 metadata_={"section_progress": progress},
             )
             await progress_db.commit()
+        # AG-UI live progress: re-snapshot the full progress payload each
+        # update (small + idempotent; the client replaces its state).
+        if event_bus is not None:
+            await event_bus.emit(state_snapshot(progress))
 
     try:
         async with resources.session_factory() as db:
@@ -103,14 +131,28 @@ async def _generate_course_async(
                 )
             ).scalar_one_or_none()
             if existing_task and existing_task.metadata_.get("course_id"):
+                existing_course_id = existing_task.metadata_["course_id"]
                 logger.info(
                     "Skipping course generation for %s: already produced %s",
                     source_id,
-                    existing_task.metadata_["course_id"],
+                    existing_course_id,
                 )
+                # The current run's SourceTask row (preallocated by the
+                # ingest finalizer) is still ``pending``. Mark it success so
+                # /sources/{id}/progress doesn't show a perpetual "课程生成中"
+                # for the loser of the concurrent-ingest race.
+                await mark_source_task(
+                    db,
+                    source_id=sid,
+                    task_type="course_generation",
+                    status="success",
+                    stage="ready",
+                    metadata_={"course_id": existing_course_id},
+                )
+                await db.commit()
                 return {
                     "source_id": source_id,
-                    "course_id": existing_task.metadata_["course_id"],
+                    "course_id": existing_course_id,
                     "status": "ready",
                     "skipped": True,
                 }
@@ -162,6 +204,13 @@ async def _generate_course_async(
                 )
             ).scalars().all()
 
+            # Agentic self-check (Phase 3/4): run the critic over the assembled
+            # course and publish the verdict. Behind a flag so the default path
+            # is unchanged; the verdict is advisory for now (re-plan/backtrack
+            # requires the full graph decomposition).
+            if get_settings().agentic_video_pipeline and event_bus is not None:
+                await _run_course_critic(sections, event_bus, resources)
+
             await mark_source_task(
                 db,
                 source_id=sid,
@@ -209,3 +258,58 @@ async def _generate_course_async(
             )
             await db.commit()
         raise
+
+
+def _section_to_critic_dict(section) -> dict:
+    """Project a Section row into the RuleCritic input shape."""
+    content = section.content or {}
+    lesson = content.get("lesson") or {}
+    knowledge_points: list[str] = []
+    has_practice = False
+    for block in lesson.get("blocks") or []:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "concept_relation":
+            for concept in block.get("concepts", []):
+                label = concept.get("label") if isinstance(concept, dict) else None
+                if label:
+                    knowledge_points.append(label)
+        if block.get("type") == "practice_trigger":
+            has_practice = True
+    return {
+        "title": section.title,
+        "difficulty": section.difficulty or 1,
+        "knowledge_points": knowledge_points,
+        "has_practice": has_practice,
+    }
+
+
+async def _run_course_critic(sections, event_bus, resources) -> None:
+    """Run the critic over the assembled course and publish the verdict.
+
+    Uses ``RuleCritic`` (zero-LLM) by default; if a CRITIC route is configured
+    and the deployment opts in, ``ModelCritic`` could be substituted here. The
+    verdict is emitted as a CUSTOM ``critic_verdict`` AG-UI event (advisory).
+    """
+    from app.services.orchestration.critic import RuleCritic
+    from app.services.orchestration.graph import GraphState
+
+    state = GraphState(
+        data={"sections": [_section_to_critic_dict(s) for s in sections]}
+    )
+    verdict = await RuleCritic().evaluate(state)
+    from app.agentcore.events.types import custom
+
+    await event_bus.emit(
+        custom(
+            "critic_verdict",
+            {
+                "passed": verdict.passed,
+                "scores": verdict.scores,
+                "feedback": verdict.feedback,
+            },
+        )
+    )
+    logger.info(
+        "Course critic verdict: passed=%s scores=%s", verdict.passed, verdict.scores
+    )

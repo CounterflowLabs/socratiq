@@ -1,14 +1,21 @@
-"""API routes for mentor chat with SSE streaming."""
+"""API routes for mentor chat with AG-UI SSE streaming.
 
-import json
+The chat stream now speaks the AG-UI protocol: each SSE ``data:`` frame is one
+AG-UI event (``ag_ui.encoder.EventEncoder``), discriminated by its ``type``
+field. The conversation id is carried as the run's ``threadId`` (RUN_STARTED).
+"""
+
 import uuid
 from typing import Annotated
 
+from ag_ui.encoder import EventEncoder
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
-from sse_starlette.sse import EventSourceResponse
 
+from app.agentcore.events import EventType
+from app.agentcore.events.types import run_error
 from app.api.deps import get_db, get_local_user, get_model_router
 from app.db.database import async_session_factory
 from app.db.models.conversation import Conversation
@@ -43,17 +50,16 @@ async def chat(
     """Send a message to the MentorAgent and receive an SSE stream."""
     user_id = user.id
 
+    encoder = EventEncoder()
+
     async def event_generator():
         async with async_session_factory() as db:
             try:
                 # Get or create conversation
                 if request.conversation_id:
                     conversation = await db.get(Conversation, request.conversation_id)
-                    if not conversation:
-                        yield {"event": "error", "data": json.dumps({"message": "Conversation not found"})}
-                        return
-                    if conversation.user_id != user_id:
-                        yield {"event": "error", "data": json.dumps({"message": "Conversation not found"})}
+                    if not conversation or conversation.user_id != user_id:
+                        yield encoder.encode(run_error(message="Conversation not found", code="not_found"))
                         return
                 else:
                     conversation = Conversation(
@@ -114,29 +120,18 @@ async def chat(
                     if section:
                         section_context = f"\n\nThe student is currently studying section: {section.title}"
 
-                # Stream response
+                # Stream response as AG-UI events
                 full_response = ""
-                async for chunk in agent.process(
+                async for event in agent.process(
                     user_message=request.message,
                     conversation_history=conversation_history,
                     course_id=request.course_id,
                     system_prompt_extra=section_context,
+                    conversation_id=conversation.id,
                 ):
-                    if chunk.type == "text_delta" and chunk.text:
-                        full_response += chunk.text
-                        yield {"event": "text_delta", "data": json.dumps({"text": chunk.text})}
-                    elif chunk.type == "tool_use_start":
-                        yield {"event": "tool_start", "data": json.dumps({"tool": chunk.tool_name})}
-                    elif chunk.type == "tool_use_end":
-                        yield {"event": "tool_end", "data": "{}"}
-                    elif chunk.type == "message_end":
-                        # Emit citations before message_end if any were collected
-                        if agent._collected_citations:
-                            yield {
-                                "event": "citations",
-                                "data": json.dumps({"citations": agent._collected_citations}),
-                            }
-                        yield {"event": "message_end", "data": json.dumps({"conversation_id": str(conversation.id)})}
+                    if event.type == EventType.TEXT_MESSAGE_CONTENT and event.delta:
+                        full_response += event.delta
+                    yield encoder.encode(event)
 
                 # Save assistant message
                 if full_response:
@@ -150,9 +145,13 @@ async def chat(
                 await db.commit()
 
             except Exception as e:
-                yield {"event": "error", "data": json.dumps({"message": str(e)})}
+                yield encoder.encode(run_error(message=str(e)))
 
-    return EventSourceResponse(event_generator())
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/api/v1/conversations", response_model=ConversationListResponse)

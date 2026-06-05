@@ -45,3 +45,7 @@ dump.rdb
 # Playwright debugging artifacts
 .playwright-mcp/
 /*.png
+.acceptance
+
+# Local Claude Code worktrees / agent state
+.claude/

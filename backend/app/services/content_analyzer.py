@@ -266,9 +266,14 @@ def _build_analysis_from_text(
 
     concepts = [ExtractedConcept(**c) for c in data.get("concepts", [])]
     analyzed_chunks = []
-    for i, chunk_data in enumerate(data.get("chunks", [])):
-        raw_text = chunks[i].raw_text if i < len(chunks) else ""
-        metadata = chunks[i].metadata if i < len(chunks) else {}
+    raw_chunks = data.get("chunks", [])
+    # Truncate any overshoot up-front — the prompt requires `chunks` to match
+    # the input length, but an over-generous LLM that emits an extra entry
+    # would otherwise produce an AnalyzedChunk with empty raw_text/metadata
+    # that has no real input chunk behind it.
+    for i, chunk_data in enumerate(raw_chunks[: len(chunks)]):
+        raw_text = chunks[i].raw_text
+        metadata = chunks[i].metadata
         analyzed_chunks.append(
             AnalyzedChunk(
                 topic=chunk_data.get("topic", f"Section {i + 1}"),
@@ -282,6 +287,31 @@ def _build_analysis_from_text(
                 metadata=metadata,
             )
         )
+
+    # Enforce the analyzer's length contract: the output ``chunks`` array
+    # must line up 1:1 with the extractor's input chunks. When the LLM
+    # under-returns we pad with degenerate entries (preserving raw_text +
+    # extractor metadata so downstream stages still see every chunk); when
+    # it over-returns the slice above already truncated. Without this,
+    # SectionPlanner's length check (see services/section_planner.py:164)
+    # short-circuits to Layer 4 per-chunk fallback and the course becomes
+    # one-section-per-chunk.
+    if len(analyzed_chunks) != len(chunks):
+        logger.warning(
+            "ContentAnalyzer: LLM returned %d chunks for %d input chunks; "
+            "padding to match",
+            len(raw_chunks),
+            len(chunks),
+        )
+        for i in range(len(analyzed_chunks), len(chunks)):
+            analyzed_chunks.append(
+                AnalyzedChunk(
+                    topic=f"Section {i + 1}",
+                    summary="",
+                    raw_text=chunks[i].raw_text,
+                    metadata=chunks[i].metadata,
+                )
+            )
 
     return AnalysisResult(
         source_title=data.get("source_title", title),

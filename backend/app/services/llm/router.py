@@ -22,6 +22,39 @@ class TaskType(str, Enum):
     # different tiers as the routing table grows.
     STRUCTURE_PLANNING = "structure_planning"
     EMBEDDING = "embedding"
+    # --- Orchestration tiers (Phase 2) -----------------------------------
+    # New semantic routes for the agentic course-generation pipeline. They are
+    # OPTIONAL: when a deployment hasn't mapped them in the model-config admin
+    # UI, callers fall back through ``TASK_FALLBACKS`` to an existing route, so
+    # nothing breaks with zero new config.
+    PLANNING = "planning"          # heavy: outline shaping, sentence-explore
+    JUDGMENT = "judgment"          # heavy: boundary / knowledge-point ReAct nodes
+    CRITIC = "critic"              # mid: ModelCritic self-check
+    BULK_ANALYSIS = "bulk_analysis"      # cheap: ContentAnalyzer bulk pass
+    BULK_FORMATTING = "bulk_formatting"  # cheap: optional cheap lesson model
+
+
+# Ordered fallbacks for the new orchestration routes → existing routes. The
+# chain is handed to the LLM client (AgentRuntime/RouterLLMClient), NOT resolved
+# inside the router: when ``get_provider(PLANNING)`` raises (no route row), the
+# runtime's provider-fallback chain advances to the next entry. This keeps
+# unconfigured deployments working without touching the routing table.
+TASK_FALLBACKS: dict[TaskType, list[TaskType]] = {
+    TaskType.PLANNING: [TaskType.STRUCTURE_PLANNING, TaskType.EVALUATION],
+    TaskType.JUDGMENT: [TaskType.STRUCTURE_PLANNING],
+    TaskType.CRITIC: [TaskType.EVALUATION],
+    TaskType.BULK_ANALYSIS: [TaskType.CONTENT_ANALYSIS],
+    TaskType.BULK_FORMATTING: [TaskType.CONTENT_ANALYSIS],
+}
+
+
+def resolve_chain(task: TaskType) -> list[TaskType]:
+    """Return ``[task, *fallbacks]`` for use as a provider chain.
+
+    Use as ``RouterLLMClient(router, primary=chain[0], fallbacks=chain[1:])``
+    so an unconfigured new route degrades gracefully to a provisioned one.
+    """
+    return [task, *TASK_FALLBACKS.get(task, [])]
 
 
 class ModelRouter:

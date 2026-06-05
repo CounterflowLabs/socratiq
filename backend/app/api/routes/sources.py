@@ -4,8 +4,9 @@ import uuid
 from pathlib import Path
 from typing import Annotated, Literal
 
+from ag_ui.encoder import EventEncoder
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,7 +28,7 @@ from app.models.source import (
 from app.services.bilibili_credential import has_bilibili_credential
 from app.services.content_key import extract_content_key
 from app.services.source_tasks import create_source_task, dispatch_course_generation
-from app.worker.tasks.content_ingestion import ingest_source, clone_source
+from app.worker.queue import abort_job, enqueue
 
 router = APIRouter(prefix="/api/v1/sources", tags=["sources"])
 
@@ -157,14 +158,14 @@ async def create_source(
             db.add(source)
             await db.flush()
 
-            task = clone_source.delay(str(source.id), str(donor_source.id))
-            source.celery_task_id = task.id
+            job_id = await enqueue("clone_source", str(source.id), str(donor_source.id))
+            source.celery_task_id = job_id
             await create_source_task(
                 db,
                 source_id=source.id,
                 task_type="source_processing",
                 status="pending",
-                celery_task_id=task.id,
+                celery_task_id=job_id,
             )
             await db.commit()
             await db.refresh(source)
@@ -197,14 +198,14 @@ async def create_source(
     db.add(source)
     await db.flush()
 
-    task = ingest_source.delay(str(source.id))
-    source.celery_task_id = task.id
+    job_id = await enqueue("ingest_source", str(source.id))
+    source.celery_task_id = job_id
     await create_source_task(
         db,
         source_id=source.id,
         task_type="source_processing",
         status="pending",
-        celery_task_id=task.id,
+        celery_task_id=job_id,
     )
     await db.commit()
     await db.refresh(source)
@@ -358,9 +359,6 @@ async def cancel_source(
     Celery task without terminating (so workers exit cleanly at the next
     safe break point).
     """
-    from celery.result import AsyncResult
-    from app.worker.celery_app import celery_app
-
     source = (
         await db.execute(
             select(Source).where(
@@ -389,10 +387,7 @@ async def cancel_source(
     for row in rows:
         row.cancel_requested = True
         if row.celery_task_id:
-            try:
-                AsyncResult(row.celery_task_id, app=celery_app).revoke(terminate=False)
-            except Exception:
-                pass
+            await abort_job(row.celery_task_id)
     await db.commit()
     return {"cancelled": len(rows), "source_id": str(source_id)}
 
@@ -439,15 +434,14 @@ async def retry_source(
             f"Source is {source.status!r}; only stale / cancelled / error / pending sources can be retried",
         )
 
-    # If retrying a stuck pending, revoke any in-flight celery task first so
-    # we don't end up with two workers racing on the same source.
-    if source.status == "pending" and source.celery_task_id:
-        from celery.result import AsyncResult
-        from app.worker.celery_app import celery_app
-        try:
-            AsyncResult(source.celery_task_id, app=celery_app).revoke(terminate=False)
-        except Exception:
-            pass
+    # Revoke any in-flight celery task before re-dispatching. We do this for
+    # ``error`` and ``cancelled`` too because Celery's ``acks_late`` +
+    # visibility_timeout can redeliver a task we already gave up on (e.g.
+    # the worker died mid-run and the broker still holds the unacked message).
+    # If we skip the revoke, the redelivered run races our new task and both
+    # finish concurrently — see the duplicate-course_generation bug.
+    if source.status in {"pending", "error", "cancelled"} and source.celery_task_id:
+        await abort_job(source.celery_task_id)
 
     # Reset cancel flag on the active SourceTask rows.
     rows = (
@@ -464,17 +458,17 @@ async def retry_source(
         new_meta.pop("error", None)
         source.metadata_ = new_meta
 
-    task = ingest_source.delay(str(source.id))
-    source.celery_task_id = task.id
+    job_id = await enqueue("ingest_source", str(source.id))
+    source.celery_task_id = job_id
     await create_source_task(
         db,
         source_id=source.id,
         task_type="source_processing",
         status="pending",
-        celery_task_id=task.id,
+        celery_task_id=job_id,
     )
     await db.commit()
-    return {"task_id": task.id, "source_id": str(source_id)}
+    return {"task_id": job_id, "source_id": str(source_id)}
 
 
 @router.delete("/{source_id}", status_code=202)
@@ -490,9 +484,7 @@ async def delete_source(
     next safe break point. The source row stays in the database with
     ``status='deleted'`` and is filtered out of all default queries.
     """
-    from celery.result import AsyncResult
     from datetime import datetime, timezone
-    from app.worker.celery_app import celery_app
 
     source = (
         await db.execute(
@@ -517,16 +509,10 @@ async def delete_source(
     for row in active_rows:
         row.cancel_requested = True
         if row.celery_task_id:
-            try:
-                AsyncResult(row.celery_task_id, app=celery_app).revoke(terminate=False)
-            except Exception:
-                pass
+            await abort_job(row.celery_task_id)
 
     if source.celery_task_id:
-        try:
-            AsyncResult(source.celery_task_id, app=celery_app).revoke(terminate=False)
-        except Exception:
-            pass
+        await abort_job(source.celery_task_id)
 
     source.status = "deleted"
     if isinstance(source.metadata_, dict):
@@ -620,12 +606,51 @@ async def generate_course_for_source(
     )
     await db.commit()
 
-    dispatch_course_generation(
+    await dispatch_course_generation(
         payload={"source_id": str(source_id)},
         task_id=queued_task_id,
         user_id=str(user.id),
     )
     return {"task_id": queued_task_id, "source_id": str(source_id), "status": "dispatched"}
+
+
+@router.get("/{source_id}/runs/{run_id}/events")
+async def stream_run_events(
+    source_id: uuid.UUID,
+    run_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_local_user)],
+):
+    """Live AG-UI event stream for a course-generation run (replaces polling).
+
+    The ARQ worker publishes the run's AG-UI events to a Redis stream; this
+    endpoint subscribes and re-emits them as SSE. ``run_id`` is the course task
+    id the dispatch endpoints return. Reconnecting replays from the start.
+    """
+    import redis.asyncio as aioredis
+
+    from app.agentcore.events import RedisEventSink
+
+    source = await db.get(Source, source_id)
+    if not source or source.created_by != user.id:
+        raise HTTPException(404, f"Source {source_id} not found")
+
+    encoder = EventEncoder()
+    redis = aioredis.from_url(get_settings().redis_url)
+
+    async def event_stream():
+        try:
+            async for body in RedisEventSink.subscribe(redis, run_id):
+                # body is the AG-UI event JSON; wrap in an SSE data frame.
+                yield f"data: {body}\n\n"
+        finally:
+            await redis.aclose()
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/{source_id}/progress", response_model=SourceProgressResponse)

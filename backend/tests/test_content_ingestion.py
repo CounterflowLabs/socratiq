@@ -1,6 +1,7 @@
 """Regression tests for content ingestion worker isolation."""
 
 import uuid
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -212,11 +213,6 @@ async def test_ingest_source_queues_course_generation_when_pipeline_finishes(
         model_router=SimpleNamespace(get_provider=AsyncMock(return_value=SimpleNamespace())),
     )
 
-    monkeypatch.setattr(
-        content_ingestion,
-        "_create_worker_resources",
-        lambda: fake_resources,
-    )
     async def fake_get_whisper_config(_db):
         return {}
 
@@ -338,7 +334,7 @@ async def test_ingest_source_queues_course_generation_when_pipeline_finishes(
     monkeypatch.setattr(
         content_ingestion,
         "dispatch_course_generation",
-        lambda **kwargs: SimpleNamespace(id=kwargs["task_id"]),
+        AsyncMock(),
     )
 
     task_updates: list[tuple[str, dict]] = []
@@ -423,11 +419,6 @@ async def test_ingestion_persists_asset_plan_and_graph_by_page(
         model_router=SimpleNamespace(get_provider=AsyncMock(return_value=SimpleNamespace())),
     )
 
-    monkeypatch.setattr(
-        content_ingestion,
-        "_create_worker_resources",
-        lambda: fake_resources,
-    )
     monkeypatch.setattr(content_ingestion, "_get_whisper_config", AsyncMock(return_value={}))
     monkeypatch.setattr(
         content_ingestion,
@@ -550,7 +541,7 @@ async def test_ingestion_persists_asset_plan_and_graph_by_page(
     monkeypatch.setattr(
         content_ingestion,
         "dispatch_course_generation",
-        lambda **kwargs: SimpleNamespace(id=kwargs["task_id"]),
+        AsyncMock(),
     )
 
     class FakeTask:
@@ -643,18 +634,13 @@ async def test_clone_source_queues_course_generation_when_clone_finishes(
     )
 
     monkeypatch.setattr(
-        content_ingestion,
-        "_create_worker_resources",
-        lambda: fake_resources,
-    )
-    monkeypatch.setattr(
         "app.services.source_tasks.uuid4",
         lambda: "course-task-from-clone",
     )
     monkeypatch.setattr(
         content_ingestion,
         "dispatch_course_generation",
-        lambda **kwargs: SimpleNamespace(id=kwargs["task_id"]),
+        AsyncMock(),
     )
 
     task_updates: list[tuple[str, dict]] = []
@@ -760,18 +746,13 @@ async def test_clone_source_recovers_when_course_dispatch_fails(
     )
 
     monkeypatch.setattr(
-        content_ingestion,
-        "_create_worker_resources",
-        lambda: fake_resources,
-    )
-    monkeypatch.setattr(
         "app.services.source_tasks.uuid4",
         lambda: "course-task-from-clone",
     )
     monkeypatch.setattr(
         content_ingestion,
         "dispatch_course_generation",
-        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("broker unavailable")),
+        AsyncMock(side_effect=RuntimeError("broker unavailable")),
     )
 
     class FakeTask:
@@ -859,3 +840,88 @@ async def test_update_status_syncs_source_task_lifecycle(
     if error_message:
         assert task_row.error_summary == error_message
         assert source_row.metadata_["error"] == error_message
+
+
+@pytest.mark.asyncio
+async def test_ingest_lock_blocks_concurrent_ingest_for_same_source(monkeypatch):
+    """When another worker already holds the lock, the duplicate task
+    short-circuits with ``skipped_locked`` instead of racing the leader."""
+    inner_called = False
+
+    async def fake_locked(*_args, **_kwargs):
+        nonlocal inner_called
+        inner_called = True
+        return {"status": "ready"}
+
+    @asynccontextmanager
+    async def fake_lock(_source_id):
+        yield False  # lock acquisition failed
+
+    monkeypatch.setattr(content_ingestion, "_ingest_lock", fake_lock)
+    monkeypatch.setattr(content_ingestion, "_ingest_source_locked", fake_locked)
+
+    result = await content_ingestion._ingest_source_async(
+        SimpleNamespace(),
+        "source-xyz",
+        SimpleNamespace(),
+    )
+
+    assert result == {"source_id": "source-xyz", "status": "skipped_locked"}
+    assert inner_called is False
+
+
+@pytest.mark.asyncio
+async def test_clone_lock_blocks_concurrent_clone_for_same_source(monkeypatch):
+    """Same short-circuit behavior for ``clone_source``."""
+    inner_called = False
+
+    async def fake_locked(*_args, **_kwargs):
+        nonlocal inner_called
+        inner_called = True
+        return {"status": "ready"}
+
+    @asynccontextmanager
+    async def fake_lock(_source_id):
+        yield False
+
+    monkeypatch.setattr(content_ingestion, "_ingest_lock", fake_lock)
+    monkeypatch.setattr(content_ingestion, "_clone_source_locked", fake_locked)
+
+    result = await content_ingestion._clone_source_async(
+        SimpleNamespace(),
+        "00000000-0000-0000-0000-0000000000aa",
+        "00000000-0000-0000-0000-0000000000bb",
+        SimpleNamespace(),
+    )
+
+    assert result == {
+        "source_id": "00000000-0000-0000-0000-0000000000aa",
+        "status": "skipped_locked",
+    }
+    assert inner_called is False
+
+
+@pytest.mark.asyncio
+async def test_ingest_lock_set_nx_returns_false_when_taken(monkeypatch):
+    """End-to-end of the Redis SET NX EX dance with fakeredis: the second
+    acquire on the same key returns False until the first releases."""
+    import fakeredis.aioredis
+
+    shared = fakeredis.aioredis.FakeRedis()
+
+    def fake_from_url(_url, *_args, **_kwargs):
+        return shared
+
+    monkeypatch.setattr(content_ingestion.aioredis, "from_url", fake_from_url)
+    # aclose() is fine on fakeredis but we don't want our cleanup to close
+    # the shared instance between the two acquires.
+    monkeypatch.setattr(shared, "aclose", AsyncMock())
+
+    source_id = "concurrent-source"
+    async with content_ingestion._ingest_lock(source_id) as first:
+        assert first is True
+        async with content_ingestion._ingest_lock(source_id) as second:
+            assert second is False
+    # After the outer release, a fresh acquire should succeed again.
+    async with content_ingestion._ingest_lock(source_id) as third:
+        assert third is True

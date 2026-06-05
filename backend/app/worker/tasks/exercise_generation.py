@@ -11,38 +11,20 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
-from app.worker.celery_app import celery_app
-from app.worker.resources import _create_worker_resources
-
 logger = logging.getLogger(__name__)
 
 
-@celery_app.task(
-    bind=True,
-    name="exercise_generation.generate_for_section",
-    max_retries=1,
-    default_retry_delay=15,
-)
-def generate_section_exercises_task(
-    self,
+async def generate_section_exercises(
+    ctx: dict,
     section_id: str,
     count: int,
     types: list[str] | None,
     user_id: str,
 ) -> dict:
-    """Celery entry point — wraps the async implementation."""
-    import asyncio
-
-    async def _runner():
-        resources = _create_worker_resources()
-        try:
-            return await _generate_section_exercises_async(
-                section_id, count, types, user_id, resources
-            )
-        finally:
-            await resources.engine.dispose()
-
-    return asyncio.run(_runner())
+    """ARQ entry point — wraps the async implementation."""
+    return await _generate_section_exercises_async(
+        section_id, count, types, user_id, ctx["resources"]
+    )
 
 
 async def _generate_section_exercises_async(

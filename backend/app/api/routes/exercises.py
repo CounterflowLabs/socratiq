@@ -244,10 +244,7 @@ async def generate_exercises_for_section(
     generation is already in flight, the existing task_id is returned and no
     new task is queued.
     """
-    from celery.result import AsyncResult
-
-    from app.worker.celery_app import celery_app
-    from app.worker.tasks.exercise_generation import generate_section_exercises_task
+    from app.worker.queue import enqueue, get_job_state
 
     section = await db.get(Section, section_id)
     if section is None:
@@ -263,26 +260,26 @@ async def generate_exercises_for_section(
     # task_id back to the frontend so the user only ever sees one in-flight
     # generation per section.
     if section.active_exercise_task_id:
-        existing = AsyncResult(section.active_exercise_task_id, app=celery_app)
-        if existing.state in {"PENDING", "STARTED", "PROGRESS", "RETRY"}:
+        if await get_job_state(section.active_exercise_task_id) in {"pending", "running"}:
             return GenerateExercisesResponse(
                 task_id=section.active_exercise_task_id,
                 section_id=section_id,
                 status="in_flight",
             )
 
-    celery_task = generate_section_exercises_task.delay(
+    job_id = await enqueue(
+        "generate_section_exercises",
         str(section_id),
         request.count,
         request.types,
         str(user.id),
     )
-    section.active_exercise_task_id = celery_task.id
+    section.active_exercise_task_id = job_id
     section.exercise_generation_error = None
     await db.commit()
 
     return GenerateExercisesResponse(
-        task_id=celery_task.id,
+        task_id=job_id,
         section_id=section_id,
         status="dispatched",
     )

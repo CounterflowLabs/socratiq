@@ -1,6 +1,6 @@
 """Tests for the course regeneration feature."""
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import AsyncClient
@@ -94,13 +94,10 @@ async def test_regenerate_endpoint_202_enqueues_task(
 ):
     course, _source = await _seed_course_with_source(db_session, demo_user)
 
-    class _FakeAsyncResult:
-        id = "celery-task-1"
-
     with patch(
-        "app.worker.tasks.course_regeneration.regenerate_course.delay",
-        return_value=_FakeAsyncResult(),
-    ) as delay:
+        "app.api.routes.courses.enqueue", new_callable=AsyncMock
+    ) as mock_enqueue:
+        mock_enqueue.return_value = "celery-task-1"
         res = await client.post(
             f"/api/v1/courses/{course.id}/regenerate",
             json={"directive": "Make lessons concise"},
@@ -110,10 +107,11 @@ async def test_regenerate_endpoint_202_enqueues_task(
     body = res.json()
     assert body["task_id"] == "celery-task-1"
     assert body["parent_course_id"] == str(course.id)
-    delay.assert_called_once()
-    args = delay.call_args.args
-    assert args[0] == str(course.id)
-    assert args[1] == "Make lessons concise"
+    mock_enqueue.assert_awaited_once()
+    args = mock_enqueue.call_args.args
+    assert args[0] == "regenerate_course"
+    assert args[1] == str(course.id)
+    assert args[2] == "Make lessons concise"
 
 
 @pytest.mark.asyncio
@@ -136,33 +134,30 @@ async def test_regenerate_endpoint_returns_existing_active_task(
     """Re-clicking Regenerate while a task is running returns the same task id."""
     course, _ = await _seed_course_with_source(db_session, demo_user)
 
-    class _FakeAsyncResult:
-        id = "celery-task-running"
-
     with patch(
-        "app.worker.tasks.course_regeneration.regenerate_course.delay",
-        return_value=_FakeAsyncResult(),
-    ) as delay:
+        "app.api.routes.courses.enqueue", new_callable=AsyncMock
+    ) as mock_enqueue:
+        mock_enqueue.return_value = "celery-task-running"
         res = await client.post(
             f"/api/v1/courses/{course.id}/regenerate",
             json={"directive": "first"},
         )
     assert res.status_code == 202
-    delay.assert_called_once()
+    mock_enqueue.assert_awaited_once()
 
     with patch(
-        "app.worker.tasks.course_regeneration.regenerate_course.delay",
-    ) as delay2, patch(
-        "app.api.routes.courses.AsyncResult"
-    ) as MockAsyncResult:
-        MockAsyncResult.return_value.state = "PROGRESS"
+        "app.api.routes.courses.enqueue", new_callable=AsyncMock
+    ) as enqueue2, patch(
+        "app.api.routes.courses.get_job_state", new_callable=AsyncMock
+    ) as mock_state:
+        mock_state.return_value = "running"
         res2 = await client.post(
             f"/api/v1/courses/{course.id}/regenerate",
             json={"directive": "second"},
         )
     assert res2.status_code == 202
     assert res2.json()["task_id"] == "celery-task-running"
-    delay2.assert_not_called()
+    enqueue2.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -174,23 +169,20 @@ async def test_regenerate_endpoint_starts_new_task_when_previous_finalized(
     course.active_regeneration_task_id = "celery-task-old"
     await db_session.flush()
 
-    class _FakeAsyncResult:
-        id = "celery-task-new"
-
     with patch(
-        "app.worker.tasks.course_regeneration.regenerate_course.delay",
-        return_value=_FakeAsyncResult(),
-    ) as delay, patch(
-        "app.api.routes.courses.AsyncResult"
-    ) as MockAsyncResult:
-        MockAsyncResult.return_value.state = "SUCCESS"
+        "app.api.routes.courses.enqueue", new_callable=AsyncMock
+    ) as mock_enqueue, patch(
+        "app.api.routes.courses.get_job_state", new_callable=AsyncMock
+    ) as mock_state:
+        mock_enqueue.return_value = "celery-task-new"
+        mock_state.return_value = "success"  # previous task finalized
         res = await client.post(
             f"/api/v1/courses/{course.id}/regenerate",
             json={"directive": "retry"},
         )
     assert res.status_code == 202
     assert res.json()["task_id"] == "celery-task-new"
-    delay.assert_called_once()
+    mock_enqueue.assert_awaited_once()
 
 
 @pytest.mark.asyncio

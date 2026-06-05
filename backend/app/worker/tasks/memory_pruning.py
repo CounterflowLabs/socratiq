@@ -1,23 +1,17 @@
-"""Celery task for pruning expired episodic memories."""
+"""ARQ task for pruning expired episodic memories."""
 
 import logging
-
-from app.worker.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
 
-@celery_app.task(name="memory.prune_expired")
-def prune_expired_memories():
+async def prune_expired_memories(ctx: dict) -> dict:
     """Delete episodic memories past their expiry date.
 
-    Low-importance memories are created with an ``expires_at`` timestamp.
-    This task should be scheduled periodically (e.g. daily via Celery Beat)
-    to clean them up.
+    Low-importance memories carry an ``expires_at`` timestamp. Schedule this
+    periodically (e.g. via an ARQ cron job) to clean them up.
     """
-    import asyncio
-
-    return asyncio.run(_prune_async())
+    return await _prune_async()
 
 
 async def _prune_async() -> dict:

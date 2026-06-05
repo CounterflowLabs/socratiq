@@ -13,18 +13,6 @@ from app.db.models.source import Source
 from app.db.models.source_task import SourceTask
 
 
-class _GenerateCourseTaskProxy:
-    """Lazy proxy to avoid circular imports between workers and task helpers."""
-
-    def apply_async(self, *args, **kwargs):
-        from app.worker.tasks.course_generation import generate_course_task as task
-
-        return task.apply_async(*args, **kwargs)
-
-
-generate_course_task = _GenerateCourseTaskProxy()
-
-
 @dataclass(frozen=True)
 class PreparedCourseGeneration:
     """Post-commit dispatch details for a preallocated course task."""
@@ -218,18 +206,20 @@ async def finish_source_processing_and_enqueue_course(
     )
 
 
-def dispatch_course_generation(
+async def dispatch_course_generation(
     *,
     payload: dict[str, Any],
     task_id: str,
     user_id: str | None,
 ):
-    """Dispatch the already-persisted course-generation task."""
-    return generate_course_task.apply_async(
-        args=[payload],
-        kwargs={"user_id": user_id},
-        task_id=task_id,
-    )
+    """Enqueue the already-persisted course-generation task on ARQ.
+
+    ``task_id`` is the pre-allocated job id (idempotent enqueue: ARQ dedups by
+    job id, so a redelivery/reaper re-dispatch won't double-run).
+    """
+    from app.worker.queue import enqueue
+
+    return await enqueue("generate_course", payload, user_id=user_id, job_id=task_id)
 
 
 async def recover_course_generation_dispatch_failure(

@@ -37,6 +37,12 @@ class Settings(BaseSettings):
     # Observability
     sentry_dsn: str = ""
 
+    # Agentic course-generation pipeline (Phase 3/4). When False the
+    # course-generation graph degenerates to the deterministic chain that
+    # matches today's behavior exactly; when True it enables the critic gate
+    # (and, later, ReAct judgment nodes) over the generated course.
+    agentic_video_pipeline: bool = False
+
     # LLM timeouts and concurrency (Tier 3/4 of async refactor)
     # Note: idle timeout doubles as the per-request read deadline for
     # non-streaming OpenAI-compatible providers, so set generously enough

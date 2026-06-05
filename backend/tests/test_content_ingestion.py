@@ -925,3 +925,92 @@ async def test_ingest_lock_set_nx_returns_false_when_taken(monkeypatch):
     # After the outer release, a fresh acquire should succeed again.
     async with content_ingestion._ingest_lock(source_id) as third:
         assert third is True
+
+
+@pytest.mark.asyncio
+async def test_ingest_source_emits_agui_run_events(monkeypatch):
+    """``ingest_source`` wraps the pipeline in an AG-UI run: RUN_STARTED, the
+    pipeline's per-stage STATE_SNAPSHOTs, then RUN_FINISHED — published to the
+    per-run Redis stream so the web SSE endpoint can re-stream live progress.
+    ``run_id`` is the ARQ job id (= the processing task's celery_task_id)."""
+    import json
+
+    import fakeredis.aioredis
+
+    from app.agentcore.events import state_snapshot
+
+    shared = fakeredis.aioredis.FakeRedis()
+    monkeypatch.setattr(
+        content_ingestion.aioredis, "from_url", lambda *_a, **_k: shared
+    )
+    monkeypatch.setattr(shared, "aclose", AsyncMock())
+
+    async def fake_pipeline(task, source_id, resources, event_bus=None):
+        # The wrapper must thread the bus down so stages can publish progress.
+        assert event_bus is not None
+        await event_bus.emit(
+            state_snapshot(
+                {"phase": "source_processing", "stage": "extracting", "status": "running"}
+            )
+        )
+        return {"source_id": source_id, "status": "ready"}
+
+    monkeypatch.setattr(content_ingestion, "_ingest_source_async", fake_pipeline)
+
+    job_id = "run-abc-123"
+    result = await content_ingestion.ingest_source(
+        {"job_id": job_id, "resources": SimpleNamespace()}, "source-1"
+    )
+    assert result == {"source_id": "source-1", "status": "ready"}
+
+    entries = await shared.xrange(f"agui:run:{job_id}")
+    types = []
+    for _entry_id, fields in entries:
+        body = fields.get(b"e") or fields.get("e")
+        if body is None:
+            continue
+        body = body.decode() if isinstance(body, bytes) else body
+        types.append(json.loads(body)["type"])
+
+    assert types[0] == "RUN_STARTED"
+    assert "STATE_SNAPSHOT" in types
+    assert types[-1] == "RUN_FINISHED"
+
+
+@pytest.mark.asyncio
+async def test_ingest_source_emits_run_error_on_failure(monkeypatch):
+    """A failing pipeline still closes the AG-UI run with RUN_ERROR (so the
+    frontend's live stream sees the failure) and re-raises."""
+    import json
+
+    import fakeredis.aioredis
+
+    shared = fakeredis.aioredis.FakeRedis()
+    monkeypatch.setattr(
+        content_ingestion.aioredis, "from_url", lambda *_a, **_k: shared
+    )
+    monkeypatch.setattr(shared, "aclose", AsyncMock())
+
+    async def boom(task, source_id, resources, event_bus=None):
+        raise RuntimeError("extract failed")
+
+    monkeypatch.setattr(content_ingestion, "_ingest_source_async", boom)
+
+    job_id = "run-err-1"
+    with pytest.raises(RuntimeError, match="extract failed"):
+        await content_ingestion.ingest_source(
+            {"job_id": job_id, "resources": SimpleNamespace()}, "source-2"
+        )
+
+    entries = await shared.xrange(f"agui:run:{job_id}")
+    types = [
+        json.loads(
+            (fields.get(b"e") or fields.get("e")).decode()
+            if isinstance(fields.get(b"e") or fields.get("e"), bytes)
+            else (fields.get(b"e") or fields.get("e"))
+        )["type"]
+        for _id, fields in entries
+        if (fields.get(b"e") or fields.get("e")) is not None
+    ]
+    assert types[0] == "RUN_STARTED"
+    assert "RUN_ERROR" in types

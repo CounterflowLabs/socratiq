@@ -11,6 +11,15 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
 )
 
+from app.agentcore.events import (
+    EventBus,
+    RedisEventSink,
+    TracerEventSink,
+    run_error,
+    run_finished,
+    run_started,
+    state_snapshot,
+)
 from app.config import get_settings
 from app.services.source_tasks import (
     TaskCancelledError,
@@ -66,20 +75,55 @@ def uuid_token() -> str:
     return uuid4().hex
 
 
+@asynccontextmanager
+async def _ingestion_run(ctx: dict, source_id: str):
+    """Wrap an ingestion task in an AG-UI run.
+
+    Emits ``RUN_STARTED`` up front, ``RUN_FINISHED`` on success / ``RUN_ERROR``
+    on failure, and yields the ``EventBus`` so the pipeline can publish per-stage
+    ``STATE_SNAPSHOT`` events. ``run_id`` is the ARQ job id — the same id the
+    frontend holds as the processing task id — so the web SSE endpoint streams it
+    to the browser (replacing polling). Best-effort: this is the live-progress
+    channel, never the source of truth.
+    """
+    run_id = ctx.get("job_id") or source_id
+    redis = aioredis.from_url(get_settings().redis_url)
+    bus = EventBus(
+        thread_id=source_id,
+        run_id=run_id,
+        sinks=[RedisEventSink(redis, run_id), TracerEventSink()],
+    )
+    await bus.emit(run_started(thread_id=source_id, run_id=run_id))
+    try:
+        yield bus
+    except Exception as exc:  # noqa: BLE001
+        await bus.emit(run_error(message=str(exc)))
+        raise
+    else:
+        await bus.emit(run_finished(thread_id=source_id, run_id=run_id))
+    finally:
+        await bus.aclose()
+        await redis.aclose()
+
+
 async def ingest_source(ctx: dict, source_id: str) -> dict:
     """Main content ingestion pipeline task (extract → analyze → store → embed)."""
-    return await _ingest_source_async(task_shim(ctx), source_id, ctx["resources"])
+    async with _ingestion_run(ctx, source_id) as bus:
+        return await _ingest_source_async(
+            task_shim(ctx), source_id, ctx["resources"], event_bus=bus
+        )
 
 
 async def clone_source(ctx: dict, source_id: str, ref_source_id: str) -> dict:
     """Clone already extracted content from a ready donor source."""
-    return await _clone_source_async(
-        task_shim(ctx), source_id, ref_source_id, ctx["resources"]
-    )
+    async with _ingestion_run(ctx, source_id) as bus:
+        return await _clone_source_async(
+            task_shim(ctx), source_id, ref_source_id, ctx["resources"], event_bus=bus
+        )
 
 
 async def _clone_source_async(
-    task, source_id: str, ref_source_id: str, resources
+    task, source_id: str, ref_source_id: str, resources, event_bus=None
 ) -> dict:
     """Async implementation of source cloning."""
     sid = UUID(source_id)
@@ -93,7 +137,7 @@ async def _clone_source_async(
             )
             return {"source_id": source_id, "status": "skipped_locked"}
         return await _clone_source_locked(
-            task, source_id, ref_source_id, resources, sid, ref_sid
+            task, source_id, ref_source_id, resources, sid, ref_sid, event_bus=event_bus
         )
 
 
@@ -104,6 +148,7 @@ async def _clone_source_locked(
     resources,
     sid: UUID,
     ref_sid: UUID,
+    event_bus=None,
 ) -> dict:
     """Locked clone body. Extracted so the lock wrapper stays small."""
     from sqlalchemy import select
@@ -140,7 +185,7 @@ async def _clone_source_locked(
 
         try:
             task.update_state(state="PROGRESS", meta={"stage": "cloning"})
-            await _update_status(db, sid, "storing")
+            await _update_status(db, sid, "storing", event_bus=event_bus)
 
             ref_metadata = dict(ref.metadata_ or {})
             ref_metadata.pop("course_id", None)
@@ -241,7 +286,7 @@ async def _clone_source_locked(
     return completion.result
 
 
-async def _ingest_source_async(task, source_id: str, resources) -> dict:
+async def _ingest_source_async(task, source_id: str, resources, event_bus=None) -> dict:
     """Async implementation of the ingestion pipeline."""
     async with _ingest_lock(source_id) as acquired:
         if not acquired:
@@ -250,10 +295,10 @@ async def _ingest_source_async(task, source_id: str, resources) -> dict:
                 source_id,
             )
             return {"source_id": source_id, "status": "skipped_locked"}
-        return await _ingest_source_locked(task, source_id, resources)
+        return await _ingest_source_locked(task, source_id, resources, event_bus=event_bus)
 
 
-async def _ingest_source_locked(task, source_id: str, resources) -> dict:
+async def _ingest_source_locked(task, source_id: str, resources, event_bus=None) -> dict:
     """Locked ingest body. Extracted so the lock wrapper stays small."""
     from sqlalchemy import select
 
@@ -288,7 +333,7 @@ async def _ingest_source_locked(task, source_id: str, resources) -> dict:
         try:
             # === STEP 1: EXTRACT ===
             await raise_if_cancelled(db, source_id=sid, task_type="source_processing")
-            await _update_status(db, sid, "extracting")
+            await _update_status(db, sid, "extracting", event_bus=event_bus)
             task.update_state(state="PROGRESS", meta={"stage": "extracting"})
 
             whisper_kwargs = await _get_whisper_config(db)
@@ -317,7 +362,7 @@ async def _ingest_source_locked(task, source_id: str, resources) -> dict:
 
             # === STEP 2: ANALYZE ===
             await raise_if_cancelled(db, source_id=sid, task_type="source_processing")
-            await _update_status(db, sid, "analyzing")
+            await _update_status(db, sid, "analyzing", event_bus=event_bus)
             task.update_state(state="PROGRESS", meta={"stage": "analyzing"})
 
             analyzer = ContentAnalyzer(resources.model_router)
@@ -348,7 +393,7 @@ async def _ingest_source_locked(task, source_id: str, resources) -> dict:
 
             # === STEP 5: STORE ===
             await raise_if_cancelled(db, source_id=sid, task_type="source_processing")
-            await _update_status(db, sid, "storing")
+            await _update_status(db, sid, "storing", event_bus=event_bus)
             task.update_state(state="PROGRESS", meta={"stage": "storing"})
 
             chunk_ids = []
@@ -422,7 +467,7 @@ async def _ingest_source_locked(task, source_id: str, resources) -> dict:
 
             # === STEP 6: EMBED ===
             await raise_if_cancelled(db, source_id=sid, task_type="source_processing")
-            await _update_status(db, sid, "embedding")
+            await _update_status(db, sid, "embedding", event_bus=event_bus)
             task.update_state(state="PROGRESS", meta={"stage": "embedding"})
 
             embedding_service = EmbeddingService(resources.model_router)
@@ -449,7 +494,7 @@ async def _ingest_source_locked(task, source_id: str, resources) -> dict:
             await raise_if_cancelled(
                 db, source_id=sid, task_type="source_processing"
             )
-            await _update_status(db, sid, "planning")
+            await _update_status(db, sid, "planning", event_bus=event_bus)
             task.update_state(state="PROGRESS", meta={"stage": "planning"})
 
             from app.services.llm import TaskType, lesson_input_token_budget
@@ -658,8 +703,14 @@ async def _update_status(
     source_id: UUID,
     status: str,
     error_message: str | None = None,
+    event_bus=None,
 ) -> None:
-    """Update source and source-task lifecycle state in the database."""
+    """Update source and source-task lifecycle state in the database.
+
+    When ``event_bus`` is provided, also publishes a ``STATE_SNAPSHOT`` for the
+    new stage so the web SSE endpoint can stream live ingestion progress. The
+    DB write is authoritative; the emit is best-effort and never raised.
+    """
 
     from sqlalchemy import select
 
@@ -700,6 +751,22 @@ async def _update_status(
     # Data writes (chunks, embeddings, etc.) live in their own commit at the
     # end of each stage block.
     await db.commit()
+
+    # AG-UI live progress: snapshot the new stage for the SSE channel. Best
+    # effort — a Redis hiccup must never break ingestion.
+    if event_bus is not None:
+        try:
+            await event_bus.emit(
+                state_snapshot(
+                    {
+                        "phase": "source_processing",
+                        "stage": stage,
+                        "status": task_status,
+                    }
+                )
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("ingestion progress emit failed", exc_info=True)
 
 
 def _source_task_lifecycle(

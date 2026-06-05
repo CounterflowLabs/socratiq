@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useRunProgress } from "@/lib/use-run-progress";
 import { useRouter } from "next/navigation";
 
 import {
@@ -213,6 +214,7 @@ export default function ImportPage() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [biliLoggedIn, setBiliLoggedIn] = useState<boolean | null>(null);
   const [activeSourceId, setActiveSourceId] = useState<string | null>(null);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [activeSourceLabel, setActiveSourceLabel] = useState<string>("");
   const [activeSourceType, setActiveSourceType] = useState<"youtube" | "bilibili" | "pdf" | "markdown" | "url">("url");
   const [existingSourceNotice, setExistingSourceNotice] =
@@ -260,29 +262,49 @@ export default function ImportPage() {
         ? Boolean(pdfFile)
         : Boolean(textContent.trim());
 
-  // Poll real backend progress so the card reflects extractor/worker state
-  // (including failures), not a cosmetic timer.
+  // Refetch the DB-authoritative pipeline state and re-derive the card. Also
+  // tracks the active task's run id (= celery_task_id = the AG-UI run id) so the
+  // SSE subscription below can follow the live run across the ingestion ->
+  // course-generation handoff.
+  const progressActive = analyzing && card.status === "running";
+  const refreshProgress = useCallback(async () => {
+    if (!activeSourceId) return;
+    try {
+      const progress = await getSourceProgress(activeSourceId);
+      setCard(deriveCardState(progress));
+      const live = progress.tasks.find(
+        (t) => t.status === "running" || t.status === "pending" || t.status === "progress",
+      );
+      setActiveRunId(live?.celery_task_id ?? null);
+    } catch {
+      // transient — the safety poll / next event will retry
+    }
+  }, [activeSourceId]);
+
+  // Live progress over AG-UI SSE: each emitted event triggers a refetch, so the
+  // card updates the instant the worker advances a stage instead of on a timer.
+  const liveRun = useRunProgress(activeSourceId, activeRunId, progressActive);
   useEffect(() => {
-    if (!analyzing || !activeSourceId || card.status !== "running") return;
+    if (!progressActive) return;
+    if (liveRun.snapshot !== null || liveRun.runStatus === "finished" || liveRun.runStatus === "error") {
+      void refreshProgress();
+    }
+  }, [liveRun.snapshot, liveRun.runStatus, progressActive, refreshProgress]);
+
+  // Initial fetch + a slow safety poll (the SSE stream drives live updates; this
+  // only backstops a dropped connection or a missed run handoff).
+  useEffect(() => {
+    if (!progressActive) return;
     let cancelled = false;
-
-    const tick = async () => {
-      try {
-        const progress = await getSourceProgress(activeSourceId);
-        if (cancelled) return;
-        setCard(deriveCardState(progress));
-      } catch {
-        // transient — retry next tick
-      }
-    };
-
-    void tick();
-    const handle = setInterval(tick, 2500);
+    void refreshProgress();
+    const handle = setInterval(() => {
+      if (!cancelled) void refreshProgress();
+    }, 8000);
     return () => {
       cancelled = true;
       clearInterval(handle);
     };
-  }, [analyzing, activeSourceId, card.status]);
+  }, [progressActive, refreshProgress]);
 
   function handleFileSelect(file: File | undefined) {
     if (!file) return;

@@ -88,6 +88,13 @@ function getTaskActionId(task?: SourceTaskSummary | null): string | null {
   return task?.id ?? task?.celery_task_id ?? null;
 }
 
+// The AG-UI run id is the ARQ job id, which the backend pre-allocates as the
+// task's celery_task_id (= enqueue job_id = worker run_id), NOT the DB row id.
+// Subscribing by row id would listen on the wrong Redis stream and get nothing.
+function getRunId(task?: SourceTaskSummary | null): string | null {
+  return task?.celery_task_id ?? task?.id ?? null;
+}
+
 const STAGE_LABELS: Record<string, string> = {
   pending: "排队中",
   processing: "处理中",
@@ -1124,7 +1131,7 @@ export default function SourceDetailDrawer({
   // parent's source polling remains the fallback when no live stream exists.
   const liveCourse = useRunProgress(
     source?.id ?? null,
-    getTaskActionId(source?.latest_course_task),
+    getRunId(source?.latest_course_task),
     open && isTaskActiveStatus(source?.latest_course_task),
   );
 

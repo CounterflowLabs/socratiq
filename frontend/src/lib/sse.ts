@@ -38,6 +38,37 @@ export async function* streamSSE(
       `SSE 请求失败：${res.status} ${res.statusText}\nURL：${res.url}\n详情：${bodyText || "响应体为空"}`
     );
   }
+  yield* readEventStream(res);
+}
+
+/**
+ * Stream SSE events from a GET endpoint (e.g. an AG-UI run event stream).
+ * Auth mirrors {@link streamSSE} — a plain fetch with no bearer token; the
+ * backend resolves the local user the same way it does for the chat stream.
+ */
+export async function* streamSSEGet(
+  url: string,
+  signal?: AbortSignal
+): AsyncGenerator<SSEEvent> {
+  let res: Response;
+  try {
+    res = await fetch(url, { method: "GET", signal });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`无法连接后端 SSE 接口：${url}\n原始错误：${reason}`);
+  }
+
+  if (!res.ok) {
+    const bodyText = await res.text();
+    throw new Error(
+      `SSE 请求失败：${res.status} ${res.statusText}\nURL：${res.url}\n详情：${bodyText || "响应体为空"}`
+    );
+  }
+  yield* readEventStream(res);
+}
+
+/** Parse a streaming SSE response body into discrete events. */
+async function* readEventStream(res: Response): AsyncGenerator<SSEEvent> {
   if (!res.body) throw new Error("No response body");
 
   const stream = res.body

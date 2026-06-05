@@ -469,6 +469,9 @@ export interface AGUIEvent {
   // custom (e.g. {name:"citations", value:[...]})
   name?: string;
   value?: unknown;
+  // task progress: STATE_SNAPSHOT carries `snapshot` (full state); STATE_DELTA
+  // reuses the `delta` key above but as an RFC 6902 op array (see useRunProgress).
+  snapshot?: unknown;
 }
 
 interface StreamChatOptions {
@@ -494,6 +497,33 @@ export async function* streamChat(opts: StreamChatOptions): AsyncGenerator<AGUIE
   )) {
     // AG-UI frames are unnamed SSE `data:` events; the event kind is the
     // `type` field inside the JSON payload.
+    try {
+      yield JSON.parse(evt.data) as AGUIEvent;
+    } catch {
+      // skip malformed events
+    }
+  }
+}
+
+/**
+ * Live AG-UI event stream for a long-running task (course generation).
+ *
+ * `runId` is the course task id returned by the dispatch endpoints. The ARQ
+ * worker publishes the run's events to a Redis stream; this re-streams them as
+ * SSE. Reconnecting replays from the start, so a late subscriber still gets the
+ * latest STATE_SNAPSHOT. Replaces polling `getSourceProgress` for live progress.
+ */
+export async function* streamRunEvents(
+  sourceId: string,
+  runId: string,
+  signal?: AbortSignal
+): AsyncGenerator<AGUIEvent> {
+  const { streamSSEGet } = await import("./sse");
+
+  for await (const evt of streamSSEGet(
+    `${API_BASE}/sources/${sourceId}/runs/${runId}/events`,
+    signal
+  )) {
     try {
       yield JSON.parse(evt.data) as AGUIEvent;
     } catch {

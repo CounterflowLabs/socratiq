@@ -31,6 +31,7 @@ import {
   type SourceTaskSummary,
 } from "@/lib/api";
 import { deriveMaterialPresentation } from "@/lib/materials-state";
+import { useRunProgress } from "@/lib/use-run-progress";
 
 interface SourceDetailDrawerProps {
   open: boolean;
@@ -393,7 +394,12 @@ function normalizeSectionStatus(value: unknown): SectionAssemblyStatus {
 function getSectionAssemblyProgress(
   task?: SourceTaskSummary | null,
 ): SectionAssemblyProgress | null {
-  const raw = task?.metadata_?.section_progress;
+  return normalizeSectionProgress(task?.metadata_?.section_progress);
+}
+
+// Shared by the polled path (task.metadata_) and the live AG-UI STATE_SNAPSHOT
+// path — both carry the same section_progress shape.
+function normalizeSectionProgress(raw: unknown): SectionAssemblyProgress | null {
   if (!isRecord(raw)) return null;
   const rawItems = Array.isArray(raw.items) ? raw.items : [];
   const items = rawItems.filter(isRecord).map((item, index) => ({
@@ -843,8 +849,15 @@ function CourseProgressPanel({
   );
 }
 
-function SectionAssemblyPanel({ task }: { task?: SourceTaskSummary | null }) {
-  const progress = getSectionAssemblyProgress(task);
+function SectionAssemblyPanel({
+  task,
+  live,
+}: {
+  task?: SourceTaskSummary | null;
+  live?: Record<string, unknown> | null;
+}) {
+  // Prefer the live AG-UI snapshot; fall back to the last polled task metadata.
+  const progress = normalizeSectionProgress(live) ?? getSectionAssemblyProgress(task);
   const showFallback =
     isTaskActiveStatus(task) && (task?.stage === "assembling_course" || task?.stage === "generating_lessons");
 
@@ -1106,6 +1119,15 @@ export default function SourceDetailDrawer({
     };
   }, [open]);
 
+  // Live course-generation progress over AG-UI SSE (replaces polling for the
+  // section-assembly panel). Idles unless a course task is actively running; the
+  // parent's source polling remains the fallback when no live stream exists.
+  const liveCourse = useRunProgress(
+    source?.id ?? null,
+    getTaskActionId(source?.latest_course_task),
+    open && isTaskActiveStatus(source?.latest_course_task),
+  );
+
   if (!source) {
     return null;
   }
@@ -1235,7 +1257,7 @@ export default function SourceDetailDrawer({
                   onRetry={() => void handleCourseTaskAction("retry")}
                 />
                 <TaskStageDetailPanel source={source} />
-                <SectionAssemblyPanel task={source.latest_course_task} />
+                <SectionAssemblyPanel task={source.latest_course_task} live={liveCourse.snapshot} />
 
                 <section
                   className="rounded-2xl p-4"

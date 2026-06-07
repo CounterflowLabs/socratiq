@@ -7,6 +7,8 @@ from math import inf
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,6 +43,25 @@ from app.db.models.user import User
 router = APIRouter(prefix="/api/v1/courses", tags=["courses"])
 
 _MAX_VERSION_DEPTH = 64
+
+
+class PromptCourseRequest(BaseModel):
+    """Request body for generating a course from a single one-sentence prompt.
+
+    Unlike ``/generate`` (which derives a course from already-ingested
+    sources), this path has NO source material — the outline and every lesson
+    are produced from the LLM's own topic knowledge, guided only by ``prompt``.
+    """
+
+    prompt: str = Field(..., min_length=1, max_length=2000)
+    target_language: str = "zh-CN"
+
+
+class PromptCourseResponse(BaseModel):
+    """202 response from POST /courses/from-prompt."""
+
+    task_id: str
+    status: str  # "dispatched"
 
 
 async def _compute_version_index(db: AsyncSession, course: Course) -> int:
@@ -231,6 +252,78 @@ async def generate_course(
         task_id=task_id,
         source_ids=request.source_ids,
         status="dispatched",
+    )
+
+
+@router.post(
+    "/from-prompt",
+    response_model=PromptCourseResponse,
+    status_code=202,
+)
+async def generate_course_from_prompt(
+    request: PromptCourseRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_local_user)],
+) -> PromptCourseResponse:
+    """Generate a full course from a single one-sentence prompt (source-less).
+
+    Enqueues ``generate_sentence_course`` which explores + freezes an outline
+    from the prompt, then fills each section with a lesson drawn from the LLM's
+    own topic knowledge (there is no source material). Returns the task id;
+    progress streams over the AG-UI run keyed by that id, and the course
+    surfaces in ``GET /courses`` once generation completes.
+    """
+    prompt = request.prompt.strip()
+    if not prompt:
+        raise HTTPException(422, "prompt must not be empty")
+
+    job_id = await enqueue(
+        "generate_sentence_course",
+        prompt,
+        str(user.id),
+        request.target_language,
+    )
+
+    return PromptCourseResponse(
+        task_id=job_id or "",
+        status="dispatched",
+    )
+
+
+@router.get("/runs/{run_id}/events")
+async def stream_course_run_events(
+    run_id: str,
+    user: Annotated[User, Depends(get_local_user)],
+):
+    """Source-less AG-UI event stream for a course-generation run.
+
+    Mirrors the source-scoped ``GET /sources/{id}/runs/{run_id}/events`` but for
+    runs with no source (``from-prompt`` sentence→course). The ARQ worker
+    publishes the run's AG-UI events to a Redis stream keyed by ``run_id``; we
+    subscribe and re-emit them as SSE. The terminal ``RUN_FINISHED`` event
+    carries ``result.course_id`` so the client can navigate to the new course.
+
+    Auth is by authenticated user only — there is no source to scope ownership
+    to, and ``run_id`` is an unguessable ARQ job id (single-tenant local model).
+    """
+    import redis.asyncio as aioredis
+
+    from app.agentcore.events import RedisEventSink
+    from app.config import get_settings
+
+    redis = aioredis.from_url(get_settings().redis_url)
+
+    async def event_stream():
+        try:
+            async for body in RedisEventSink.subscribe(redis, run_id):
+                yield f"data: {body}\n\n"
+        finally:
+            await redis.aclose()
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 

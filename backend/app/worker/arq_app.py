@@ -53,6 +53,7 @@ def _functions():
     from app.worker.tasks.exercise_generation import generate_section_exercises
     from app.worker.tasks.lesson_regeneration import regenerate_section_lesson
     from app.worker.tasks.memory_pruning import prune_expired_memories
+    from app.worker.tasks.sentence_course import generate_sentence_course
 
     long = 3600  # whisper transcription / multi-source generation can be slow
     return [
@@ -60,6 +61,7 @@ def _functions():
         func(clone_source, name="clone_source", max_tries=1, timeout=300),
         func(generate_course, name="generate_course", max_tries=1, timeout=long),
         func(generate_multi, name="generate_multi", max_tries=1, timeout=long),
+        func(generate_sentence_course, name="generate_sentence_course", max_tries=1, timeout=long),
         func(regenerate_course, name="regenerate_course", max_tries=1, timeout=long),
         func(generate_section_exercises, name="generate_section_exercises", max_tries=1, timeout=300),
         func(regenerate_section_lesson, name="regenerate_section_lesson", max_tries=1, timeout=300),

@@ -14,13 +14,23 @@ and is represented by ``OutlineToPlanNode`` handing a frozen plan to that path.
 
 from __future__ import annotations
 
+import asyncio
+import logging
+
 from app.agentcore.llm.client import LLMClient
 from app.agentcore.tools.base import ToolContext, ToolDefinition, ToolResult
 from app.services.orchestration.critic import CriticGate, RuleCritic
 from app.services.orchestration.graph import CourseGraph, GraphState
 from app.services.orchestration.react_node import ReActNode
 
-__all__ = ["DraftOutlineTool", "OutlineToPlanNode", "build_sentence_course_graph"]
+logger = logging.getLogger(__name__)
+
+__all__ = [
+    "DraftOutlineTool",
+    "OutlineToPlanNode",
+    "build_sentence_course_graph",
+    "fill_sentence_course",
+]
 
 SECTIONS_KEY = "sections"
 OUTLINE_FROZEN_KEY = "outline_frozen"
@@ -122,3 +132,111 @@ def build_sentence_course_graph(llm: LLMClient, *, max_explore_iters: int = 6) -
         nodes=[explore, OutlineToPlanNode()],
         gates={"explore": freeze_gate},
     )
+
+
+# --- Phase 2: source-less fill --------------------------------------------
+
+
+async def fill_sentence_course(
+    generator,
+    sections: list[dict],
+    *,
+    target_language: str,
+    bus=None,
+) -> list[dict]:
+    """Generate one block-based lesson per frozen section, IN PARALLEL.
+
+    This is the back half of sentence→course: the outline is frozen but the
+    sections have NO source chunks, so each lesson is produced by the
+    source-less ``generator`` (a ``SentenceLessonGenerator``) from the section's
+    title + knowledge_points alone. Lessons are generated concurrently with
+    ``asyncio.gather``; a single section's failure degrades only that section
+    (``lesson`` is ``None``, ``error`` is set) and never aborts the rest.
+
+    Args:
+        generator: object with the source-less ``generate(**kwargs)`` coroutine
+            (a ``SentenceLessonGenerator`` in production; a stub in tests).
+        sections: frozen outline entries — ``[{title, difficulty,
+            knowledge_points, has_practice?}]``.
+        target_language: language for all generated natural-language fields.
+        bus: optional AG-UI ``EventBus`` for live per-section progress.
+
+    Returns:
+        ``[{title, difficulty, knowledge_points, lesson, error?}]`` aligned 1:1
+        with ``sections`` and in the same order. ``lesson`` is the
+        ``LessonContent`` dumped to a dict, or ``None`` when that section failed.
+    """
+    n = len(sections)
+
+    async def _one(index: int, section: dict) -> dict:
+        title = section.get("title", "")
+        difficulty = section.get("difficulty", 1)
+        knowledge_points = section.get("knowledge_points", []) or []
+        prev_title = sections[index - 1].get("title") if index > 0 else None
+        next_title = sections[index + 1].get("title") if index + 1 < n else None
+
+        base: dict = {
+            "title": title,
+            "difficulty": difficulty,
+            "knowledge_points": knowledge_points,
+        }
+        try:
+            lesson = await generator.generate(
+                section_title=title,
+                knowledge_points=knowledge_points,
+                difficulty=difficulty,
+                target_language=target_language,
+                previous_section_title=prev_title,
+                next_section_title=next_title,
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Degrade this section only — the course still assembles with the
+            # remaining lessons. The error is surfaced per-section.
+            logger.warning(
+                "Sentence lesson fill failed for section %d/%d '%s': %s",
+                index + 1,
+                n,
+                title,
+                exc,
+            )
+            base["lesson"] = None
+            base["error"] = str(exc)
+            await _emit_section_progress(bus, index, n, title, ok=False)
+            return base
+
+        base["lesson"] = (
+            lesson.model_dump(exclude_none=True)
+            if hasattr(lesson, "model_dump")
+            else lesson
+        )
+        await _emit_section_progress(bus, index, n, title, ok=True)
+        return base
+
+    return list(
+        await asyncio.gather(*(_one(i, s) for i, s in enumerate(sections)))
+    )
+
+
+async def _emit_section_progress(
+    bus, index: int, total: int, title: str, *, ok: bool
+) -> None:
+    """Best-effort AG-UI progress snapshot after each section's lesson lands."""
+    if bus is None:
+        return
+    try:
+        from app.agentcore.events import state_snapshot
+
+        await bus.emit(
+            state_snapshot(
+                {
+                    "stage": "filling_lessons",
+                    "section_index": index,
+                    "section_total": total,
+                    "section_title": title,
+                    "ok": ok,
+                }
+            )
+        )
+    except Exception:  # noqa: BLE001
+        # Progress is advisory; never let an event-sink hiccup fail the fill.
+        logger.debug("section progress emit failed", exc_info=True)

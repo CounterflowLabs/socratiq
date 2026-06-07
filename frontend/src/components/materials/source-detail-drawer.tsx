@@ -32,6 +32,7 @@ import {
 } from "@/lib/api";
 import { deriveMaterialPresentation } from "@/lib/materials-state";
 import { useRunProgress } from "@/lib/use-run-progress";
+import AgenticTimeline from "@/components/materials/agentic-timeline";
 
 interface SourceDetailDrawerProps {
   open: boolean;
@@ -1264,6 +1265,10 @@ export default function SourceDetailDrawer({
                   onRetry={() => void handleCourseTaskAction("retry")}
                 />
                 <TaskStageDetailPanel source={source} />
+                <AgenticTimeline
+                  agentic={liveCourse.agentic}
+                  running={liveCourse.runStatus === "running"}
+                />
                 <SectionAssemblyPanel task={source.latest_course_task} live={liveCourse.snapshot} />
 
                 <section

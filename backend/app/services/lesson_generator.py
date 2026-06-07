@@ -35,16 +35,28 @@ _ALLOWED_BLOCK_TYPES = {
     "practice_trigger",
     "recap",
     "next_step",
+    "further_reading",
 }
 
 
 _RETRY_DIRECTIVE = (
     "IMPORTANT: your previous response failed to parse as JSON. "
     "Reply with ONLY a single valid JSON object. Escape every newline as "
-    "`\\n` and every double-quote as `\\\"` inside string values. The very "
-    "last character of your response must be `}`. Keep the lesson short — "
-    "4 to 6 blocks is plenty."
+    "`\\n` and every double-quote as `\\\"` inside string values. Close every "
+    "brace and bracket so the very last character of your response is `}`."
 )
+
+
+def _enforce_verified_urls(lesson: "LessonContent", allowed_urls: set[str]) -> None:
+    """Drop any ``further_reading`` reference url that isn't a vetted supplement
+    url. Prompt rules ask the model not to fabricate urls; this makes it a
+    guarantee — unverified references survive as name-only (title kept)."""
+    for block in lesson.blocks or []:
+        if getattr(block, "type", None) != "further_reading":
+            continue
+        for ref in block.references or []:
+            if ref.url and ref.url.strip() not in allowed_urls:
+                ref.url = None
 
 
 class LessonGenerator:
@@ -70,6 +82,7 @@ class LessonGenerator:
         research_cards: list[ResearchCard] | None = None,
         previous_section_title: str | None = None,
         next_section_title: str | None = None,
+        previous_section_context: str | None = None,
     ) -> LessonContent:
         """Convert subtitle chunks into a block-based lesson."""
         source_format = "structured_json" if source_chunks else "plain_text"
@@ -103,6 +116,7 @@ class LessonGenerator:
             source_format=source_format,
             source_chunks=source_payload,
             previous_section_title=previous_section_title or "",
+            previous_section_context=previous_section_context or "",
             next_section_title=next_section_title or "",
             research_cards=json.dumps(
                 [
@@ -143,7 +157,15 @@ class LessonGenerator:
             logger.error("Lesson generation failed (transport): %s", exc)
             raise LessonGenerationError(str(exc)) from exc
 
-        return result.parsed  # LessonContent
+        content: LessonContent = result.parsed
+        # Code-enforce the anti-hallucination rule: keep a further_reading url
+        # only when it's a vetted supplement url (the model is asked to do this,
+        # but occasionally emits a remembered url for famous works — guaranteed
+        # here so a guessed/fabricated link can never reach the learner).
+        _enforce_verified_urls(
+            content, {c.url.strip() for c in (research_cards or []) if c.url}
+        )
+        return content
 
     def _validate_lesson(self, text: str, video_title: str) -> LessonContent:
         """AgentRuntime validator: parse JSON + build LessonContent.
@@ -183,6 +205,17 @@ class LessonGenerator:
             btype = blk.get("type")
             if btype not in _ALLOWED_BLOCK_TYPES:
                 continue
+            if btype == "further_reading":
+                # Drop malformed references (a title is the one required field)
+                # so one bad entry can't fail the whole lesson, and skip the
+                # block entirely if nothing usable remains.
+                refs = [
+                    r for r in (blk.get("references") or [])
+                    if isinstance(r, dict) and str(r.get("title") or "").strip()
+                ]
+                if not refs:
+                    continue
+                blk["references"] = refs
             cleaned.append(blk)
         if not cleaned:
             # A parse-succeeds-but-no-usable-blocks response gives the learner

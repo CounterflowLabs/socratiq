@@ -188,6 +188,50 @@ class TestLessonGenerator:
         assert "Next section title: Weights and bias" in sent_content
 
     @pytest.mark.asyncio
+    async def test_previous_section_context_injected_into_prompt(self):
+        """When previous_section_context is supplied it must reach the rendered
+        prompt so the lesson can reference (not re-teach) the prior section."""
+        mock_provider = _make_provider()
+        mock_provider.chat.return_value = _mock_response({
+            "title": "T", "summary": "S",
+            "blocks": [{"type": "prose", "title": "x", "body": "y"}],
+        })
+        gen = LessonGenerator(mock_provider)
+        await gen.generate(
+            subtitle_chunks=["subtitle"],
+            video_title="T",
+            target_language="zh-CN",
+            previous_section_title="Attention",
+            previous_section_context="Attention — self_attention, query, key, value",
+        )
+
+        sent_content = mock_provider.chat.call_args.kwargs["messages"][0].content
+        assert (
+            "Previously covered: Attention — self_attention, query, key, value"
+            in sent_content
+        )
+
+    @pytest.mark.asyncio
+    async def test_previous_section_context_none_renders_empty(self):
+        """Default None must reproduce today's behavior: the placeholder renders
+        empty (no stray prior-section terms leak into the prompt)."""
+        mock_provider = _make_provider()
+        mock_provider.chat.return_value = _mock_response({
+            "title": "T", "summary": "S",
+            "blocks": [{"type": "prose", "title": "x", "body": "y"}],
+        })
+        gen = LessonGenerator(mock_provider)
+        await gen.generate(
+            subtitle_chunks=["subtitle"],
+            video_title="T",
+            target_language="zh-CN",
+        )
+
+        sent_content = mock_provider.chat.call_args.kwargs["messages"][0].content
+        # The label is still present (static prompt text) but carries no payload.
+        assert "Previously covered: \n" in sent_content
+
+    @pytest.mark.asyncio
     async def test_recovers_truncated_blocks_array(self):
         """LLM ran out of tokens midway through a block — we should keep the
         complete ones instead of falling back to the raw transcript."""
@@ -388,3 +432,104 @@ class TestInputTokenBudget:
         assert not any(
             "exceeds budget" in rec.message for rec in caplog.records
         )
+
+
+# --- cross-lesson continuity context (built upstream in CourseGenerator) ----
+
+
+class _FakeChunk:
+    """Minimal stand-in exposing only what _previous_section_context reads."""
+
+    def __init__(self, metadata: dict | None):
+        self.metadata_ = metadata
+
+
+class TestPreviousSectionContext:
+    """The compact 'what the learner just finished' string is assembled from
+    PRE-generation data only (previous section's title + its chunk metadata
+    key_terms/concepts/topic), so parallel lesson generation is preserved."""
+
+    def test_combines_title_and_deduped_terms(self):
+        from app.services.course_generator import CourseGenerator
+
+        chunks = [
+            _FakeChunk({"key_terms": ["self_attention", "query"], "topic": "Attention"}),
+            _FakeChunk({"concepts": ["query", "key", "value"]}),  # 'query' dups
+        ]
+        ctx = CourseGenerator._previous_section_context("Attention", chunks)
+        assert ctx is not None
+        assert ctx.startswith("Attention — ")
+        # Per-chunk, first-seen order (chunk1: key_terms+topic, then chunk2);
+        # 'query' deduped case-insensitively when chunk2 repeats it.
+        terms = ctx.split(" — ", 1)[1].split(", ")
+        assert terms == ["self_attention", "query", "Attention", "key", "value"]
+
+    def test_caps_terms_to_five(self):
+        from app.services.course_generator import CourseGenerator
+
+        chunks = [_FakeChunk({"key_terms": [f"t{i}" for i in range(12)]})]
+        ctx = CourseGenerator._previous_section_context("Sec", chunks)
+        assert ctx is not None
+        assert len(ctx.split(" — ", 1)[1].split(", ")) == 5
+
+    def test_title_only_when_no_terms(self):
+        from app.services.course_generator import CourseGenerator
+
+        ctx = CourseGenerator._previous_section_context("Sec", [_FakeChunk({})])
+        assert ctx == "Sec"
+
+    def test_returns_none_when_no_signal(self):
+        from app.services.course_generator import CourseGenerator
+
+        assert (
+            CourseGenerator._previous_section_context(None, [_FakeChunk(None)])
+            is None
+        )
+        assert CourseGenerator._previous_section_context("", []) is None
+
+
+# --- anti-hallucination: verified-url enforcement --------------------------
+
+
+def test_enforce_verified_urls_strips_unvetted():
+    """A further_reading url survives only if it's a vetted supplement url;
+    anything else (a model-guessed/famous-paper url) is dropped to name-only."""
+    from types import SimpleNamespace
+
+    from app.models.lesson_blocks import LessonBlock, Reference
+    from app.services.lesson_generator import _enforce_verified_urls
+
+    block = LessonBlock(
+        type="further_reading",
+        references=[
+            Reference(title="vetted", url="https://ok.test/x"),
+            Reference(title="guessed", url="https://arxiv.org/abs/9999.99999"),
+            Reference(title="name-only", url=None),
+        ],
+    )
+    # A non-further_reading block with a url-bearing field must be untouched.
+    prose = LessonBlock(type="prose", body="...")
+    lesson = SimpleNamespace(blocks=[prose, block])
+
+    _enforce_verified_urls(lesson, {"https://ok.test/x"})
+
+    refs = block.references
+    assert refs[0].url == "https://ok.test/x"  # vetted kept
+    assert refs[1].url is None  # unvetted stripped to name-only
+    assert refs[2].url is None
+    # titles always preserved
+    assert [r.title for r in refs] == ["vetted", "guessed", "name-only"]
+
+
+def test_enforce_verified_urls_empty_allowset_strips_all():
+    from types import SimpleNamespace
+
+    from app.models.lesson_blocks import LessonBlock, Reference
+    from app.services.lesson_generator import _enforce_verified_urls
+
+    block = LessonBlock(
+        type="further_reading",
+        references=[Reference(title="a", url="https://x/1"), Reference(title="b", url="https://y/2")],
+    )
+    _enforce_verified_urls(SimpleNamespace(blocks=[block]), set())
+    assert all(r.url is None for r in block.references)  # source-less → name-only

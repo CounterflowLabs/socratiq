@@ -7,6 +7,7 @@ import pytest
 from app.services.llm.token_budget import (
     DEFAULT_LESSON_MAX_OUTPUT_TOKENS,
     DEFAULT_PROMPT_OVERHEAD_TOKENS,
+    _INPUT_SWEET_SPOT_TOKENS,
     context_window_tokens,
     count_tokens,
     lesson_input_token_budget,
@@ -15,10 +16,23 @@ from app.services.llm.token_budget import (
 )
 
 
-def _provider_with_model(model_id: str) -> MagicMock:
-    """Lightweight provider double — only .model_id() needs to behave."""
-    p = MagicMock()
+def _provider_with_model(
+    model_id: str, *, context_window: int | None = None
+) -> MagicMock:
+    """Lightweight provider double — only .model_id() needs to behave.
+
+    When ``context_window`` is given, stamp it onto ``_context_window`` to
+    mimic what :meth:`ModelRouter._create_provider` does for a model whose
+    config declares an admin context window. Left unstamped (``None``) the
+    double has no such attribute, so budgeting falls back to the table.
+    """
+    # spec=[] keeps ``getattr(p, "_context_window", None)`` returning the
+    # default (None) when we don't stamp it — a bare MagicMock would auto-vivify
+    # the attribute as a child mock and defeat the no-op path under test.
+    p = MagicMock(spec=["model_id"])
     p.model_id = MagicMock(return_value=model_id)
+    if context_window is not None:
+        p._context_window = context_window
     return p
 
 
@@ -89,6 +103,26 @@ class TestContextWindow:
         v = context_window_tokens("totally-made-up-model-99")
         assert 1024 <= v <= 32_768
 
+    def test_custom_named_cloud_variant_matches_family_prefix(self):
+        # The regression that truncated dense lessons: a custom DeepSeek model
+        # id not in the exact table must NOT collapse to the small fallback.
+        assert context_window_tokens("deepseek-v4-flash") == 64_000
+        # Even an unlisted deepseek-v* / chat variant inherits the family window.
+        assert context_window_tokens("deepseek-v9-turbo-preview") == 64_000
+        assert context_window_tokens("gpt-4o-2099-99-99") == 128_000
+        assert context_window_tokens("claude-7-haiku-future") == 200_000
+
+    def test_small_local_family_is_not_over_budgeted(self):
+        # Local/small families are deliberately NOT prefix-matched: an unlisted
+        # small model keeps the conservative fallback rather than being guessed
+        # large (which would overflow its real window).
+        assert context_window_tokens("llama-tiny-1b-custom") == context_window_tokens(
+            "totally-made-up-model-99"
+        )
+        assert context_window_tokens("mistral-small-custom") == context_window_tokens(
+            "totally-made-up-model-99"
+        )
+
 
 # --- lesson_input_token_budget ---------------------------------------------
 
@@ -144,6 +178,71 @@ class TestLessonInputTokenBudget:
         assert budget == 12_000
 
 
+# --- provider-carried (admin-configured) context window --------------------
+
+
+class TestProviderConfiguredContextWindow:
+    """A window stamped onto the provider (from the DB model config) wins."""
+
+    def test_configured_window_drives_budget_over_table(self):
+        # Model id is unknown to the table (would fall back to 8192 → tiny
+        # budget). A configured 64k window must override that and let the
+        # formula produce the sweet-spot-capped 12k instead.
+        provider = _provider_with_model(
+            "totally-unknown-model-99", context_window=64_000
+        )
+        budget = lesson_input_token_budget(provider)
+        assert budget == _INPUT_SWEET_SPOT_TOKENS  # 12_000
+
+    def test_configured_window_below_sweet_spot_uses_formula(self):
+        # A small declared window drives the subtractive formula directly:
+        # 20_000 - 4000 (fallback max_output) - 1500 overhead = 14_500, then
+        # capped by the 12k sweet spot. Pick a window low enough that the
+        # formula (not the cap) wins to prove the configured value is used.
+        provider = _provider_with_model("mystery-model", context_window=10_000)
+        budget = lesson_input_token_budget(provider)
+        expected = (
+            10_000
+            - DEFAULT_LESSON_MAX_OUTPUT_TOKENS
+            - DEFAULT_PROMPT_OVERHEAD_TOKENS
+        )
+        assert budget == expected
+        assert budget < _INPUT_SWEET_SPOT_TOKENS
+
+    def test_configured_window_overrides_known_table_entry(self):
+        # Even when the model IS in the table, an explicit config wins. Use a
+        # tiny window so the result is unmistakably driven by the config and
+        # not the table's 200k (which would hit the 12k cap).
+        provider = _provider_with_model(
+            "claude-3-5-sonnet-20241022", context_window=6_000
+        )
+        budget = lesson_input_token_budget(provider, max_output_tokens=1_000)
+        # 6000 - 1000 - 1500 = 3500, well under the table-driven 12k cap.
+        assert budget == 6_000 - 1_000 - DEFAULT_PROMPT_OVERHEAD_TOKENS
+        assert budget < _INPUT_SWEET_SPOT_TOKENS
+
+    def test_no_configured_window_is_a_noop(self):
+        # Without a stamped window, behavior is identical to the table-only
+        # path — the regression guard for unconfigured deployments.
+        model_id = "totally-unknown"
+        with_attr_absent = lesson_input_token_budget(
+            _provider_with_model(model_id)
+        )
+        table_only = (
+            context_window_tokens(model_id)
+            - DEFAULT_LESSON_MAX_OUTPUT_TOKENS
+            - DEFAULT_PROMPT_OVERHEAD_TOKENS
+        )
+        assert with_attr_absent == table_only
+
+    def test_nonpositive_configured_window_is_ignored(self):
+        # A zero / negative configured window is treated as "unset" so a bad
+        # admin value can't drive the budget below its safe table fallback.
+        bad = _provider_with_model("totally-unknown", context_window=0)
+        good = _provider_with_model("totally-unknown")
+        assert lesson_input_token_budget(bad) == lesson_input_token_budget(good)
+
+
 # --- lesson_max_output_tokens ---------------------------------------------
 
 
@@ -154,6 +253,10 @@ class TestLessonMaxOutputTokens:
             "claude-3-opus-latest",
             "claude-sonnet-4-20250514",
             "gpt-4o",
+            # DeepSeek bumped to 8k output so dense lessons aren't truncated.
+            "deepseek-chat",
+            "deepseek-reasoner",
+            "deepseek-v4-flash",
         ]:
             assert lesson_max_output_tokens(_provider_with_model(model)) == 8_000, model
 
@@ -161,7 +264,6 @@ class TestLessonMaxOutputTokens:
         for model in [
             "claude-3-5-haiku-latest",
             "gpt-4o-mini",
-            "deepseek-chat",
             "qwen-max",
         ]:
             assert lesson_max_output_tokens(_provider_with_model(model)) == 6_000, model

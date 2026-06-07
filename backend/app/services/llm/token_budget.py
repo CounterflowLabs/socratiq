@@ -67,9 +67,11 @@ _MODEL_OUTPUT_TOKENS: dict[str, int] = {
     "gpt-3.5-turbo":              4_000,
     "o1-preview":                 8_000,
     "o1-mini":                    6_000,
-    # DeepSeek
-    "deepseek-chat":              6_000,
-    "deepseek-reasoner":          6_000,
+    # DeepSeek — 8k output headroom so dense, fully-developed lessons aren't
+    # truncated (DeepSeek supports up to 8192 output tokens).
+    "deepseek-chat":              8_000,
+    "deepseek-reasoner":          8_000,
+    "deepseek-v4-flash":          8_000,
     # Qwen
     "qwen-max":                   6_000,
     "qwen-plus":                  6_000,
@@ -107,6 +109,7 @@ _MODEL_CONTEXT_TOKENS: dict[str, int] = {
     # DeepSeek
     "deepseek-chat":                64_000,
     "deepseek-reasoner":            64_000,
+    "deepseek-v4-flash":            64_000,
     # Qwen
     "qwen-max":                     32_000,
     "qwen-plus":                   131_000,
@@ -156,14 +159,66 @@ def truncate_to_tokens(text: str, max_tokens: int) -> str:
     return _ENCODER.decode(tokens[:max_tokens])
 
 
+# Family-prefix fallback for the context window. An unlisted model whose id
+# starts with one of these (case-insensitive) inherits the family's window, so
+# a custom-named variant of a known cloud model (e.g. "deepseek-v4-flash", a
+# renamed GPT-4o/Claude deployment) doesn't collapse to ``_FALLBACK_CONTEXT``
+# and silently under-budget every lesson. Restricted to cloud families that are
+# UNIFORMLY large-context — local/small families (llama, qwen-small, mistral)
+# are intentionally absent so a genuinely small local model keeps the safe
+# conservative fallback instead of being over-budgeted (which would overflow
+# its real window). Checked in order; first prefix match wins.
+_CONTEXT_FAMILY_PREFIXES: tuple[tuple[str, int], ...] = (
+    ("claude", 200_000),
+    ("gpt-4o", 128_000),
+    ("gpt-4-turbo", 128_000),
+    ("gpt-4.1", 1_000_000),
+    ("o1", 128_000),
+    ("o3", 200_000),
+    ("o4", 200_000),
+    ("deepseek-chat", 64_000),
+    ("deepseek-reasoner", 64_000),
+    ("deepseek-v", 64_000),
+    ("gemini", 1_000_000),
+)
+
+
 def context_window_tokens(model_id: str) -> int:
     """Look up the input context window for ``model_id``.
 
-    Returns ``_FALLBACK_CONTEXT`` for unknown models. Public so tests and
-    diagnostic tools can inspect the routing without re-implementing the
-    lookup.
+    Resolution order: exact table → cloud-family prefix → ``_FALLBACK_CONTEXT``.
+    The family-prefix step keeps custom-named variants of known large-context
+    cloud models from collapsing to the conservative fallback and
+    under-budgeting lessons (the failure that truncated dense sections). Public
+    so tests and diagnostic tools can inspect the routing.
     """
-    return _MODEL_CONTEXT_TOKENS.get(model_id, _FALLBACK_CONTEXT)
+    exact = _MODEL_CONTEXT_TOKENS.get(model_id)
+    if exact is not None:
+        return exact
+    lowered = model_id.lower()
+    for prefix, ctx in _CONTEXT_FAMILY_PREFIXES:
+        if lowered.startswith(prefix):
+            return ctx
+    return _FALLBACK_CONTEXT
+
+
+def _provider_context_window(provider: LLMProvider) -> int | None:
+    """Return an admin-declared context window stamped onto ``provider``.
+
+    The router stamps ``provider._context_window`` from the model config's
+    ``context_window_tokens`` column when a deployment declares one (see
+    :meth:`ModelRouter._create_provider`). This is the first-class, per-model
+    source of truth: when present it overrides the hand-maintained table so a
+    model id the table doesn't recognize no longer under-budgets lessons.
+
+    Returns ``None`` when the provider carries no usable window (attribute
+    absent, ``None``, or non-positive), in which case callers fall back to the
+    table/family lookup — a strict no-op for unconfigured deployments.
+    """
+    window = getattr(provider, "_context_window", None)
+    if isinstance(window, int) and window > 0:
+        return window
+    return None
 
 
 def lesson_max_output_tokens(provider: LLMProvider) -> int:
@@ -201,13 +256,22 @@ def lesson_input_token_budget(
     provider, keeping input + output budgets aligned. Tests can pass an
     explicit value to drive boundary cases.
 
+    Context-window resolution order: an admin-declared window stamped onto the
+    provider (``provider._context_window``, set by the router from the model
+    config) → :func:`context_window_tokens` table/family lookup on
+    ``provider.model_id()`` → conservative fallback. When the provider carries
+    no configured window this is a strict no-op (identical to the old
+    table-only behavior).
+
     The sweet-spot cap dominates for any modern long-context model and
     keeps single-call inputs in the range where the model's attention
     actually retains the content.
     """
     if max_output_tokens is None:
         max_output_tokens = lesson_max_output_tokens(provider)
-    ctx = context_window_tokens(provider.model_id())
+    ctx = _provider_context_window(provider)
+    if ctx is None:
+        ctx = context_window_tokens(provider.model_id())
     raw = ctx - max_output_tokens - prompt_overhead_tokens
     return max(_MIN_BUDGET_TOKENS, min(raw, _INPUT_SWEET_SPOT_TOKENS))
 

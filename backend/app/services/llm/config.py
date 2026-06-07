@@ -38,6 +38,7 @@ class ModelConfigManager:
         supports_tool_use: bool = True,
         supports_streaming: bool = True,
         max_tokens_limit: int = 4096,
+        context_window_tokens: int | None = None,
     ) -> ModelConfig:
         encrypted_key = None
         if api_key:
@@ -53,6 +54,7 @@ class ModelConfigManager:
             supports_tool_use=supports_tool_use,
             supports_streaming=supports_streaming,
             max_tokens_limit=max_tokens_limit,
+            context_window_tokens=context_window_tokens,
         )
         db.add(model)
         await db.flush()

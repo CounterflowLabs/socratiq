@@ -470,18 +470,34 @@ async def _ingest_source_locked(task, source_id: str, resources, event_bus=None)
             await _update_status(db, sid, "embedding", event_bus=event_bus)
             task.update_state(state="PROGRESS", meta={"stage": "embedding"})
 
+            # Embeddings are an ENHANCEMENT (RAG retrieval + SectionPlanner
+            # boundary hints), not a prerequisite for producing a course. If the
+            # embedding provider is unavailable (e.g. a local Ollama sidecar is
+            # down), degrade gracefully: log, skip vectors, and continue. The
+            # planner accepts ``embeddings=None`` (boundary hints collapse to
+            # zero) and downstream RAG simply has no vectors for this source —
+            # both far better than failing the whole ingestion.
             embedding_service = EmbeddingService(resources.model_router)
-            chunk_embeddings = await embedding_service.embed_and_store_chunks(
-                db, chunk_ids, chunk_texts
-            )
-            await embedding_service.embed_and_store_concepts(
-                db, concept_ids, concept_texts
-            )
-            logger.info(
-                "Embedded %s chunks and %s concepts",
-                len(chunk_ids),
-                len(concept_ids),
-            )
+            try:
+                chunk_embeddings = await embedding_service.embed_and_store_chunks(
+                    db, chunk_ids, chunk_texts
+                )
+                await embedding_service.embed_and_store_concepts(
+                    db, concept_ids, concept_texts
+                )
+                logger.info(
+                    "Embedded %s chunks and %s concepts",
+                    len(chunk_ids),
+                    len(concept_ids),
+                )
+            except Exception as exc:  # noqa: BLE001
+                chunk_embeddings = None
+                logger.warning(
+                    "Embedding step failed for source %s; continuing without "
+                    "vectors (RAG + boundary hints degraded): %s",
+                    source_id,
+                    exc,
+                )
 
             # === STEP 6.5: SECTION PLANNING ===
             # Group consecutive chunks into topic-coherent buckets so the
@@ -564,6 +580,69 @@ async def _ingest_source_locked(task, source_id: str, resources, event_bus=None)
                 len(chunk_ids),
                 plan_result.stats.get("planning_duration_ms", 0),
             )
+
+            # === STEP 6.6: REFERENCE FETCH + RANK (arXiv, best-effort) ===
+            # Turn the source's top concepts into real, citable references and
+            # cache them so lessons' ``further_reading`` cites fetched papers
+            # (verified URLs) rather than model memory. arXiv search is
+            # high-recall / low-precision, so an LLM precision pass
+            # (ReferenceRanker) drops off-topic candidates and keeps only
+            # genuinely relevant, authoritative ones. Any failure (network,
+            # rate-limit, no relevant results) leaves references empty and never
+            # blocks ingestion; lessons then fall back to model-known classics.
+            if get_settings().reference_search_enabled:
+                try:
+                    from app.services.llm import TaskType as _RefTaskType
+                    from app.services.reference_fetcher import (
+                        ReferenceRanker,
+                        build_reference_fetcher,
+                    )
+                    from app.services.research_enrichment import FETCHED_REFERENCES_KEY
+
+                    fetcher = build_reference_fetcher(
+                        enabled=True,
+                        semantic_scholar_api_key=get_settings().semantic_scholar_api_key,
+                    )
+                    concept_names = [c.name for c in analysis.concepts if c.name][:4]
+                    candidates = []
+                    seen: set[str] = set()
+                    if fetcher is not None:
+                        for name in concept_names:
+                            for card in await fetcher.fetch(
+                                name, concepts=[name], max_results=5
+                            ):
+                                key = (card.url or card.title).strip().lower()
+                                if key in seen:
+                                    continue
+                                seen.add(key)
+                                candidates.append(card)
+                    ranked = []
+                    if candidates:
+                        topic = f"{source.title or ''}。{analysis.overall_summary or ''}".strip("。")
+                        rank_provider = await resources.model_router.get_provider(
+                            _RefTaskType.CONTENT_ANALYSIS
+                        )
+                        ranked = await ReferenceRanker(rank_provider).rank(
+                            topic=topic, candidates=candidates, keep=6
+                        )
+                    if ranked:
+                        source.metadata_ = {
+                            **(source.metadata_ or {}),
+                            FETCHED_REFERENCES_KEY: [
+                                c.model_dump(exclude_none=True) for c in ranked
+                            ],
+                        }
+                        await db.flush()
+                        logger.info(
+                            "References: %d candidates -> kept %d for source %s",
+                            len(candidates),
+                            len(ranked),
+                            source_id,
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "Reference fetch/rank failed for source %s: %s", source_id, exc
+                    )
 
             # Stamp the embed-model identity so a later model upgrade can
             # mark this source as ``stale`` (PRD §3).

@@ -86,24 +86,25 @@ class ModelRouter:
         supports_tool_use: bool,
         supports_streaming: bool,
         max_tokens_limit: int,
+        context_window_tokens: int | None = None,
     ) -> LLMProvider:
         if provider_type == "anthropic":
             if not api_key:
                 raise LLMError("Anthropic provider requires an API key")
-            return AnthropicProvider(
+            provider: LLMProvider = AnthropicProvider(
                 model=model_id,
                 api_key=api_key,
                 max_tokens_limit=max_tokens_limit,
             )
         elif provider_type == "codex":
-            return CodexProvider(
+            provider = CodexProvider(
                 model=model_id,
                 supports_tools=False,
                 supports_stream=False,
                 max_tokens_limit=max_tokens_limit,
             )
         elif provider_type in {"openai", "openai_compatible"}:
-            return OpenAICompatProvider(
+            provider = OpenAICompatProvider(
                 model=model_id,
                 api_key=api_key,
                 base_url=normalize_container_localhost_url(base_url),
@@ -113,6 +114,14 @@ class ModelRouter:
             )
         else:
             raise LLMError(f"Unknown provider type: {provider_type}")
+
+        # Stamp the admin-declared context window onto the provider instance so
+        # token-budget computation can prefer it over the lookup table. Only set
+        # when configured — leaving it absent keeps the table/family fallback,
+        # so unconfigured models behave exactly as before.
+        if context_window_tokens is not None:
+            provider._context_window = context_window_tokens
+        return provider
 
     async def get_provider(self, task_type: TaskType) -> LLMProvider:
         """Get an LLM provider for the given task type."""
@@ -152,6 +161,7 @@ class ModelRouter:
             supports_tool_use=model.supports_tool_use,
             supports_streaming=model.supports_streaming,
             max_tokens_limit=model.max_tokens_limit,
+            context_window_tokens=model.context_window_tokens,
         )
         self._cache[cache_key] = (provider, time.time())
         return provider
@@ -178,6 +188,7 @@ class ModelRouter:
             supports_tool_use=model.supports_tool_use,
             supports_streaming=model.supports_streaming,
             max_tokens_limit=model.max_tokens_limit,
+            context_window_tokens=model.context_window_tokens,
         )
         self._cache[f"name:{name}"] = (provider, time.time())
         return provider

@@ -383,7 +383,11 @@ class TestPlanEndToEnd:
         assert result.stats["short_circuit"] is False
 
     @pytest.mark.asyncio
-    async def test_llm_error_falls_back_to_per_chunk(self):
+    async def test_llm_error_falls_back_to_size_greedy(self):
+        # 5 chunks × 120s = 600s. Degenerate embeddings (identical vectors →
+        # zero boundary signal) skip Layer 3, so we hit the Layer 4 floor.
+        # The floor must coarsen by size (≥_EMBEDDING_MIN_BUCKETS), NOT emit
+        # one-section-per-chunk — that fragmentation was the bug.
         chunks = [_video_chunk(f"p{i}", i * 120, (i + 1) * 120) for i in range(5)]
         analyses = [_analyzed(f"T{i}", f"S{i}") for i in range(5)]
         embeddings = [[1.0, 0.0]] * 5
@@ -399,7 +403,14 @@ class TestPlanEndToEnd:
             title="vid",
         )
 
-        assert [a.bucket_id for a in result.assignments] == [0, 1, 2, 3, 4]
+        bucket_ids = [a.bucket_id for a in result.assignments]
+        assert len(bucket_ids) == 5
+        # Monotonic non-decreasing, contiguous from 0, and coarsened (< per-chunk).
+        assert bucket_ids == sorted(bucket_ids)
+        assert bucket_ids[0] == 0
+        distinct = sorted(set(bucket_ids))
+        assert distinct == list(range(len(distinct)))
+        assert 1 < len(distinct) < 5  # neither one giant bucket nor per-chunk
         assert result.stats["tier_used"] == "fallback"
         assert result.stats["error"].startswith("llm_error:")
 
@@ -898,8 +909,12 @@ class TestEmbeddingOnlyLayer:
         assert 3 <= len(distinct) <= 12
 
     @pytest.mark.asyncio
-    async def test_no_signal_falls_through_to_per_chunk(self):
+    async def test_no_signal_floors_to_size_greedy_not_per_chunk(self):
         # Provider errors AND embeddings are zero vectors → Layer 4 floor.
+        # The floor must coarsen 30 chunks by size into a bounded number of
+        # buckets (≤ _EMBEDDING_MAX_BUCKETS), NOT emit 30 one-chunk sections.
+        from app.services.section_planner import _EMBEDDING_MAX_BUCKETS
+
         n = 30
         chunks = [_huge_chunk(i) for i in range(n)]
         analyses = [_analyzed(f"T{i}", f"Summary {i}") for i in range(n)]
@@ -916,8 +931,13 @@ class TestEmbeddingOnlyLayer:
             title="vid",
         )
         assert result.stats["tier_used"] == "fallback"
-        # Each chunk gets its own bucket
-        assert [a.bucket_id for a in result.assignments] == list(range(n))
+        bucket_ids = [a.bucket_id for a in result.assignments]
+        assert len(bucket_ids) == n
+        assert bucket_ids == sorted(bucket_ids)  # monotonic non-decreasing
+        distinct = sorted(set(bucket_ids))
+        assert distinct == list(range(len(distinct)))  # contiguous from 0
+        assert 1 < len(distinct) <= _EMBEDDING_MAX_BUCKETS  # coarsened, bounded
+        assert len(distinct) < n  # the whole point: not one-section-per-chunk
 
 
 # --- token-budget split pass ----------------------------------------------

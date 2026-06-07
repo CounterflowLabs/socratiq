@@ -179,6 +179,30 @@ async def _generate_course_async(
                 uploader_profile = await load_profile(db, source.created_by)
                 target_language = uploader_profile.preferred_language
 
+            # Agentic outline (Phase 3): when enabled, re-plan the section
+            # structure with the critic-gated video→course graph and write the
+            # result onto chunk metadata BEFORE assembly. CourseGenerator then
+            # consumes the new buckets unchanged. Committed here so the
+            # generator's own re-query (it reloads chunks) sees the new buckets.
+            if get_settings().agentic_video_pipeline:
+                try:
+                    n_sections = await _maybe_run_agentic_outline(
+                        db, source, sid, resources, event_bus, target_language
+                    )
+                    if n_sections:
+                        await db.commit()
+                except Exception as exc:  # noqa: BLE001
+                    # Never let outline planning abort generation — fall back to
+                    # the ingestion-time SectionPlanner buckets already on the
+                    # chunks. The course still generates; it just isn't re-planned.
+                    logger.warning(
+                        "Agentic outline failed for source %s; using ingestion "
+                        "buckets: %s",
+                        source_id,
+                        exc,
+                    )
+                    await db.rollback()
+
             generator = CourseGenerator(resources.model_router)
             course = await generator.generate(
                 db=db,
@@ -258,6 +282,118 @@ async def _generate_course_async(
             )
             await db.commit()
         raise
+
+
+async def _maybe_run_agentic_outline(
+    db, source, sid, resources, event_bus, target_language: str = "zh-CN"
+) -> int | None:
+    """Replace SectionPlanner's ingestion-time bucketing with the critic-gated
+    video→course outline, in place, before CourseGenerator assembles.
+
+    The graph consolidates the analyzed chunks into a coherent, difficulty-
+    ramped, knowledge-point-bearing outline (with a bounded re-plan loop), then
+    we project that outline back onto chunk metadata
+    (``section_bucket`` / ``section_bucket_topic`` / ``difficulty``) — the exact
+    contract CourseGenerator's bucket mode already consumes. So generation /
+    lesson-fill / persistence are reused unchanged; only the *bucketing
+    decision* moves from a blind ingestion-time tier cascade to a gated agent
+    graph.
+
+    No-ops (returns ``None``) for page-structured sources (PDF/markdown keep
+    their page sections) and for sources with fewer than two chunks. Mutates
+    chunk metadata and flushes; the caller commits.
+    """
+    from sqlalchemy import select
+
+    from app.agentcore.llm.router_client import RouterLLMClient
+    from app.db.models.content_chunk import ContentChunk as ContentChunkModel
+    from app.services.course_generator import CourseGenerator
+    from app.services.llm.router import TaskType, resolve_chain
+    from app.services.orchestration.topologies.video_to_course import (
+        build_chunk_summaries,
+        build_warm_start_buckets,
+        plan_video_outline,
+        split_oversized_sections,
+    )
+    from app.services.section_planner import (
+        SECTION_BUCKET_KEY,
+        SECTION_BUCKET_TOPIC_KEY,
+    )
+
+    rows = (
+        await db.execute(
+            select(ContentChunkModel).where(ContentChunkModel.source_id == sid)
+        )
+    ).scalars().all()
+    chunks = sorted(rows, key=CourseGenerator._chunk_order_key)
+    if len(chunks) < 2:
+        return None
+    # Page-structured sources assemble by page, not by bucket — leave them.
+    if any((c.metadata_ or {}).get("page_index") is not None for c in chunks):
+        return None
+
+    summaries = build_chunk_summaries(chunks)
+    warm = build_warm_start_buckets(chunks)
+    chain = resolve_chain(TaskType.PLANNING)
+    llm = RouterLLMClient(
+        resources.model_router, primary=chain[0], fallbacks=chain[1:]
+    )
+
+    sections = await plan_video_outline(
+        llm,
+        title=source.title or "Untitled",
+        chunk_summaries=summaries,
+        warm_start_buckets=warm,
+        bus=event_bus,
+        target_language=target_language,
+    )
+    if not sections:
+        return None
+
+    # Budget guard: the planner optimizes coherence and is blind to the
+    # per-lesson token budget, so a dense section can exceed what
+    # LessonGenerator ingests (→ silent tail truncation). Re-split oversized
+    # sections along chunk boundaries to fit the same budget the lesson
+    # generator uses (resolved from the CONTENT_ANALYSIS/lesson provider).
+    try:
+        from app.services.llm.token_budget import (
+            count_tokens,
+            lesson_input_token_budget,
+        )
+
+        lesson_provider = await resources.model_router.get_provider(
+            TaskType.CONTENT_ANALYSIS
+        )
+        cap = lesson_input_token_budget(lesson_provider)
+        token_counts = [count_tokens(c.text or "") for c in chunks]
+        sections = split_oversized_sections(sections, token_counts, cap)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Oversized-section split skipped for source %s: %s", sid, exc
+        )
+
+    # Project the ordered outline onto contiguous section_bucket ids. The
+    # validator guarantees each section is a contiguous chunk range, so bucket
+    # ids line up with CourseGenerator's "consecutive chunks share a bucket".
+    for bucket_id, section in enumerate(sections):
+        title = section.get("title")
+        difficulty = section.get("difficulty", 1)
+        for idx in section.get("source_chunk_indices", []):
+            if 0 <= idx < len(chunks):
+                chunk = chunks[idx]
+                merged = {**(chunk.metadata_ or {})}
+                merged[SECTION_BUCKET_KEY] = bucket_id
+                merged[SECTION_BUCKET_TOPIC_KEY] = title
+                merged["difficulty"] = difficulty
+                chunk.metadata_ = merged
+    await db.flush()
+    logger.info(
+        "Agentic outline: %d sections from %d chunks for source %s",
+        len(sections),
+        len(chunks),
+        sid,
+    )
+    return len(sections)
 
 
 def _section_to_critic_dict(section) -> dict:

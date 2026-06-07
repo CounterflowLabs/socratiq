@@ -12,6 +12,23 @@ class ConceptLink(BaseModel):
     description: str | None = None
 
 
+class Reference(BaseModel):
+    """One further-reading citation in a ``further_reading`` block.
+
+    ``url`` is populated ONLY for verified references (those supplied via the
+    curated research supplements). When the model names a work from its own
+    knowledge it must leave ``url`` empty rather than fabricate a locator — see
+    the anti-hallucination rules in the lesson prompts.
+    """
+
+    title: str
+    source: str | None = None  # authors / venue / publisher, e.g. "Vaswani et al., 2017"
+    year: str | None = None
+    kind: Literal["classic", "frontier"] = "classic"
+    url: str | None = None  # verified only; never fabricated
+    note: str | None = None  # one line: why it's worth reading
+
+
 class LessonBlock(BaseModel):
     """A rendered block in the new lesson surface."""
 
@@ -24,10 +41,12 @@ class LessonBlock(BaseModel):
         "practice_trigger",
         "recap",
         "next_step",
+        "further_reading",
     ]
     title: str | None = None
     body: str | None = None
     concepts: list[ConceptLink] = Field(default_factory=list)
+    references: list[Reference] = Field(default_factory=list)
     code: str | None = None
     language: str | None = None
     diagram_type: str | None = None

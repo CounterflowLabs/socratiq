@@ -16,6 +16,13 @@ class ModelConfigCreate(BaseModel):
     supports_tool_use: bool = True
     supports_streaming: bool = True
     max_tokens_limit: int = 4096
+    context_window_tokens: int | None = Field(
+        None,
+        description=(
+            "Input context window in tokens. When set, overrides the built-in "
+            "lookup table for lesson token budgeting. Leave empty to auto-detect."
+        ),
+    )
 
 
 class ModelConfigUpdate(BaseModel):
@@ -27,6 +34,7 @@ class ModelConfigUpdate(BaseModel):
     supports_tool_use: bool | None = None
     supports_streaming: bool | None = None
     max_tokens_limit: int | None = None
+    context_window_tokens: int | None = None
     is_active: bool | None = None
 
 
@@ -40,6 +48,7 @@ class ModelConfigResponse(BaseModel):
     supports_tool_use: bool
     supports_streaming: bool
     max_tokens_limit: int
+    context_window_tokens: int | None = None
     is_active: bool
 
 

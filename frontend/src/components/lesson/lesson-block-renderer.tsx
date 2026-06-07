@@ -1,8 +1,9 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import ReactMarkdown from "react-markdown";
 
-import { type GraphCard, type LabMode, type LessonBlock, type LessonConcept, type LessonContent } from "@/lib/api";
+import { type GraphCard, type LabMode, type LessonBlock, type LessonConcept, type LessonContent, type LessonReference } from "@/lib/api";
 
 import CodeBlock from "./code-block";
 import TimestampLink from "./timestamp-link";
@@ -221,44 +222,191 @@ function withRuntimeFallbacks(
   return blocks;
 }
 
-function TextBlock({
+/** Body prose, rendered as a continuous flowing document via the shared
+ *  `.prose` typographic system (serif, 17px/1.65). No card, no border. The
+ *  model emits markdown (bold, lists, inline code), so we render it through
+ *  react-markdown (same renderer the mentor chat uses) into the elements
+ *  `.prose` already styles, instead of leaking literal `**` / `-` markers. */
+function ProseBody({ body, size, muted }: { body: string; size?: number; muted?: boolean }) {
+  return (
+    <div
+      className="prose"
+      style={{
+        ...(size ? { fontSize: size } : {}),
+        ...(muted ? { color: "var(--ink-2)" } : {}),
+      }}
+    >
+      <ReactMarkdown>{body}</ReactMarkdown>
+    </div>
+  );
+}
+
+/** Ordinary explanatory prose — the bulk of a lesson. De-boxed: a quiet serif
+ *  sub-heading (when present) over flowing body text. */
+function ProseBlock({
   title,
   body,
-  tone = "default",
   timestamp,
   onTimestampClick,
   waypointId,
 }: {
   title?: string | null;
   body?: string | null;
-  tone?: "default" | "intro" | "recap";
   timestamp?: number | null;
   onTimestampClick?: (seconds: number) => void;
   waypointId?: string;
 }) {
-  const cardClassName =
-    tone === "intro"
-      ? "border-sky-200 bg-sky-50/70"
-      : tone === "recap"
-        ? "border-emerald-200 bg-emerald-50/70"
-        : "border-slate-200 bg-white";
-
+  const showHead = Boolean(title || (timestamp && onTimestampClick));
   return (
-    <section
-      data-lesson-waypoint={waypointId}
-      className={`rounded-lg border px-5 py-4 shadow-sm ${cardClassName}`}
-    >
-      {title || timestamp ? (
-        <div className="flex flex-wrap items-center gap-2">
-          {title ? <h3 className="text-base font-semibold text-slate-900">{title}</h3> : null}
+    <section data-lesson-waypoint={waypointId}>
+      {showHead ? (
+        <div className="flex flex-wrap items-baseline gap-2" style={{ marginBottom: 8 }}>
+          {title ? (
+            <h3
+              className="serif"
+              style={{
+                fontSize: 19,
+                fontWeight: 600,
+                lineHeight: 1.3,
+                letterSpacing: "-0.01em",
+                color: "var(--ink)",
+                margin: 0,
+              }}
+            >
+              {title}
+            </h3>
+          ) : null}
           {timestamp && onTimestampClick ? (
             <TimestampLink seconds={timestamp} onClick={() => onTimestampClick(timestamp)} />
           ) : null}
         </div>
       ) : null}
+      {body ? <ProseBody body={body} /> : null}
+    </section>
+  );
+}
+
+/** The opening hook. Not a box: a terracotta lead-rule with slightly larger
+ *  serif lead text, so the lesson opens with a beat instead of a blue card. */
+function IntroLead({ title, body }: { title?: string | null; body?: string | null }) {
+  const text = body || title;
+  if (!text) return null;
+  return (
+    <section style={{ borderLeft: "2px solid var(--accent)", paddingLeft: 18 }}>
+      <ProseBody body={text} size={19} />
+    </section>
+  );
+}
+
+/** End-of-lesson synthesis. Earns a quiet warm inset (not a hard emerald box):
+ *  a tan surface, soft radius, a small eyebrow label, muted body. */
+function RecapBlock({ title, body }: { title?: string | null; body?: string | null }) {
+  return (
+    <section
+      style={{
+        background: "var(--surface-2)",
+        borderRadius: "var(--r-lg)",
+        padding: "16px 20px",
+      }}
+    >
+      <div className="eyebrow" style={{ color: "var(--ink-3)", marginBottom: 8 }}>
+        {title || "小结"}
+      </div>
+      {body ? <ProseBody body={body} size={16} muted /> : null}
+    </section>
+  );
+}
+
+/** Forward pointer. De-boxed: a hairline rule + accent eyebrow + a single
+ *  muted line, reading as a closing beat rather than another card. */
+function NextStepBlock({ title, body }: { title?: string | null; body?: string | null }) {
+  if (!title && !body) return null;
+  return (
+    <section style={{ borderTop: "1px solid var(--border)", paddingTop: 14 }}>
+      <div className="eyebrow" style={{ color: "var(--accent)", marginBottom: 6 }}>
+        {title || "下一步"}
+      </div>
       {body ? (
-        <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-600">{body}</p>
+        <p
+          className="serif"
+          style={{ fontSize: 16, lineHeight: 1.6, color: "var(--ink-2)", margin: 0 }}
+        >
+          {body}
+        </p>
       ) : null}
+    </section>
+  );
+}
+
+/** Further reading: real, citable references (classic + frontier). A hairline
+ *  section, each entry tagged 经典/前沿; the title links out only when the
+ *  reference carries a verified url (fetched), otherwise it's name-only. */
+function FurtherReadingBlock({
+  title,
+  references,
+}: {
+  title?: string | null;
+  references?: LessonReference[];
+}) {
+  const refs = (references ?? []).filter((r) => r && r.title);
+  if (refs.length === 0) return null;
+  return (
+    <section style={{ borderTop: "1px solid var(--border)", paddingTop: 14 }}>
+      <div className="eyebrow" style={{ color: "var(--ink-3)", marginBottom: 12 }}>
+        {title || "延伸阅读"}
+      </div>
+      <ul
+        style={{
+          listStyle: "none",
+          margin: 0,
+          padding: 0,
+          display: "flex",
+          flexDirection: "column",
+          gap: 12,
+        }}
+      >
+        {refs.map((r, i) => {
+          const frontier = r.kind === "frontier";
+          const meta = [r.source, r.year].filter(Boolean).join(" · ");
+          return (
+            <li key={i} style={{ display: "flex", gap: 10, alignItems: "baseline" }}>
+              <span
+                className="chip"
+                style={{
+                  flexShrink: 0,
+                  fontSize: 11,
+                  background: frontier ? "var(--accent-soft)" : "var(--sage-soft)",
+                  color: frontier ? "var(--accent-ink)" : "var(--sage-ink)",
+                }}
+              >
+                {frontier ? "前沿" : "经典"}
+              </span>
+              <div style={{ minWidth: 0 }}>
+                {r.url ? (
+                  <a
+                    href={r.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ color: "var(--accent)", fontWeight: 500 }}
+                  >
+                    {r.title}
+                  </a>
+                ) : (
+                  <span style={{ color: "var(--ink)", fontWeight: 500 }}>{r.title}</span>
+                )}
+                {meta ? (
+                  <span style={{ color: "var(--ink-3)", fontSize: 13 }}> · {meta}</span>
+                ) : null}
+                {r.note ? (
+                  <div style={{ color: "var(--ink-2)", fontSize: 14, lineHeight: 1.5, marginTop: 2 }}>
+                    {r.note}
+                  </div>
+                ) : null}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
     </section>
   );
 }
@@ -299,16 +447,16 @@ export default function LessonBlockRenderer({
   }
 
   return (
-    <div className="mx-auto flex max-w-4xl flex-col gap-4 px-4 py-6">
+    <div className="mx-auto flex max-w-2xl flex-col gap-7 px-5 py-8">
       {blocks.map((block, index) => {
         const blockKey = `${block.type}-${block.title ?? "untitled"}-${index}`;
 
         switch (block.type) {
           case "intro_card":
-            return <TextBlock key={blockKey} title={block.title} body={block.body} tone="intro" />;
+            return <IntroLead key={blockKey} title={block.title} body={block.body} />;
           case "prose":
             return (
-              <TextBlock
+              <ProseBlock
                 key={blockKey}
                 title={block.title}
                 body={block.body}
@@ -324,25 +472,51 @@ export default function LessonBlockRenderer({
             return diagramType === "mermaid" ? (
               <MermaidDiagram key={blockKey} content={diagramContent} title={block.title ?? ""} />
             ) : (
-              <section key={blockKey} className="rounded-lg border border-slate-200 bg-slate-50 px-5 py-4">
-                {block.title ? <h3 className="text-base font-semibold text-slate-900">{block.title}</h3> : null}
-                <pre className="mt-3 overflow-x-auto rounded-lg bg-slate-900 p-4 text-xs text-slate-100">
+              <figure
+                key={blockKey}
+                style={{
+                  margin: 0,
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--r-lg)",
+                  background: "var(--surface)",
+                  padding: 16,
+                }}
+              >
+                {block.title ? (
+                  <figcaption className="eyebrow" style={{ color: "var(--ink-3)", marginBottom: 10 }}>
+                    {block.title}
+                  </figcaption>
+                ) : null}
+                <pre
+                  style={{
+                    margin: 0,
+                    overflowX: "auto",
+                    background: "var(--surface-2)",
+                    borderRadius: "var(--r)",
+                    padding: 14,
+                    fontFamily: "var(--mono)",
+                    fontSize: 12,
+                    lineHeight: 1.6,
+                    color: "var(--ink)",
+                  }}
+                >
                   {diagramContent}
                 </pre>
-              </section>
+              </figure>
             );
           }
           case "code_example": {
             const code = block.code ?? block.body;
             if (!code) return null;
+            // CodeBlock already self-styles (token-aware dark pre + context +
+            // copy affordance), so no outer card — that was the redundant box.
             return (
-              <section key={blockKey} className="rounded-lg border border-slate-200 bg-white px-5 py-4 shadow-sm">
-                <CodeBlock
-                  language={block.language ?? readStringMetadata(block, "language") ?? "plaintext"}
-                  code={code}
-                  context={block.body && block.body !== code ? block.body : block.title ?? undefined}
-                />
-              </section>
+              <CodeBlock
+                key={blockKey}
+                language={block.language ?? readStringMetadata(block, "language") ?? "plaintext"}
+                code={code}
+                context={block.body && block.body !== code ? block.body : block.title ?? undefined}
+              />
             );
           }
           case "concept_relation":
@@ -374,9 +548,17 @@ export default function LessonBlockRenderer({
             ) : null;
           }
           case "recap":
-            return <TextBlock key={blockKey} title={block.title} body={block.body} tone="recap" />;
+            return <RecapBlock key={blockKey} title={block.title} body={block.body} />;
+          case "further_reading":
+            return (
+              <FurtherReadingBlock
+                key={blockKey}
+                title={block.title}
+                references={block.references}
+              />
+            );
           case "next_step":
-            return <TextBlock key={blockKey} title={block.title} body={block.body} />;
+            return <NextStepBlock key={blockKey} title={block.title} body={block.body} />;
           default:
             return null;
         }

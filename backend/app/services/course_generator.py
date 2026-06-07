@@ -32,7 +32,11 @@ from app.services.lab_generator import LabGenerator
 from app.services.lesson_generator import LessonGenerationError, LessonGenerator
 from app.services.llm.base import UnifiedMessage
 from app.services.llm.router import ModelRouter, TaskType
-from app.services.research_enrichment import ResearchEnrichmentService
+from app.services.research_enrichment import (
+    FETCHED_REFERENCES_KEY,
+    ResearchEnrichmentService,
+    cards_from_metadata,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +44,15 @@ _DESCRIPTION_PROMPT = load_prompt(Path(__file__).parent / "prompts" / "course_de
 
 
 _LOCAL_BASE_URL_HINTS = ("localhost", "127.0.0.1", "host.docker.internal", "ollama")
+
+
+def _fetched_cards_for(sources: list[Source]) -> list:
+    """Collect live-fetched reference cards cached on these sources at ingestion,
+    so the enrichment pool includes real arXiv references (verified URLs)."""
+    cards: list = []
+    for source in sources:
+        cards += cards_from_metadata((source.metadata_ or {}).get(FETCHED_REFERENCES_KEY))
+    return cards
 
 
 def _provider_is_local(provider) -> bool:
@@ -117,7 +130,9 @@ class CourseGenerator:
         provider = await self._router.get_provider(TaskType.CONTENT_ANALYSIS)
         lesson_gen = LessonGenerator(provider)
         lab_gen = LabGenerator(provider)
-        research_enrichment = ResearchEnrichmentService()
+        research_enrichment = ResearchEnrichmentService(
+            extra_cards=_fetched_cards_for(sources)
+        )
         settings = get_settings()
         # Auto-tune chunk-level concurrency: local providers (ollama,
         # localhost-pointed) serialize anyway, so fanning out N parallel
@@ -407,6 +422,21 @@ class CourseGenerator:
                         if neighbor_index < len(sorted_buckets) - 1
                         else None
                     )
+                    # Compact "just finished" context from the PREVIOUS bucket's
+                    # chunk metadata (title + key terms/concepts). Pre-generation
+                    # data only — never the previous lesson's generated recap,
+                    # which may not exist yet under asyncio.gather.
+                    previous_section_context = (
+                        self._previous_section_context(
+                            previous_title,
+                            sorted(
+                                bucket_groups[sorted_buckets[neighbor_index - 1]],
+                                key=self._chunk_order_key,
+                            ),
+                        )
+                        if neighbor_index > 0
+                        else None
+                    )
                     try:
                         lesson = await lesson_gen.generate(
                             subtitle_chunks=[c.text for c in bucket_chunks],
@@ -420,6 +450,7 @@ class CourseGenerator:
                             ),
                             previous_section_title=previous_title,
                             next_section_title=next_title,
+                            previous_section_context=previous_section_context,
                         )
                         await _set_section_progress(progress_key, "success")
                         return bucket_id, lesson, None
@@ -487,6 +518,14 @@ class CourseGenerator:
                         or source.title
                         or "Untitled"
                     )
+                    previous_section_context = (
+                        self._previous_section_context(
+                            chunk_titles[order_index - 1],
+                            [chunks[order_index - 1]],
+                        )
+                        if order_index > 0
+                        else None
+                    )
                     try:
                         lesson = await lesson_gen.generate(
                             subtitle_chunks=[chunk.text],
@@ -508,6 +547,7 @@ class CourseGenerator:
                                 if order_index < len(chunk_titles) - 1
                                 else None
                             ),
+                            previous_section_context=previous_section_context,
                         )
                         await _set_section_progress(progress_key, "success")
                         return chunk.id, lesson, None
@@ -566,6 +606,14 @@ class CourseGenerator:
                         if neighbor_index < len(sorted_pages) - 1
                         else None
                     )
+                    previous_section_context = (
+                        self._previous_section_context(
+                            previous_title,
+                            page_groups[sorted_pages[neighbor_index - 1]],
+                        )
+                        if neighbor_index > 0
+                        else None
+                    )
                     try:
                         lesson = await lesson_gen.generate(
                             subtitle_chunks=[c.text for c in page_chunks],
@@ -579,6 +627,7 @@ class CourseGenerator:
                             ),
                             previous_section_title=previous_title,
                             next_section_title=next_title,
+                            previous_section_context=previous_section_context,
                         )
                         await _set_section_progress(progress_key, "success")
                         return page_idx, lesson, None
@@ -690,7 +739,9 @@ class CourseGenerator:
         from app.db.models.lab import Lab
 
         all_chunks = [c for cs in chunks_by_source.values() for c in cs]
-        research_enrichment = ResearchEnrichmentService()
+        research_enrichment = ResearchEnrichmentService(
+            extra_cards=_fetched_cards_for(sources)
+        )
         has_page_index = any(
             (c.metadata_ or {}).get("page_index") is not None for c in all_chunks
         )
@@ -937,6 +988,58 @@ class CourseGenerator:
         db.add(lab)
         await db.flush()
         logger.info("Created lab '%s' for section %s", lab.title, section_id)
+
+    @staticmethod
+    def _previous_section_context(
+        previous_title: str | None,
+        previous_chunks: list[ContentChunkModel],
+    ) -> str | None:
+        """Build a compact "what the learner just finished" line.
+
+        Uses ONLY pre-generation data — the previous section's title plus the
+        top key terms/concepts pulled from that section's chunk metadata
+        (``key_terms`` / ``concepts`` / ``topic``). This is intentionally cheap
+        (no LLM, no generated recap) so it can be assembled upfront and passed
+        into a lesson that still generates in parallel with its neighbors.
+
+        Returns ``None`` when there is no usable signal (e.g. the first
+        section) so callers leave continuity off and reproduce prior behavior.
+        """
+        terms: list[str] = []
+        for chunk in previous_chunks:
+            metadata = chunk.metadata_ or {}
+            for key in ("key_terms", "concepts"):
+                value = metadata.get(key)
+                if isinstance(value, list):
+                    terms.extend(str(v) for v in value if v)
+            topic = metadata.get("topic")
+            if isinstance(topic, str) and topic.strip():
+                terms.append(topic.strip())
+
+        # Dedup case-insensitively, preserve first-seen order, cap to ~5 items
+        # so the prompt line stays short.
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for term in terms:
+            cleaned = term.strip()
+            if not cleaned:
+                continue
+            lowered = cleaned.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            deduped.append(cleaned)
+            if len(deduped) >= 5:
+                break
+
+        title = (previous_title or "").strip()
+        if not title and not deduped:
+            return None
+        if title and deduped:
+            return f"{title} — {', '.join(deduped)}"
+        if title:
+            return title
+        return ", ".join(deduped)
 
     @staticmethod
     def _lesson_source_chunks(

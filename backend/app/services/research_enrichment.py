@@ -165,14 +165,24 @@ _CURATED_REFERENCES: tuple[_CuratedReference, ...] = (
 
 
 class ResearchEnrichmentService:
-    """Select relevant curated research cards for a lesson section."""
+    """Select relevant research cards for a lesson section.
+
+    Two pools, matched to the section the same way (keyword/concept overlap):
+      - the built-in curated set (``_CURATED_REFERENCES``), and
+      - ``extra_cards``: live-fetched references (e.g. arXiv) cached at
+        ingestion on the source and handed in here. Both carry real URLs, so a
+        ``further_reading`` block can cite them with a verified ``url``.
+    """
+
+    def __init__(self, extra_cards: list[ResearchCard] | None = None) -> None:
+        self._extra_cards = list(extra_cards or [])
 
     def enrich(
         self,
         *,
         section_title: str,
         chunks: Iterable[_ChunkLike],
-        max_cards: int = 2,
+        max_cards: int = 3,
     ) -> list[ResearchCard]:
         haystack_parts = [section_title]
         for chunk in chunks:
@@ -193,6 +203,40 @@ class ResearchEnrichmentService:
             score = sum(1 for trigger in ref.triggers if trigger.lower() in haystack)
             if score:
                 scored.append((score, ref.card.confidence, ref.card))
+        # Fetched cards match on the concepts they were queried with.
+        for card in self._extra_cards:
+            score = sum(1 for c in card.concepts if c and c.lower() in haystack)
+            if score:
+                scored.append((score, card.confidence, card))
 
         scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
-        return [card for _, _, card in scored[:max_cards]]
+        out: list[ResearchCard] = []
+        seen: set[str] = set()
+        for _, _, card in scored:
+            key = (card.url or card.title).strip().lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(card)
+            if len(out) >= max_cards:
+                break
+        return out
+
+
+# Key under which ingestion caches live-fetched reference cards on the source.
+FETCHED_REFERENCES_KEY = "fetched_research_cards"
+
+
+def cards_from_metadata(raw: object) -> list[ResearchCard]:
+    """Rebuild ``ResearchCard``s from cached metadata dicts (skip malformed)."""
+    cards: list[ResearchCard] = []
+    if not isinstance(raw, list):
+        return cards
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        try:
+            cards.append(ResearchCard(**item))
+        except Exception:  # noqa: BLE001
+            continue
+    return cards

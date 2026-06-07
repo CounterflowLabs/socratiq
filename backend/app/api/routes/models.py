@@ -51,6 +51,7 @@ async def list_models(
             supports_tool_use=m.supports_tool_use,
             supports_streaming=m.supports_streaming,
             max_tokens_limit=m.max_tokens_limit,
+            context_window_tokens=m.context_window_tokens,
             is_active=m.is_active,
         )
         for m in models
@@ -100,6 +101,7 @@ async def create_model(
             False if data.provider_type == "codex" else data.supports_streaming
         ),
         max_tokens_limit=data.max_tokens_limit,
+        context_window_tokens=data.context_window_tokens,
     )
     model.user_id = user.id
     await db.flush()
@@ -125,6 +127,7 @@ async def create_model(
         supports_tool_use=model.supports_tool_use,
         supports_streaming=model.supports_streaming,
         max_tokens_limit=model.max_tokens_limit,
+        context_window_tokens=model.context_window_tokens,
         is_active=model.is_active,
     )
 
@@ -167,6 +170,7 @@ async def update_model(
         supports_tool_use=model.supports_tool_use,
         supports_streaming=model.supports_streaming,
         max_tokens_limit=model.max_tokens_limit,
+        context_window_tokens=model.context_window_tokens,
         is_active=model.is_active,
     )
 

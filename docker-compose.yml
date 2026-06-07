@@ -43,6 +43,11 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/1
       - CELERY_RESULT_BACKEND=redis://redis:6379/2
       - CODEX_HOME=/codex-home
+      # Needed to decrypt model_configs.api_key_encrypted. Supplied by
+      # env_file above; also passed through explicitly (interpolated from the
+      # host env/.env — no secret hardcoded) so the dependency is visible and
+      # survives even if env_file is dropped.
+      - LLM_ENCRYPTION_KEY=${LLM_ENCRYPTION_KEY}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -67,6 +72,11 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/1
       - CELERY_RESULT_BACKEND=redis://redis:6379/2
       - CODEX_HOME=/codex-home
+      # Needed to decrypt model_configs.api_key_encrypted. Supplied by
+      # env_file above; also passed through explicitly (interpolated from the
+      # host env/.env — no secret hardcoded) so the dependency is visible and
+      # survives even if env_file is dropped.
+      - LLM_ENCRYPTION_KEY=${LLM_ENCRYPTION_KEY}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

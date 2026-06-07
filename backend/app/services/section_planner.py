@@ -270,9 +270,14 @@ class SectionPlanner:
                 error=llm_error,
             )
 
-        # --- Layer 4 per-chunk fallback ------------------------------------
+        # --- Layer 4 size-greedy floor -------------------------------------
+        # Every LLM tier failed and the embedding signal was degenerate. Still
+        # coarsen by size rather than emit one-section-per-chunk (the old
+        # per-chunk floor is what produced 113-section courses on LLM outage).
         return _finalize(
-            raw_assignments=_fallback_assignments(n),
+            raw_assignments=_run_layer4_size_greedy(
+                size_unit=size_unit, sizes=sizes, n=n
+            ),
             chunks=chunks,
             cap_tokens=cap_tokens,
             tier="fallback",
@@ -1142,10 +1147,66 @@ def _validate_and_normalize(
     ]
 
 
+def _run_layer4_size_greedy(
+    *,
+    size_unit: str,
+    sizes: list[float],
+    n: int,
+) -> list[BucketAssignment]:
+    """Layer 4 floor that still coarsens by size — never one-section-per-chunk.
+
+    Reached only when every LLM tier failed AND the embedding signal was
+    degenerate (Layer 3 returned ``None``). The old floor here was strict
+    per-chunk bucketing, which silently turned a long source into N
+    topicless sections (e.g. a 113-chunk video → 113 sections). Instead we
+    greedily pack consecutive chunks into buckets targeting the same
+    ~9-minute / ~2750-word size as Layer 3, bounded by
+    ``_EMBEDDING_MIN/MAX_BUCKETS``. Topic stays ``None`` (no LLM ran).
+
+    Degenerates to per-chunk only when there is no usable size signal
+    (missing/zero sizes) or ``n <= 1``.
+    """
+    if n <= 1 or not sizes or sum(sizes) <= 0 or len(sizes) != n:
+        return _fallback_assignments(n)
+
+    target = (
+        _EMBEDDING_BUCKET_TARGET_SEC
+        if size_unit == "duration_sec"
+        else _EMBEDDING_BUCKET_TARGET_WORDS
+    )
+    total = sum(sizes)
+    k = int(round(total / max(1.0, target)))
+    k = max(_EMBEDDING_MIN_BUCKETS, min(_EMBEDDING_MAX_BUCKETS, k, n))
+    if k <= 1:
+        return [BucketAssignment(bucket_id=0, bucket_topic=None) for _ in range(n)]
+
+    per_bucket = total / k
+    assignments: list[BucketAssignment] = []
+    bucket_id = 0
+    running = 0.0
+    for i in range(n):
+        assignments.append(BucketAssignment(bucket_id=bucket_id, bucket_topic=None))
+        running += sizes[i]
+        # Advance to the next bucket once this one has reached its size share,
+        # leaving at least one chunk for every remaining bucket.
+        remaining_chunks = n - (i + 1)
+        remaining_buckets = k - (bucket_id + 1)
+        if (
+            bucket_id < k - 1
+            and remaining_chunks > 0
+            and (running >= per_bucket or remaining_chunks <= remaining_buckets)
+        ):
+            bucket_id += 1
+            running = 0.0
+    return assignments
+
+
 def _fallback_assignments(n: int) -> list[BucketAssignment]:
-    """Layer 3: bucket_id = chunk_index. Topic stays None — chunk's own
-    ``topic`` from ContentAnalyzer is what course_generator uses as the
-    section title in this mode (legacy behavior)."""
+    """Strict per-chunk: bucket_id = chunk_index. Topic stays None — chunk's
+    own ``topic`` from ContentAnalyzer is what course_generator uses as the
+    section title in this mode (legacy behavior). Reserved now for degenerate
+    inputs (no size signal / length mismatch); the size-aware Layer 4 floor is
+    :func:`_run_layer4_size_greedy`."""
     return [BucketAssignment(bucket_id=i, bucket_topic=None) for i in range(n)]
 
 

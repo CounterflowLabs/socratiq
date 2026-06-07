@@ -15,11 +15,14 @@ from uuid import UUID
 
 from sqlalchemy import select
 
+from app.config import get_settings
 from app.db.models.course import Course, CourseSource
+from app.db.models.source import Source
 from app.services.course_generator import CourseGenerator
 from app.services.profile import load_profile
 from app.services.source_tasks import mark_source_task
 from app.worker._compat import task_shim
+from app.worker.tasks.course_generation import _maybe_run_agentic_outline
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +104,30 @@ async def _regenerate_course_async(
             target_language = user_profile.preferred_language
 
             task.update_state(state="PROGRESS", meta={"stage": "generating"})
+
+            # Agentic outline (Phase 3): re-plan the section structure with the
+            # critic-gated video→course graph before regenerating, so
+            # regenerated courses get the consolidated outline too (not just the
+            # initial generate path). Gated on the flag; per-source failures
+            # fall back to the existing buckets.
+            if get_settings().agentic_video_pipeline:
+                for sid in source_ids:
+                    src = await db.get(Source, sid)
+                    if src is None:
+                        continue
+                    try:
+                        if await _maybe_run_agentic_outline(
+                            db, src, sid, resources, None, target_language
+                        ):
+                            await db.commit()
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "Agentic outline (regenerate) failed for %s; using "
+                            "existing buckets: %s",
+                            sid,
+                            exc,
+                        )
+                        await db.rollback()
 
             generator = CourseGenerator(resources.model_router)
             new_course = await generator.generate(

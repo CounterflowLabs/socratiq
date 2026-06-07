@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useRunProgress } from "@/lib/use-run-progress";
+import { useCourseRunProgress, useRunProgress } from "@/lib/use-run-progress";
+import AgenticTimeline from "@/components/materials/agentic-timeline";
 import { useRouter } from "next/navigation";
 
 import {
@@ -13,6 +14,7 @@ import {
   IcImport,
   IcLink,
   IcLoader,
+  IcSpark,
   IcTV,
   IcVideo,
   SourceIcon,
@@ -22,6 +24,7 @@ import { Ornament } from "@/components/ui/ornament";
 import { PageHeader } from "@/components/ui/page-header";
 import {
   ApiError,
+  createCourseFromPrompt,
   createSourceFromURL,
   createSourceFromFile,
   getBilibiliStatus,
@@ -34,7 +37,7 @@ import {
 import { useSourcesStore, useTasksStore } from "@/lib/stores";
 import { useT } from "@/lib/i18n";
 
-type Tab = "url" | "file" | "text";
+type Tab = "url" | "file" | "text" | "prompt";
 type CardStatus = "running" | "failed" | "done";
 
 interface ExistingSourceNotice {
@@ -157,6 +160,18 @@ const SAMPLES: Array<{
   },
 ];
 
+const PROMPT_SAMPLES_ZH: string[] = [
+  "用 30 分钟讲清楚 Transformer 的注意力机制",
+  "给完全的新手讲一遍 Git 的核心概念和工作流",
+  "从零理解 Rust 的所有权与借用",
+];
+
+const PROMPT_SAMPLES_EN: string[] = [
+  "Teach me the attention mechanism in Transformers in 30 minutes",
+  "Explain Git's core concepts and workflow to a complete beginner",
+  "Understand Rust ownership and borrowing from scratch",
+];
+
 export default function ImportPage() {
   const router = useRouter();
   const { t, lang } = useT();
@@ -166,9 +181,16 @@ export default function ImportPage() {
   const [tab, setTab] = useState<Tab>("url");
   const [url, setUrl] = useState("");
   const [textContent, setTextContent] = useState("");
+  const [promptText, setPromptText] = useState("");
   const [pdfName, setPdfName] = useState("");
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [dragOver, setDragOver] = useState(false);
+
+  // One-sentence → course flow. `promptTaskId` is the AG-UI run id we follow;
+  // `promptCourseNavigated` guards against a double navigation if both the
+  // RUN_FINISHED event's course id and the runStatus effect fire.
+  const [promptTaskId, setPromptTaskId] = useState<string | null>(null);
+  const [promptCourseNavigated, setPromptCourseNavigated] = useState(false);
 
   // PRD §5.2 ingest config panel — defaults match the global pipeline.
   // The values get serialized into ingest_options_json and stamped onto
@@ -260,7 +282,9 @@ export default function ImportPage() {
       ? Boolean(url.trim())
       : tab === "file"
         ? Boolean(pdfFile)
-        : Boolean(textContent.trim());
+        : tab === "prompt"
+          ? Boolean(promptText.trim())
+          : Boolean(textContent.trim());
 
   // Refetch the DB-authoritative pipeline state and re-derive the card. Also
   // tracks the active task's run id (= celery_task_id = the AG-UI run id) so the
@@ -305,6 +329,48 @@ export default function ImportPage() {
       clearInterval(handle);
     };
   }, [progressActive, refreshProgress]);
+
+  // One-sentence → course: subscribe to the source-less run and project its
+  // agentic timeline (same component the URL/source flow uses). Active only
+  // while the prompt task is in flight and the card hasn't settled.
+  const promptRunActive =
+    promptTaskId !== null && analyzing && card.status === "running";
+  const promptRun = useCourseRunProgress(promptTaskId, promptRunActive);
+
+  // On finish, the run carries the new course id at result.course_id (projected
+  // onto promptRun.courseId). Navigate to it the same way the rest of the app
+  // opens a course: router.push(/learn?courseId=…).
+  useEffect(() => {
+    if (promptTaskId === null || promptCourseNavigated) return;
+    if (promptRun.runStatus === "finished" && promptRun.courseId) {
+      setPromptCourseNavigated(true);
+      router.push(`/learn?courseId=${promptRun.courseId}`);
+    }
+  }, [
+    promptTaskId,
+    promptCourseNavigated,
+    promptRun.runStatus,
+    promptRun.courseId,
+    router,
+  ]);
+
+  // Reflect the prompt run's lifecycle onto the shared status card: a stream
+  // error or a finish-without-course-id settles the card so it stops spinning.
+  useEffect(() => {
+    if (promptTaskId === null) return;
+    if (promptRun.runStatus === "error") {
+      setCard((prev) => ({
+        ...prev,
+        status: "failed",
+        failedStageIndex: prev.stageIndex,
+        errorMessage: promptRun.error ?? t("import.errorUnknown"),
+      }));
+    } else if (promptRun.runStatus === "finished" && !promptRun.courseId) {
+      // Finished but no course id (shouldn't happen) — mark done so the card
+      // doesn't spin forever; the user can retry via "import another".
+      setCard((prev) => ({ ...prev, status: "done", stageIndex: 4 }));
+    }
+  }, [promptTaskId, promptRun.runStatus, promptRun.courseId, promptRun.error, t]);
 
   function handleFileSelect(file: File | undefined) {
     if (!file) return;
@@ -402,6 +468,45 @@ export default function ImportPage() {
     }
   }
 
+  async function handleGenerateFromPrompt() {
+    if (!promptText.trim() || loading) return;
+    setLoading(true);
+    setErrorMsg(null);
+    setExistingSourceNotice(null);
+    setPromptTaskId(null);
+    setPromptCourseNavigated(false);
+    setActiveSourceId(null);
+    setActiveSourceLabel(promptText.trim());
+    setActiveSourceType("url");
+    setCard({
+      status: "running",
+      stageIndex: 0,
+      failedStageIndex: null,
+      errorMessage: null,
+      courseId: null,
+    });
+    setAnalyzing(true);
+
+    try {
+      const { task_id } = await createCourseFromPrompt(
+        promptText.trim(),
+        lang === "zh" ? "zh" : "en",
+      );
+      setPromptTaskId(task_id);
+      setLoading(false);
+    } catch (err) {
+      setErrorMsg(
+        err instanceof Error
+          ? err.message
+          : lang === "zh"
+            ? "生成失败，请稍后重试"
+            : "Generation failed. Please try again.",
+      );
+      setLoading(false);
+      setAnalyzing(false);
+    }
+  }
+
   async function handleRetry() {
     if (!activeSourceId || retrying) return;
     setRetrying(true);
@@ -433,6 +538,8 @@ export default function ImportPage() {
     setActiveSourceId(null);
     setActiveSourceLabel("");
     setExistingSourceNotice(null);
+    setPromptTaskId(null);
+    setPromptCourseNavigated(false);
     setCard({
       status: "running",
       stageIndex: 0,
@@ -444,6 +551,7 @@ export default function ImportPage() {
     setPdfFile(null);
     setPdfName("");
     setTextContent("");
+    setPromptText("");
     setErrorMsg(null);
   }
 
@@ -520,6 +628,7 @@ export default function ImportPage() {
                 { key: "url" as const, label: t("import.pasteUrl"), Icon: IcLink },
                 { key: "file" as const, label: t("import.uploadFile"), Icon: IcDoc },
                 { key: "text" as const, label: t("import.writeText"), Icon: IcEdit },
+                { key: "prompt" as const, label: t("import.fromPrompt"), Icon: IcSpark },
               ]
             ).map(({ key, label, Icon }) => (
               <button
@@ -845,6 +954,87 @@ export default function ImportPage() {
                 </div>
               </div>
             ) : null}
+
+            {tab === "prompt" ? (
+              <div>
+                <textarea
+                  className="input"
+                  value={promptText}
+                  onChange={(e) => setPromptText(e.target.value)}
+                  placeholder={t("import.promptPlaceholder")}
+                  style={{
+                    height: 140,
+                    padding: 12,
+                    resize: "vertical",
+                    fontSize: 14,
+                    lineHeight: 1.6,
+                  }}
+                />
+                <div
+                  style={{
+                    marginTop: 10,
+                    fontSize: 12,
+                    color: "var(--ink-3)",
+                    lineHeight: 1.6,
+                  }}
+                >
+                  {t("import.promptHint")}
+                </div>
+                <div style={{ marginTop: 12, textAlign: "right" }}>
+                  <button
+                    type="button"
+                    onClick={handleGenerateFromPrompt}
+                    disabled={!canSubmit || loading}
+                    className="btn btn-accent"
+                  >
+                    {loading ? <IcLoader size={12} className="spin" /> : <IcSpark size={12} />}
+                    <span>{t("import.generateCourse")}</span>
+                  </button>
+                </div>
+
+                <div style={{ marginTop: 24 }}>
+                  <Eyebrow>{t("import.promptSamples")}</Eyebrow>
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 6,
+                      marginTop: 10,
+                    }}
+                  >
+                    {(lang === "zh" ? PROMPT_SAMPLES_ZH : PROMPT_SAMPLES_EN).map(
+                      (sample) => (
+                        <button
+                          key={sample}
+                          type="button"
+                          onClick={() => setPromptText(sample)}
+                          className="card-quiet"
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 12,
+                            cursor: "pointer",
+                            textAlign: "left",
+                            padding: 12,
+                            background: "transparent",
+                            font: "inherit",
+                            color: "var(--ink)",
+                            width: "100%",
+                            border: "1px solid var(--border)",
+                          }}
+                        >
+                          <IcSpark size={14} style={{ color: "var(--accent)", flexShrink: 0 }} />
+                          <span className="serif" style={{ fontSize: 15, flex: 1, minWidth: 0 }}>
+                            {sample}
+                          </span>
+                          <IcArrowRight size={14} style={{ color: "var(--ink-3)" }} />
+                        </button>
+                      ),
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : null}
           </div>
 
           {/* Tips */}
@@ -886,6 +1076,11 @@ export default function ImportPage() {
           const isFailed = card.status === "failed";
           const isDone = card.status === "done";
           const isExisting = existingSourceNotice !== null;
+          // The one-sentence flow has no source-ingestion pipeline: it shows the
+          // agentic timeline (its real progress) instead of the 4 source stages,
+          // and follows the prompt run rather than the source run.
+          const isPrompt = promptTaskId !== null;
+          const liveAgentic = isPrompt ? promptRun : liveRun;
           const chipClass = isFailed
             ? "chip"
             : isDone
@@ -909,14 +1104,18 @@ export default function ImportPage() {
               ? "已存在资料"
               : isDone
               ? t("import.pipelineDoneTitle")
-              : t("import.pipelineStartedTitle");
+              : isPrompt
+                ? t("import.promptStartedTitle")
+                : t("import.pipelineStartedTitle");
           const hint = isFailed
             ? t("import.pipelineFailedHint")
             : isExisting
               ? "这份资料已经在你的资料库中，没有重复创建新资料。"
               : isDone
               ? t("import.pipelineDoneHint")
-              : t("import.pipelineStartedHint");
+              : isPrompt
+                ? t("import.promptStartedHint")
+                : t("import.pipelineStartedHint");
           const chipLabel = isFailed
             ? t("import.statusFailed")
             : isExisting
@@ -928,9 +1127,15 @@ export default function ImportPage() {
           return (
             <div className="card" style={{ padding: 32 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 8 }}>
-                <SourceIcon type={activeSourceType} size={20} />
+                {isPrompt ? (
+                  <span style={{ color: "var(--accent)" }}>
+                    <IcSpark size={20} />
+                  </span>
+                ) : (
+                  <SourceIcon type={activeSourceType} size={20} />
+                )}
                 <div
-                  className="mono"
+                  className={isPrompt ? undefined : "mono"}
                   style={{
                     fontSize: 13,
                     color: "var(--ink-2)",
@@ -1030,6 +1235,19 @@ export default function ImportPage() {
                     <IcArrowRight size={12} />
                   </button>
                 ) : null}
+                {isPrompt && promptRun.courseId ? (
+                  // Fallback CTA: the finish effect normally auto-navigates, but
+                  // if that was blocked (e.g. the user navigated away and back)
+                  // keep an explicit way into the new course.
+                  <button
+                    type="button"
+                    className="btn btn-accent"
+                    onClick={() => router.push(`/learn?courseId=${promptRun.courseId}`)}
+                  >
+                    <span>{t("import.openCourse")}</span>
+                    <IcArrowRight size={12} />
+                  </button>
+                ) : null}
                 {isDone && !card.courseId && activeSourceId && !isExisting ? (
                   // PRD §5.2: don't auto-jump to course generation. Surface
                   // it as a primary CTA on the success card instead.
@@ -1052,7 +1270,7 @@ export default function ImportPage() {
                     <IcArrowRight size={12} />
                   </button>
                 ) : null}
-                {isFailed ? (
+                {isFailed && !isPrompt ? (
                   <button
                     type="button"
                     className="btn btn-accent"
@@ -1065,14 +1283,16 @@ export default function ImportPage() {
                     <span>{t("import.retryImport")}</span>
                   </button>
                 ) : null}
-                <button
-                  type="button"
-                  className={isDone || isFailed ? "btn btn-outline" : "btn btn-accent"}
-                  onClick={() => router.push("/sources")}
-                >
-                  <span>{t("import.viewSources")}</span>
-                  <IcArrowRight size={12} />
-                </button>
+                {!isPrompt ? (
+                  <button
+                    type="button"
+                    className={isDone || isFailed ? "btn btn-outline" : "btn btn-accent"}
+                    onClick={() => router.push("/sources")}
+                  >
+                    <span>{t("import.viewSources")}</span>
+                    <IcArrowRight size={12} />
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className="btn btn-outline"
@@ -1082,7 +1302,7 @@ export default function ImportPage() {
                 </button>
               </div>
 
-              {!isExisting ? (
+              {!isExisting && !isPrompt ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                 {stages.map((s, i) => {
                   const isThisFailed = card.failedStageIndex === i;
@@ -1162,6 +1382,32 @@ export default function ImportPage() {
                   );
                 })}
               </div>
+              ) : null}
+
+              {liveAgentic.agentic.active ? (
+                <div style={{ marginTop: 18 }}>
+                  <AgenticTimeline
+                    agentic={liveAgentic.agentic}
+                    running={liveAgentic.runStatus === "running"}
+                    lang={lang}
+                  />
+                </div>
+              ) : isPrompt && !isFailed && !isDone ? (
+                // Prompt run dispatched but no agentic event yet — give an
+                // immediate "starting" affordance in place of the source stages.
+                <div
+                  style={{
+                    marginTop: 18,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    fontSize: 13,
+                    color: "var(--ink-3)",
+                  }}
+                >
+                  <IcLoader size={14} className="spin" />
+                  <span>{t("import.promptStarting")}</span>
+                </div>
               ) : null}
             </div>
           );

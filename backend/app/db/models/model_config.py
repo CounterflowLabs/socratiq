@@ -22,6 +22,13 @@ class ModelConfig(BaseMixin, Base):
     supports_tool_use: Mapped[bool] = mapped_column(server_default=text("true"))
     supports_streaming: Mapped[bool] = mapped_column(server_default=text("true"))
     max_tokens_limit: Mapped[int] = mapped_column(server_default=text("4096"))
+    # Admin-declared input context window for this model, in tokens. When set,
+    # it takes precedence over the hand-maintained lookup table in
+    # ``services/llm/token_budget.py`` so a deployment can declare a model's
+    # window where it declares the model — fixing under-budgeting / truncated
+    # lessons for model ids the table doesn't recognize. NULL ⇒ fall back to
+    # the table/family lookup (no behavior change).
+    context_window_tokens: Mapped[int | None] = mapped_column(nullable=True)
     is_active: Mapped[bool] = mapped_column(server_default=text("true"))
     user_id: Mapped[uuid_module.UUID | None] = mapped_column(
         ForeignKey("users.id"), nullable=True, index=True

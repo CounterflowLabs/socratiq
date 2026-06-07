@@ -258,6 +258,15 @@ export interface LessonConcept {
   description?: string | null;
 }
 
+export interface LessonReference {
+  title: string;
+  source?: string | null;
+  year?: string | null;
+  kind?: "classic" | "frontier";
+  url?: string | null;
+  note?: string | null;
+}
+
 export interface GraphCard {
   current: string[];
   prerequisites: string[];
@@ -277,10 +286,12 @@ export interface LessonBlock {
     | "practice_trigger"
     | "exercise_trigger"
     | "recap"
-    | "next_step";
+    | "next_step"
+    | "further_reading";
   title?: string | null;
   body?: string | null;
   concepts?: LessonConcept[];
+  references?: LessonReference[];
   code?: string | null;
   language?: string | null;
   diagram_type?: string | null;
@@ -344,6 +355,31 @@ export async function generateCourse(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(config),
+  });
+  if (!res.ok) throw await responseError(res);
+  return res.json();
+}
+
+export interface CourseFromPromptResponse {
+  task_id: string;
+  status: string;
+}
+
+/** Generate a full course from a single-sentence prompt (no source material).
+ *  Returns the dispatch task id; use it as the AG-UI `run_id` with
+ *  {@link streamCourseRunEvents} to follow live progress, and read the new
+ *  course id off the terminal RUN_FINISHED event's `result.course_id`. */
+export async function createCourseFromPrompt(
+  prompt: string,
+  targetLanguage?: string,
+): Promise<CourseFromPromptResponse> {
+  const res = await apiFetch(`${API_BASE}/courses/from-prompt`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      prompt,
+      ...(targetLanguage ? { target_language: targetLanguage } : {}),
+    }),
   });
   if (!res.ok) throw await responseError(res);
   return res.json();
@@ -472,6 +508,11 @@ export interface AGUIEvent {
   // task progress: STATE_SNAPSHOT carries `snapshot` (full state); STATE_DELTA
   // reuses the `delta` key above but as an RFC 6902 op array (see useRunProgress).
   snapshot?: unknown;
+  // RUN_FINISHED payload. The top-level key is `result` (camelCase == snake_case
+  // for a single word); the course-gen runs put the new course id at
+  // `result.course_id` (still snake_case — it rides inside an Any-typed dict the
+  // backend serializes verbatim).
+  result?: { course_id?: string; status?: string } & Record<string, unknown>;
 }
 
 interface StreamChatOptions {
@@ -522,6 +563,31 @@ export async function* streamRunEvents(
 
   for await (const evt of streamSSEGet(
     `${API_BASE}/sources/${sourceId}/runs/${runId}/events`,
+    signal
+  )) {
+    try {
+      yield JSON.parse(evt.data) as AGUIEvent;
+    } catch {
+      // skip malformed events
+    }
+  }
+}
+
+/**
+ * Live AG-UI event stream for a source-less course run (one-sentence → course).
+ *
+ * Mirrors {@link streamRunEvents} but hits the source-scoped-free endpoint;
+ * `runId` is the task id from {@link createCourseFromPrompt}. The terminal
+ * RUN_FINISHED event carries the new course id at `result.course_id`.
+ */
+export async function* streamCourseRunEvents(
+  runId: string,
+  signal?: AbortSignal
+): AsyncGenerator<AGUIEvent> {
+  const { streamSSEGet } = await import("./sse");
+
+  for await (const evt of streamSSEGet(
+    `${API_BASE}/courses/runs/${runId}/events`,
     signal
   )) {
     try {

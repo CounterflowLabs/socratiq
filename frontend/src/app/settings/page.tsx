@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 import {
   IcAlert,
@@ -158,14 +159,29 @@ const SECTIONS = [
 type SectionId = (typeof SECTIONS)[number]["id"];
 
 export default function SettingsPage() {
+  // useSearchParams() requires a Suspense boundary in the App Router.
+  return (
+    <Suspense fallback={null}>
+      <SettingsPageContent />
+    </Suspense>
+  );
+}
+
+function SettingsPageContent() {
   const { t, lang } = useT();
+  const searchParams = useSearchParams();
   const setLang = useLocaleStore((s) => s.setLang);
   const setDensity = useLocaleStore((s) => s.setDensity);
   const setTheme = useLocaleStore((s) => s.setTheme);
   const density = useLocaleStore((s) => s.density);
   const themePreference = useLocaleStore((s) => s.theme);
 
-  const [activeSection, setActiveSection] = useState<SectionId>("appearance");
+  const [activeSection, setActiveSection] = useState<SectionId>(() => {
+    const requested = searchParams.get("section");
+    return SECTIONS.some((s) => s.id === requested)
+      ? (requested as SectionId)
+      : "appearance";
+  });
 
   const [models, setModels] = useState<ModelConfigResponse[]>([]);
   const [routes, setRoutes] = useState<ModelRouteResponse[]>([]);

@@ -6,8 +6,6 @@ import {
   Noto_Serif_SC,
   Noto_Sans_SC,
 } from "next/font/google";
-import Script from "next/script";
-
 import "./globals.css";
 import { LayoutInner } from "./layout-inner";
 
@@ -81,19 +79,23 @@ export default function RootLayout({
             --font-mono: ${geistMono.style.fontFamily};
           }
         `}</style>
+        {/* Anti-FOUC boot — apply the persisted theme + density to <html>
+            before first paint so the warm-paper palette never flashes a stale
+            scheme between SSR and hydration. A raw inline <script> in <head>
+            is rendered identically server- and client-side (no hydration
+            mismatch) and runs synchronously ahead of body render. It only
+            mutates <html>, which carries `suppressHydrationWarning`.
+            (next/script `beforeInteractive` was wrong here: from a <body>
+            JSX slot it is hoisted into <head>, so its server/client position
+            diverged — the hydration error — and per the Next 16 docs it does
+            not block hydration anyway.) */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(()=>{try{const t=localStorage.getItem('locale.theme');const d=localStorage.getItem('locale.density');if(t&&t!=='system')document.documentElement.setAttribute('data-theme',t);else document.documentElement.removeAttribute('data-theme');if(d)document.documentElement.setAttribute('data-density',d);}catch(e){}})();`,
+          }}
+        />
       </head>
       <body>
-        {/* Boot script — applies the persisted theme + density before first
-            paint so the warm-paper palette never flashes a stale scheme
-            between SSR and hydration. ``beforeInteractive`` injects it
-            ahead of any client-side JS without triggering React's
-            "script tag inside component" warning. */}
-        <Script
-          id="socratiq-boot-theme"
-          strategy="beforeInteractive"
-        >
-          {`(()=>{try{const t=localStorage.getItem('locale.theme');const d=localStorage.getItem('locale.density');if(t&&t!=='system')document.documentElement.setAttribute('data-theme',t);else document.documentElement.removeAttribute('data-theme');if(d)document.documentElement.setAttribute('data-density',d);}catch(e){}})();`}
-        </Script>
         <a href="#main-content" className="skip-to-content">
           跳到主要内容
         </a>

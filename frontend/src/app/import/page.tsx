@@ -143,11 +143,11 @@ const SAMPLES: Array<{
   {
     type: "bilibili",
     title: {
-      zh: "3Blue1Brown · 深度学习之神经网络的结构",
-      en: "3Blue1Brown · But what is a neural network?",
+      zh: "Attention Is All You Need · 论文解读与 Transformer 架构",
+      en: "Attention Is All You Need — paper walkthrough & Transformer architecture",
     },
-    url: "https://www.bilibili.com/video/BV1bx411M7Zx",
-    meta: "19m",
+    url: "https://www.bilibili.com/video/BV1xoJwzDESD",
+    meta: "52m",
   },
   {
     type: "pdf",
@@ -584,7 +584,7 @@ export default function ImportPage() {
               type="button"
               className="btn btn-ghost btn-sm"
               style={{ marginTop: 8, color: "var(--error)" }}
-              onClick={() => router.push("/settings")}
+              onClick={() => router.push("/settings?section=sources")}
             >
               {t("import.bilibiliConfigure")}
             </button>
@@ -656,6 +656,8 @@ export default function ImportPage() {
               <div>
                 <div style={{ position: "relative" }}>
                   <input
+                    id="import-url"
+                    aria-label={t("import.placeholder")}
                     className="input input-lg"
                     placeholder={t("import.placeholder")}
                     value={url}
@@ -906,6 +908,8 @@ export default function ImportPage() {
                   )}
                 </div>
                 <input
+                  id="import-file"
+                  aria-label={t("import.dropHere")}
                   ref={fileRef}
                   type="file"
                   accept=".pdf,.md,.txt,.markdown"
@@ -929,6 +933,8 @@ export default function ImportPage() {
             {tab === "text" ? (
               <div>
                 <textarea
+                  id="import-text"
+                  aria-label={t("import.textPlaceholder")}
                   className="input"
                   value={textContent}
                   onChange={(e) => setTextContent(e.target.value)}
@@ -958,6 +964,8 @@ export default function ImportPage() {
             {tab === "prompt" ? (
               <div>
                 <textarea
+                  id="import-prompt"
+                  aria-label={t("import.promptPlaceholder")}
                   className="input"
                   value={promptText}
                   onChange={(e) => setPromptText(e.target.value)}

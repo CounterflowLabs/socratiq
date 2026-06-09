@@ -5,6 +5,7 @@ through an :class:`EventBus` to one or more :class:`EventSink`s, and project
 long-running task progress via :class:`StateProjector`.
 """
 
+from app.agentcore.events.activity import ActivityHandle, tool_activity
 from app.agentcore.events.bus import EventBus
 from app.agentcore.events.sinks import (
     CheckpointEventSink,
@@ -49,6 +50,8 @@ __all__ = [
     "TracerEventSink",
     "CheckpointEventSink",
     "StateProjector",
+    "ActivityHandle",
+    "tool_activity",
     "run_started",
     "run_finished",
     "run_error",

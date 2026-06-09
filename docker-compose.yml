@@ -40,8 +40,6 @@ services:
     environment:
       - DATABASE_URL=postgresql+asyncpg://socratiq:socratiq@db:5432/socratiq
       - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/1
-      - CELERY_RESULT_BACKEND=redis://redis:6379/2
       - CODEX_HOME=/codex-home
       # Needed to decrypt model_configs.api_key_encrypted. Supplied by
       # env_file above; also passed through explicitly (interpolated from the
@@ -55,11 +53,13 @@ services:
 
   worker:
     build: ./backend
-    # Listens on both queues. Concurrency 4 by default; for local-only
-    # setups (Ollama) the in-process semaphore in CourseGenerator clamps
-    # chunk-level fanout to 1, so the worker concurrency only matters for
-    # task-level parallelism (eg. lesson regeneration alongside ingest).
-    command: celery -A app.worker.celery_app worker --loglevel=info -Q embed_queue,generate_queue,celery --concurrency=4
+    # ARQ worker — drains the async-task queue (ingest, course/lesson
+    # generation, exercises). The app enqueues via ARQ (app/worker/queue.py),
+    # so this MUST be the ARQ entrypoint. Celery was removed in Phase 3 and
+    # app/worker/celery_app no longer exists: a `celery …` command here crashes
+    # on startup, leaves the ARQ queue unconsumed, and every import sticks in
+    # "排队中" forever. Concurrency is set via WorkerSettings.max_jobs.
+    command: arq app.worker.arq_app.WorkerSettings
     depends_on:
       db:
         condition: service_healthy
@@ -69,8 +69,6 @@ services:
     environment:
       - DATABASE_URL=postgresql+asyncpg://socratiq:socratiq@db:5432/socratiq
       - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/1
-      - CELERY_RESULT_BACKEND=redis://redis:6379/2
       - CODEX_HOME=/codex-home
       # Needed to decrypt model_configs.api_key_encrypted. Supplied by
       # env_file above; also passed through explicitly (interpolated from the

@@ -21,6 +21,25 @@ export interface AgenticStep {
   order: number;
 }
 
+/**
+ * One narrated tool call — a deterministic pipeline sub-step (extract, analyze,
+ * embed, fetch references…), projected from the TOOL_CALL_* event span. Same
+ * wire shape a real model-driven tool call uses, so both render identically.
+ */
+export interface ActivityItem {
+  /** The `toolCallId` shared by START / ARGS / RESULT / END. */
+  id: string;
+  /** Stable technical tag from TOOL_CALL_START (e.g. "extract.bilibili"). */
+  name: string;
+  /** Short argument preview parsed from TOOL_CALL_ARGS, or null. */
+  detail: string | null;
+  /** Outcome summary from TOOL_CALL_RESULT, or null. */
+  result: string | null;
+  state: AgenticStepState;
+  /** Monotonic order in which the call first started (stable rendering). */
+  order: number;
+}
+
 /** Latest critic verdict, projected from a CUSTOM `critic_verdict` event. */
 export interface CriticVerdict {
   passed: boolean;
@@ -44,6 +63,8 @@ export interface BacktrackEvent {
  */
 export interface AgenticProgress {
   steps: AgenticStep[];
+  /** Live narrated tool calls (pipeline sub-steps), in start order. */
+  activities: ActivityItem[];
   critic: CriticVerdict | null;
   backtracks: BacktrackEvent[];
   /** Count of CUSTOM `replan` events seen so far. */
@@ -67,6 +88,7 @@ export interface RunProgress {
 
 const EMPTY_AGENTIC: AgenticProgress = {
   steps: [],
+  activities: [],
   critic: null,
   backtracks: [],
   replans: 0,
@@ -205,6 +227,22 @@ function applyEvent(evt: AGUIEvent, setters: EventSetters): void {
     case "CUSTOM":
       setters.setAgentic((prev) => applyCustom(prev, evt));
       break;
+    case "TOOL_CALL_START":
+      setters.setAgentic((prev) => startActivity(prev, evt));
+      break;
+    case "TOOL_CALL_ARGS":
+      setters.setAgentic((prev) => updateActivity(prev, evt, { detail: argsDetail(evt.delta) }));
+      break;
+    case "TOOL_CALL_RESULT":
+      setters.setAgentic((prev) =>
+        updateActivity(prev, evt, {
+          result: typeof evt.content === "string" ? evt.content : null,
+        }),
+      );
+      break;
+    case "TOOL_CALL_END":
+      setters.setAgentic((prev) => updateActivity(prev, evt, { state: "done" }));
+      break;
     case "RUN_FINISHED": {
       setters.setRunStatus("finished");
       // Any step still flagged running never received its STEP_FINISHED (the
@@ -252,11 +290,69 @@ function upsertStep(
 }
 
 function settleSteps(prev: AgenticProgress): AgenticProgress {
-  if (!prev.steps.some((s) => s.state === "running")) return prev;
+  const stepsRunning = prev.steps.some((s) => s.state === "running");
+  const actsRunning = prev.activities.some((a) => a.state === "running");
+  if (!stepsRunning && !actsRunning) return prev;
   return {
     ...prev,
     steps: prev.steps.map((s) => (s.state === "running" ? { ...s, state: "done" } : s)),
+    activities: prev.activities.map((a) =>
+      a.state === "running" ? { ...a, state: "done" } : a,
+    ),
   };
+}
+
+/** TOOL_CALL_START → append a running activity (idempotent on toolCallId). */
+function startActivity(prev: AgenticProgress, evt: AGUIEvent): AgenticProgress {
+  const id = typeof evt.toolCallId === "string" ? evt.toolCallId : "";
+  if (!id) return prev;
+  if (prev.activities.some((a) => a.id === id)) return { ...prev, active: true };
+  const name =
+    typeof evt.toolCallName === "string" && evt.toolCallName.length > 0
+      ? evt.toolCallName
+      : "tool";
+  return {
+    ...prev,
+    active: true,
+    activities: [
+      ...prev.activities,
+      { id, name, detail: null, result: null, state: "running", order: prev.activities.length },
+    ],
+  };
+}
+
+/** Merge a partial update into the activity addressed by `toolCallId`. */
+function updateActivity(
+  prev: AgenticProgress,
+  evt: AGUIEvent,
+  patch: Partial<Pick<ActivityItem, "detail" | "result" | "state">>,
+): AgenticProgress {
+  const id = typeof evt.toolCallId === "string" ? evt.toolCallId : "";
+  if (!id) return prev;
+  const idx = prev.activities.findIndex((a) => a.id === id);
+  if (idx < 0) return prev;
+  const activities = [...prev.activities];
+  activities[idx] = { ...activities[idx], ...patch };
+  return { ...prev, activities };
+}
+
+/** Distill a TOOL_CALL_ARGS JSON payload into a one-line detail, or null. */
+function argsDetail(delta: unknown): string | null {
+  if (typeof delta !== "string" || delta.length === 0) return null;
+  try {
+    const obj = JSON.parse(delta);
+    if (!isRecord(obj)) return null;
+    const parts: string[] = [];
+    for (const [k, v] of Object.entries(obj)) {
+      if (v == null) continue;
+      let s = Array.isArray(v) ? v.slice(0, 3).join(", ") : String(v);
+      if (k === "url" && s.length > 48) s = s.slice(0, 48) + "…";
+      if (s.length > 0) parts.push(s);
+    }
+    return parts.length ? parts.join(" · ") : null;
+  } catch {
+    return null;
+  }
 }
 
 function applyCustom(prev: AgenticProgress, evt: AGUIEvent): AgenticProgress {

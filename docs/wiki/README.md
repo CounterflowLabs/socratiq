@@ -54,8 +54,9 @@ cd backend && pytest -k name             # match by name
 # frontend tests
 cd frontend && npm test                  # vitest run
 
-# Celery worker (if running backend outside docker)
-cd backend && celery -A app.worker.celery_app worker --loglevel=info
+# ARQ worker (required for async tasks: ingest, course/lesson generation).
+# Without it, every import sits in "排队中" forever.
+cd backend && arq app.worker.arq_app.WorkerSettings
 
 # DB migrations
 cd backend && alembic upgrade head

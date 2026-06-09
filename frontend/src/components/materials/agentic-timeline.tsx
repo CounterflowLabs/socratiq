@@ -11,6 +11,7 @@ import {
   IcSpark,
 } from "@/components/icons";
 import type {
+  ActivityItem,
   AgenticProgress,
   AgenticStep,
   CriticVerdict,
@@ -42,6 +43,7 @@ export default function AgenticTimeline({
 
   const zh = lang === "zh";
   const orderedSteps = [...agentic.steps].sort((a, b) => a.order - b.order);
+  const orderedActivities = [...agentic.activities].sort((a, b) => a.order - b.order);
 
   return (
     <section
@@ -77,11 +79,21 @@ export default function AgenticTimeline({
             />
           ))}
         </ol>
-      ) : (
+      ) : null}
+
+      {orderedActivities.length > 0 ? (
+        <ol className="mt-3 space-y-1.5">
+          {orderedActivities.map((a) => (
+            <ActivityRow key={a.id} activity={a} zh={zh} />
+          ))}
+        </ol>
+      ) : null}
+
+      {orderedSteps.length === 0 && orderedActivities.length === 0 ? (
         <p className="mt-3 text-xs" style={{ color: "var(--ink-3)" }}>
-          {zh ? "智能体已启动，正在规划…" : "Agent started — planning…"}
+          {zh ? "已启动，正在准备…" : "Started — preparing…"}
         </p>
-      )}
+      ) : null}
 
       {agentic.replans > 0 || agentic.backtracks.length > 0 ? (
         <div className="mt-3 space-y-2">
@@ -123,6 +135,77 @@ function stepLabel(name: string, zh: boolean): string {
   const entry = STEP_LABELS[name];
   if (entry) return zh ? entry.zh : entry.en;
   return name;
+}
+
+// Friendly names for the narrated tool-call tags the pipeline emits via
+// TOOL_CALL_START (e.g. "extract.bilibili"). Exact match first, then a
+// verb-prefix fallback so a new "verb.target" tag still reads sensibly.
+const ACTIVITY_LABELS: Record<string, { zh: string; en: string }> = {
+  "extract.bilibili": { zh: "抓取 B站字幕", en: "Fetch Bilibili subtitles" },
+  "extract.youtube": { zh: "抓取 YouTube 字幕", en: "Fetch YouTube transcript" },
+  "extract.pdf": { zh: "解析 PDF", en: "Parse PDF" },
+  "extract.url": { zh: "抓取网页", en: "Fetch web page" },
+  "extract.markdown": { zh: "解析 Markdown", en: "Parse Markdown" },
+  "extract.text": { zh: "读取文本", en: "Read text" },
+  "analyze.content": { zh: "分析内容结构", en: "Analyze content" },
+  "embed.vectors": { zh: "向量化", en: "Embed vectors" },
+  "plan.sections": { zh: "规划章节", en: "Plan sections" },
+  "references.search": { zh: "检索参考文献", en: "Search references" },
+};
+
+const ACTIVITY_VERBS: Record<string, { zh: string; en: string }> = {
+  extract: { zh: "提取", en: "Extract" },
+  analyze: { zh: "分析", en: "Analyze" },
+  embed: { zh: "向量化", en: "Embed" },
+  plan: { zh: "规划", en: "Plan" },
+  references: { zh: "检索文献", en: "References" },
+};
+
+function activityLabel(name: string, zh: boolean): string {
+  const entry = ACTIVITY_LABELS[name];
+  if (entry) return zh ? entry.zh : entry.en;
+  const [verb, rest] = name.split(".");
+  const v = ACTIVITY_VERBS[verb];
+  if (v) return `${zh ? v.zh : v.en}${rest ? ` ${rest}` : ""}`;
+  return name;
+}
+
+function ActivityRow({ activity, zh }: { activity: ActivityItem; zh: boolean }) {
+  const running = activity.state === "running";
+  const sub = activity.result || activity.detail;
+  return (
+    <li className="flex items-center gap-3">
+      <span
+        className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full"
+        style={{
+          background: running ? "var(--accent-soft)" : "var(--sage-soft)",
+          color: running ? "var(--accent-ink)" : "var(--sage-ink)",
+          border: "1px solid var(--border)",
+        }}
+      >
+        {running ? <IcLoader size={11} className="spin" /> : <IcCheck size={11} />}
+      </span>
+      <div className="flex min-w-0 flex-1 items-baseline gap-2">
+        <span
+          className="text-[13px]"
+          style={{
+            color: running ? "var(--ink)" : "var(--ink-2)",
+            fontWeight: running ? 500 : 400,
+          }}
+        >
+          {activityLabel(activity.name, zh)}
+        </span>
+        {sub ? (
+          <span className="truncate text-xs" style={{ color: "var(--ink-3)" }}>
+            {sub}
+          </span>
+        ) : null}
+      </div>
+      <span className="mono shrink-0 text-[11px]" style={{ color: "var(--ink-4)" }}>
+        {activity.name}
+      </span>
+    </li>
+  );
 }
 
 function StepRow({

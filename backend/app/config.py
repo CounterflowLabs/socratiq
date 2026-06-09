@@ -6,10 +6,6 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://socratiq:socratiq@localhost:5432/socratiq"
     redis_url: str = "redis://localhost:6379/0"
 
-    # Celery
-    celery_broker_url: str = "redis://localhost:6379/1"
-    celery_result_backend: str = "redis://localhost:6379/2"
-
     # Security
     llm_encryption_key: str = ""
 

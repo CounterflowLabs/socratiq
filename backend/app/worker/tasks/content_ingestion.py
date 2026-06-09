@@ -19,6 +19,7 @@ from app.agentcore.events import (
     run_finished,
     run_started,
     state_snapshot,
+    tool_activity,
 )
 from app.config import get_settings
 from app.services.source_tasks import (
@@ -347,12 +348,18 @@ async def _ingest_source_locked(task, source_id: str, resources, event_bus=None)
                 bilibili_credential=bilibili_credential,
             )
 
-            if source.type == "pdf":
-                relative_path = source.metadata_.get("file_path", "")
-                file_path = str(Path(resources.settings.upload_dir) / relative_path)
-                result = await extractor.extract(file_path)
-            else:
-                result = await extractor.extract(source.url or "")
+            async with tool_activity(
+                event_bus,
+                f"extract.{source.type}",
+                args={"url": source.url} if source.url else None,
+            ) as act:
+                if source.type == "pdf":
+                    relative_path = source.metadata_.get("file_path", "")
+                    file_path = str(Path(resources.settings.upload_dir) / relative_path)
+                    result = await extractor.extract(file_path)
+                else:
+                    result = await extractor.extract(source.url or "")
+                act.set(f"{len(result.chunks)} 段内容")
 
             source.title = source.title or result.title
             source.raw_content = "\n\n".join(c.raw_text for c in result.chunks)
@@ -366,11 +373,17 @@ async def _ingest_source_locked(task, source_id: str, resources, event_bus=None)
             task.update_state(state="PROGRESS", meta={"stage": "analyzing"})
 
             analyzer = ContentAnalyzer(resources.model_router)
-            analysis = await analyzer.analyze(
-                title=source.title or "Untitled",
-                chunks=result.chunks,
-                source_type=source.type,
-            )
+            async with tool_activity(
+                event_bus, "analyze.content", args={"chunks": len(result.chunks)}
+            ) as act:
+                analysis = await analyzer.analyze(
+                    title=source.title or "Untitled",
+                    chunks=result.chunks,
+                    source_type=source.type,
+                )
+                act.set(
+                    f"{len(analysis.concepts)} 个概念 · {len(analysis.chunks)} 段"
+                )
             logger.info(
                 "Analyzed source %s: %s concepts, %s chunks",
                 source_id,
@@ -479,12 +492,18 @@ async def _ingest_source_locked(task, source_id: str, resources, event_bus=None)
             # both far better than failing the whole ingestion.
             embedding_service = EmbeddingService(resources.model_router)
             try:
-                chunk_embeddings = await embedding_service.embed_and_store_chunks(
-                    db, chunk_ids, chunk_texts
-                )
-                await embedding_service.embed_and_store_concepts(
-                    db, concept_ids, concept_texts
-                )
+                async with tool_activity(
+                    event_bus,
+                    "embed.vectors",
+                    args={"chunks": len(chunk_ids), "concepts": len(concept_ids)},
+                ) as act:
+                    chunk_embeddings = await embedding_service.embed_and_store_chunks(
+                        db, chunk_ids, chunk_texts
+                    )
+                    await embedding_service.embed_and_store_concepts(
+                        db, concept_ids, concept_texts
+                    )
+                    act.set(f"{len(chunk_ids)} 块 · {len(concept_ids)} 概念")
                 logger.info(
                     "Embedded %s chunks and %s concepts",
                     len(chunk_ids),
@@ -539,13 +558,15 @@ async def _ingest_source_locked(task, source_id: str, resources, event_bus=None)
                 lesson_input_cap = None
 
             section_planner = SectionPlanner(resources.model_router)
-            plan_result = await section_planner.plan(
-                chunks=result.chunks,
-                analyses=analysis.chunks,
-                embeddings=chunk_embeddings,
-                title=source.title or "Untitled",
-                lesson_input_token_cap=lesson_input_cap,
-            )
+            async with tool_activity(event_bus, "plan.sections") as act:
+                plan_result = await section_planner.plan(
+                    chunks=result.chunks,
+                    analyses=analysis.chunks,
+                    embeddings=chunk_embeddings,
+                    title=source.title or "Untitled",
+                    lesson_input_token_cap=lesson_input_cap,
+                )
+                act.set(f"{len(set(b.bucket_id for b in plan_result.assignments))} 个章节")
 
             # Persist per-chunk bucket assignments back into metadata_. UPDATE
             # (not INSERT) — chunks already exist from STEP 5. We re-read the
@@ -606,25 +627,29 @@ async def _ingest_source_locked(task, source_id: str, resources, event_bus=None)
                     concept_names = [c.name for c in analysis.concepts if c.name][:4]
                     candidates = []
                     seen: set[str] = set()
-                    if fetcher is not None:
-                        for name in concept_names:
-                            for card in await fetcher.fetch(
-                                name, concepts=[name], max_results=5
-                            ):
-                                key = (card.url or card.title).strip().lower()
-                                if key in seen:
-                                    continue
-                                seen.add(key)
-                                candidates.append(card)
                     ranked = []
-                    if candidates:
-                        topic = f"{source.title or ''}。{analysis.overall_summary or ''}".strip("。")
-                        rank_provider = await resources.model_router.get_provider(
-                            _RefTaskType.CONTENT_ANALYSIS
-                        )
-                        ranked = await ReferenceRanker(rank_provider).rank(
-                            topic=topic, candidates=candidates, keep=6
-                        )
+                    async with tool_activity(
+                        event_bus, "references.search", args={"concepts": concept_names}
+                    ) as act:
+                        if fetcher is not None:
+                            for name in concept_names:
+                                for card in await fetcher.fetch(
+                                    name, concepts=[name], max_results=5
+                                ):
+                                    key = (card.url or card.title).strip().lower()
+                                    if key in seen:
+                                        continue
+                                    seen.add(key)
+                                    candidates.append(card)
+                        if candidates:
+                            topic = f"{source.title or ''}。{analysis.overall_summary or ''}".strip("。")
+                            rank_provider = await resources.model_router.get_provider(
+                                _RefTaskType.CONTENT_ANALYSIS
+                            )
+                            ranked = await ReferenceRanker(rank_provider).rank(
+                                topic=topic, candidates=candidates, keep=6
+                            )
+                        act.set(f"{len(candidates)} 候选 → 保留 {len(ranked)}")
                     if ranked:
                         source.metadata_ = {
                             **(source.metadata_ or {}),

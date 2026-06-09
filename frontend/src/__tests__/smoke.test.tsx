@@ -251,7 +251,7 @@ describe("Import Page", () => {
     expect(banner.textContent).toContain("登录");
 
     fireEvent.click(screen.getByRole("button", { name: /前往设置登录/ }));
-    expect(push).toHaveBeenCalledWith("/settings");
+    expect(push).toHaveBeenCalledWith("/settings?section=sources");
   });
 
   it("submits a URL import and pushes the user to /sources", async () => {

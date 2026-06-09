@@ -31,7 +31,7 @@ Socratiq is a four-process system. Three of them are stateless (frontend, backen
 |---|---|---|
 | `frontend` | `frontend/` · Next.js 16 | HTML, JS bundle, client-side state, **proxy route** `app/api/[...path]/route.ts` (10-min timeout for slow LLM streaming). No direct DB access. |
 | `backend` | `backend/app/main.py` · FastAPI | All HTTP routes under `/api/v1/*`, request validation (Pydantic v2), SSE streaming, agent orchestration, business logic. |
-| `worker` | `backend/app/worker/celery_app.py` + `worker/tasks/*` | Long-running tasks: source ingestion, course assembly, course regeneration, async exercise generation. Same Python codebase as backend; different entrypoint. |
+| `worker` | `backend/app/worker/arq_app.py` (ARQ `WorkerSettings`) + `worker/tasks/*` | Long-running tasks: source ingestion, course assembly, course regeneration, async exercise generation. Same Python codebase as backend; different entrypoint. |
 | `db` | `pgvector/pgvector:pg16` | Source of truth. Schemas in `backend/app/db/models/*.py`, migrations in `backend/alembic/versions/`. |
 | `redis` | `redis:7-alpine` | Celery broker + result backend. Nothing else. |
 | `minio` | `minio/minio` | Object storage (PDFs, uploaded files). Optional in dev. |

@@ -124,17 +124,21 @@ async def test_course_generator_reports_section_progress(
     )
     db_session.add(source)
     await db_session.flush()
+    # Pre-assign distinct buckets: this test pins the section-progress
+    # callback contract (2 sections → 2 progress items), not the planner.
+    # Without buckets the generation-time section floor would coalesce the
+    # two tiny chunks into one section.
     db_session.add_all(
         [
             ContentChunk(
                 source_id=source.id,
                 text="input layer transcript",
-                metadata_={"topic": "输入层"},
+                metadata_={"topic": "输入层", "section_bucket": 0},
             ),
             ContentChunk(
                 source_id=source.id,
                 text="hidden layer transcript",
-                metadata_={"topic": "隐藏层"},
+                metadata_={"topic": "隐藏层", "section_bucket": 1},
             ),
         ]
     )

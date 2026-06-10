@@ -106,7 +106,9 @@ export interface SourceEmbed {
 }
 
 export interface SectionPlannerStats {
-  tier_used: "skeleton" | "windowed" | "embedding_only" | "fallback";
+  // "skeleton" / "windowed" are legacy (pre-v3) tiers still present on
+  // sources planned before the zero-LLM floor refactor.
+  tier_used: "short_circuit" | "embedding_only" | "fallback" | "skeleton" | "windowed";
   planner_version: string;
   bucket_count: number;
   avg_chunks_per_bucket: number;

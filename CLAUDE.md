@@ -109,10 +109,9 @@ MentorAgent 是用户唯一交互入口，按需调度 CourseAgent / LabAgent / 
 
 ### 内容摄入 → 课程生成管线
 1. 来源导入 → Extractor 提取内容 → ContentChunk
-2. LLM 内容分析 (content_analyzer) → 结构化知识
-3. TeachingAssetPlanner 规划教学资产 (lab_mode, graph_mode)
-4. 课时/实验/图谱 在来源处理阶段一次性生成并持久化到 source metadata
-5. course_generator 组装时直接复用已生成的资产
+2. LLM 内容分析 (content_analyzer) → 结构化知识 + TeachingAssetPlanner 资产规划 → 向量化入库。摄入只产出内容指纹（chunks + 概念 + 向量 + 分析），不做课程级决策
+3. 课程生成任务先做章节规划：SectionPlanner 是零 LLM floor（embedding 峰值 / 大小贪心分桶，入口 `course_generator.ensure_section_buckets`），agentic 大纲（video_to_course 的 plan→critic→回退图）在其上重规划并覆写 section_bucket
+4. course_generator 按 section_bucket 组装 section，课时/实验/图谱在此阶段生成
 
 ### Block-Based 课程渲染
 课程内容以 block 数组组织，block 类型包括：`intro_card`, `prose`, `diagram`, `code_example`, `concept_relation`, `practice_trigger`, `recap`, `next_step`。旧版 section-based 课时通过 fallback adapter 自动转换为 block 格式。

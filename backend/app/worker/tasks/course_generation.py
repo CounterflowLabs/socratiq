@@ -162,9 +162,9 @@ async def _generate_course_async(
                 source_id=sid,
                 task_type="course_generation",
                 status="running",
-                stage="assembling_course",
+                stage="planning",
             )
-            task.update_state(state="PROGRESS", meta={"stage": "assembling_course"})
+            task.update_state(state="PROGRESS", meta={"stage": "planning"})
 
             from app.services.profile import load_profile
 
@@ -179,6 +179,25 @@ async def _generate_course_async(
                 uploader_profile = await load_profile(db, source.created_by)
                 target_language = uploader_profile.preferred_language
 
+            # Section-bucket floor (planning happens at generation time, not
+            # ingestion): run the zero-LLM SectionPlanner BEFORE the agentic
+            # outline so (a) the outline gets a warm start and (b) its failure
+            # path falls back to floor buckets instead of per-chunk
+            # fragmentation. Committed immediately so a later agentic rollback
+            # can't undo it.
+            try:
+                floor_stats = await _ensure_floor_buckets(db, source, sid, resources)
+                if floor_stats:
+                    await db.commit()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Section floor failed for source %s; relying on the "
+                    "generator-side fallback: %s",
+                    source_id,
+                    exc,
+                )
+                await db.rollback()
+
             # Agentic outline (Phase 3): when enabled, re-plan the section
             # structure with the critic-gated video→course graph and write the
             # result onto chunk metadata BEFORE assembly. CourseGenerator then
@@ -192,16 +211,26 @@ async def _generate_course_async(
                     if n_sections:
                         await db.commit()
                 except Exception as exc:  # noqa: BLE001
-                    # Never let outline planning abort generation — fall back to
-                    # the ingestion-time SectionPlanner buckets already on the
-                    # chunks. The course still generates; it just isn't re-planned.
+                    # Never let outline planning abort generation — fall back
+                    # to the floor buckets committed above. The course still
+                    # generates; it just isn't re-planned.
                     logger.warning(
-                        "Agentic outline failed for source %s; using ingestion "
+                        "Agentic outline failed for source %s; using floor "
                         "buckets: %s",
                         source_id,
                         exc,
                     )
                     await db.rollback()
+
+            await mark_source_task(
+                db,
+                source_id=sid,
+                task_type="course_generation",
+                status="running",
+                stage="assembling_course",
+            )
+            await db.commit()
+            task.update_state(state="PROGRESS", meta={"stage": "assembling_course"})
 
             generator = CourseGenerator(resources.model_router)
             course = await generator.generate(
@@ -284,10 +313,35 @@ async def _generate_course_async(
         raise
 
 
+async def _ensure_floor_buckets(db, source, sid, resources) -> dict | None:
+    """Run the zero-LLM section floor over the source's chunks (idempotent).
+
+    Thin worker glue around :func:`course_generator.ensure_section_buckets`:
+    loads the chunks in source order and hands them over. Returns the planner
+    stats when planning ran, ``None`` when it no-oped (page-structured source,
+    buckets already present, or no chunks).
+    """
+    from sqlalchemy import select
+
+    from app.db.models.content_chunk import ContentChunk as ContentChunkModel
+    from app.services.course_generator import (
+        CourseGenerator,
+        ensure_section_buckets,
+    )
+
+    rows = (
+        await db.execute(
+            select(ContentChunkModel).where(ContentChunkModel.source_id == sid)
+        )
+    ).scalars().all()
+    chunks = sorted(rows, key=CourseGenerator._chunk_order_key)
+    return await ensure_section_buckets(db, source, chunks, resources.model_router)
+
+
 async def _maybe_run_agentic_outline(
     db, source, sid, resources, event_bus, target_language: str = "zh-CN"
 ) -> int | None:
-    """Replace SectionPlanner's ingestion-time bucketing with the critic-gated
+    """Replace the section floor's bucketing with the critic-gated
     video→course outline, in place, before CourseGenerator assembles.
 
     The graph consolidates the analyzed chunks into a coherent, difficulty-
@@ -296,8 +350,7 @@ async def _maybe_run_agentic_outline(
     (``section_bucket`` / ``section_bucket_topic`` / ``difficulty``) — the exact
     contract CourseGenerator's bucket mode already consumes. So generation /
     lesson-fill / persistence are reused unchanged; only the *bucketing
-    decision* moves from a blind ingestion-time tier cascade to a gated agent
-    graph.
+    decision* moves from the blind zero-LLM floor to a gated agent graph.
 
     No-ops (returns ``None``) for page-structured sources (PDF/markdown keep
     their page sections) and for sources with fewer than two chunks. Mutates

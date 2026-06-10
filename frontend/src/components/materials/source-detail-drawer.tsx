@@ -134,7 +134,6 @@ const TASK_STAGE_DETAILS: Record<string, Record<string, string[]>> = {
     analyzing: ["识别主题线索", "拆分学习切片", "估算难度与时长"],
     storing: ["保存资料摘要", "写入切片内容", "关联来源元数据"],
     embedding: ["生成切片向量", "生成概念向量", "写入检索库"],
-    planning: ["读取切片边界", "规划章节结构", "保存课程骨架"],
     ready: ["资料处理完成", "课程生成已接力"],
     error: ["记录失败原因", "等待重试"],
     cancelled: ["停止后台任务", "保留已完成记录"],
@@ -152,7 +151,7 @@ const TASK_STAGE_DETAILS: Record<string, Record<string, string[]>> = {
 };
 
 const TASK_STAGE_FLOW: Record<string, string[]> = {
-  source_processing: ["pending", "extracting", "analyzing", "storing", "embedding", "planning", "ready"],
+  source_processing: ["pending", "extracting", "analyzing", "storing", "embedding", "ready"],
   course_generation: ["pending", "planning", "assembling_course", "ready"],
 };
 
@@ -1768,10 +1767,10 @@ function HistorySection({ sourceId }: { sourceId: string }) {
   );
 }
 
-/* SectionPlanner stats — surfaces the per-source metadata that
-   ``app.services.section_planner.SectionPlanner`` writes during ingestion.
-   Source.metadata_["section_planner_stats"] is optional; pre-Phase-1 sources
-   simply don't render this block. */
+/* SectionPlanner stats — surfaces the per-source metadata that the
+   section floor (``course_generator.ensure_section_buckets``) writes at
+   course-generation time. Source.metadata_["section_planner_stats"] is
+   optional; sources that never generated a course don't render this block. */
 function SectionPlannerSection({
   metadata,
 }: {
@@ -1783,10 +1782,12 @@ function SectionPlannerSection({
   if (!stats) return null;
 
   const tierLabel: Record<string, string> = {
-    skeleton: "整段（Layer 1）",
-    windowed: "分窗（Layer 2）",
-    embedding_only: "向量兜底（Layer 3）",
-    fallback: "逐 chunk 兜底（Layer 4）",
+    short_circuit: "短源单桶",
+    embedding_only: "向量分桶（Layer 3）",
+    fallback: "按大小兜底（Layer 4）",
+    // 旧版（v2 之前）写入的 tier 值，存量数据仍可能出现：
+    skeleton: "整段（Layer 1，旧版）",
+    windowed: "分窗（Layer 2，旧版）",
   };
   const tierStyle =
     stats.tier_used === "fallback"
@@ -1820,7 +1821,7 @@ function SectionPlannerSection({
         </div>
         {stats.short_circuit ? (
           <p className="text-xs" style={{ color: "var(--ink-3)" }}>
-            内容较短，整源归为一个 bucket，跳过 LLM 分析。
+            内容较短，整源归为一个 bucket。
           </p>
         ) : null}
         <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">

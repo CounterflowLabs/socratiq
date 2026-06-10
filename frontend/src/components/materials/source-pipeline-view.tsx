@@ -15,8 +15,8 @@ import {
 import type { SourceProgressResponse, SourceTaskProgress } from "@/lib/api";
 
 const STAGE_ORDER: Record<string, string[]> = {
-  source_processing: ["extracting", "analyzing", "storing", "embedding", "planning"],
-  course_generation: ["assembling_course"],
+  source_processing: ["extracting", "analyzing", "storing", "embedding"],
+  course_generation: ["planning", "assembling_course"],
   course_regeneration: ["generating"],
 };
 

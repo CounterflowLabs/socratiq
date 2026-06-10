@@ -483,13 +483,15 @@ async def _ingest_source_locked(task, source_id: str, resources, event_bus=None)
             await _update_status(db, sid, "embedding", event_bus=event_bus)
             task.update_state(state="PROGRESS", meta={"stage": "embedding"})
 
-            # Embeddings are an ENHANCEMENT (RAG retrieval + SectionPlanner
-            # boundary hints), not a prerequisite for producing a course. If the
-            # embedding provider is unavailable (e.g. a local Ollama sidecar is
-            # down), degrade gracefully: log, skip vectors, and continue. The
-            # planner accepts ``embeddings=None`` (boundary hints collapse to
-            # zero) and downstream RAG simply has no vectors for this source —
-            # both far better than failing the whole ingestion.
+            # Embeddings are an ENHANCEMENT (RAG retrieval + the section
+            # floor's boundary hints at course-generation time), not a
+            # prerequisite for producing a course. If the embedding provider
+            # is unavailable (e.g. a local Ollama sidecar is down), degrade
+            # gracefully: log, skip vectors, and continue. The generation-time
+            # planner tolerates missing vectors (boundary hints collapse to
+            # zero and it coarsens by size) and downstream RAG simply has no
+            # vectors for this source — both far better than failing the
+            # whole ingestion.
             embedding_service = EmbeddingService(resources.model_router)
             try:
                 async with tool_activity(
@@ -497,7 +499,7 @@ async def _ingest_source_locked(task, source_id: str, resources, event_bus=None)
                     "embed.vectors",
                     args={"chunks": len(chunk_ids), "concepts": len(concept_ids)},
                 ) as act:
-                    chunk_embeddings = await embedding_service.embed_and_store_chunks(
+                    await embedding_service.embed_and_store_chunks(
                         db, chunk_ids, chunk_texts
                     )
                     await embedding_service.embed_and_store_concepts(
@@ -510,97 +512,17 @@ async def _ingest_source_locked(task, source_id: str, resources, event_bus=None)
                     len(concept_ids),
                 )
             except Exception as exc:  # noqa: BLE001
-                chunk_embeddings = None
                 logger.warning(
                     "Embedding step failed for source %s; continuing without "
-                    "vectors (RAG + boundary hints degraded): %s",
+                    "vectors (RAG + section boundary hints degraded): %s",
                     source_id,
                     exc,
                 )
 
-            # === STEP 6.5: SECTION PLANNING ===
-            # Group consecutive chunks into topic-coherent buckets so the
-            # course assembly stage can emit one section per bucket instead
-            # of one section per chunk (which fragments long videos). Runs
-            # AFTER embed so boundary-hint computation reuses the just-
-            # computed vectors at zero extra cost. Failure modes (no route,
-            # LLM error, JSON parse fail) drop to per-chunk fallback inside
-            # the planner — never raise out to the ingestion pipeline.
-            await raise_if_cancelled(
-                db, source_id=sid, task_type="source_processing"
-            )
-            await _update_status(db, sid, "planning", event_bus=event_bus)
-            task.update_state(state="PROGRESS", meta={"stage": "planning"})
-
-            from app.services.llm import TaskType, lesson_input_token_budget
-            from app.services.section_planner import (
-                SECTION_BUCKET_KEY,
-                SECTION_BUCKET_TOPIC_KEY,
-                SectionPlanner,
-            )
-
-            # Compute the per-bucket token cap from the same provider that
-            # LessonGenerator will use downstream (currently CONTENT_ANALYSIS
-            # routing — see services/course_generator.py:120). Provider
-            # resolution can fail if no chat route is configured; fall back
-            # to the planner's conservative default in that case.
-            try:
-                lesson_provider = await resources.model_router.get_provider(
-                    TaskType.CONTENT_ANALYSIS
-                )
-                lesson_input_cap: int | None = lesson_input_token_budget(lesson_provider)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "Could not resolve lesson provider for budget calc: %s; "
-                    "planner will use conservative default cap",
-                    exc,
-                )
-                lesson_input_cap = None
-
-            section_planner = SectionPlanner(resources.model_router)
-            async with tool_activity(event_bus, "plan.sections") as act:
-                plan_result = await section_planner.plan(
-                    chunks=result.chunks,
-                    analyses=analysis.chunks,
-                    embeddings=chunk_embeddings,
-                    title=source.title or "Untitled",
-                    lesson_input_token_cap=lesson_input_cap,
-                )
-                act.set(f"{len(set(b.bucket_id for b in plan_result.assignments))} 个章节")
-
-            # Persist per-chunk bucket assignments back into metadata_. UPDATE
-            # (not INSERT) — chunks already exist from STEP 5. We re-read the
-            # rows, merge the new keys, and reassign so SQLAlchemy's JSONB
-            # change detection picks it up (in-place mutation of a dict on a
-            # JSONB column does NOT mark the attribute dirty).
-            result_chunks = await db.execute(
-                select(ContentChunkModel).where(
-                    ContentChunkModel.id.in_(chunk_ids)
-                )
-            )
-            db_chunks_by_id = {c.id: c for c in result_chunks.scalars().all()}
-            for chunk_id, bucket in zip(chunk_ids, plan_result.assignments):
-                db_chunk = db_chunks_by_id.get(chunk_id)
-                if db_chunk is None:
-                    continue
-                merged = {**(db_chunk.metadata_ or {})}
-                merged[SECTION_BUCKET_KEY] = bucket.bucket_id
-                merged[SECTION_BUCKET_TOPIC_KEY] = bucket.bucket_topic
-                db_chunk.metadata_ = merged
-            await db.flush()
-
-            source.metadata_ = {
-                **(source.metadata_ or {}),
-                "section_planner_stats": plan_result.stats,
-            }
-            await db.flush()
-            logger.info(
-                "Section planning: tier=%s buckets=%d chunks=%d (took %dms)",
-                plan_result.stats.get("tier_used"),
-                plan_result.stats.get("bucket_count"),
-                len(chunk_ids),
-                plan_result.stats.get("planning_duration_ms", 0),
-            )
+            # Section planning moved to course generation (see
+            # ``course_generator.ensure_section_buckets``): bucketing is a
+            # course-level decision, and ingestion's output is only the
+            # content fingerprint (chunks + concepts + embeddings + analysis).
 
             # === STEP 6.6: REFERENCE FETCH + RANK (arXiv, best-effort) ===
             # Turn the source's top concepts into real, citable references and

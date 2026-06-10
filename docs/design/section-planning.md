@@ -1,10 +1,20 @@
 # Section Planning — Topic-Bucket Grouping for Video Chunks
 
-**Status**: 草案 v2 · 待评审
+**Status**: 已实现 · 部分被 v3 重构取代（见下方状态注记）
 **作者**: catundercar
 **日期**: 2026-05-15
 **关联 issue**: 待开（Linear SOC-#）
 **v1 → v2 关键调整**：见文末 Changelog。
+
+> **状态注记（2026-06-10，planner v3）**：本文描述的四层级联已按设计实现并上线；
+> 在 agentic 大纲（`orchestration/topologies/video_to_course.py`，plan→critic→回退）
+> 成为默认的章节结构权威后，SectionPlanner 的 Layer 1/2（LLM skeleton / 窗口化+缝合）
+> 已删除——同一阶段保留两个 LLM 规划器会固化双轨。现状：
+>
+> - SectionPlanner 只保留零 LLM 部分：短路 → Layer 3（embedding 峰值）→ Layer 4（大小贪心）。
+> - 规划从摄入阶段移到课程生成阶段（入口 `course_generator.ensure_section_buckets`），
+>   摄入只产出内容指纹；floor 结果作为 agentic 大纲的 warm start 与失败兜底。
+> - 本文的 Layer 1/2、ingestion 接入与 STRUCTURE_PLANNING 路由章节仅作历史记录。
 
 ---
 

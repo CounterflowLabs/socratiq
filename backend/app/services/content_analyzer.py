@@ -293,8 +293,8 @@ def _build_analysis_from_text(
     # under-returns we pad with degenerate entries (preserving raw_text +
     # extractor metadata so downstream stages still see every chunk); when
     # it over-returns the slice above already truncated. Without this,
-    # SectionPlanner's length check (see services/section_planner.py:164)
-    # short-circuits to Layer 4 per-chunk fallback and the course becomes
+    # SectionPlanner's length check (services/section_planner.py) drops to
+    # its degenerate per-chunk fallback and the course becomes
     # one-section-per-chunk.
     if len(analyzed_chunks) != len(chunks):
         logger.warning(

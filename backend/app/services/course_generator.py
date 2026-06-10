@@ -66,6 +66,97 @@ def _provider_is_local(provider) -> bool:
     return any(hint in base_url for hint in _LOCAL_BASE_URL_HINTS)
 
 
+async def ensure_section_buckets(
+    db: AsyncSession,
+    source: Source,
+    chunks: list[ContentChunkModel],
+    model_router: ModelRouter,
+) -> dict | None:
+    """Run the zero-LLM SectionPlanner floor over ``chunks`` when they don't
+    carry bucket assignments yet.
+
+    Section planning lives at course-generation time (it's a course-level
+    decision; ingestion only produces the content fingerprint). This floor
+    guarantees assembly never sees bucket-less chunks — which would degrade
+    to one-section-per-chunk — and doubles as the agentic outline's warm
+    start and failure fallback.
+
+    No-ops (returns ``None``) when there are no chunks, the source is
+    page-structured (page assembly path), or buckets already exist (a prior
+    generation or legacy ingestion-time planning). Mutates chunk metadata,
+    writes ``section_planner_stats`` on the source, and flushes; the caller
+    commits. ``chunks`` must be in source order (``_chunk_order_key``).
+    """
+    from types import SimpleNamespace
+
+    from app.services.llm.token_budget import lesson_input_token_budget
+    from app.services.section_planner import (
+        SECTION_BUCKET_KEY,
+        SECTION_BUCKET_TOPIC_KEY,
+        SectionPlanner,
+        has_section_buckets,
+    )
+
+    if not chunks:
+        return None
+    metas = [c.metadata_ or {} for c in chunks]
+    if any(m.get("page_index") is not None for m in metas):
+        return None
+    if has_section_buckets(metas):
+        return None
+
+    raw = [
+        SimpleNamespace(raw_text=c.text or "", metadata=m)
+        for c, m in zip(chunks, metas)
+    ]
+    analyses = [
+        SimpleNamespace(topic=m.get("topic") or "", summary=m.get("summary") or "")
+        for m in metas
+    ]
+    embeddings = [
+        list(c.embedding) if c.embedding is not None else [] for c in chunks
+    ]
+
+    try:
+        provider = await model_router.get_provider(TaskType.CONTENT_ANALYSIS)
+        cap: int | None = lesson_input_token_budget(provider)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "ensure_section_buckets: no lesson provider for budget calc (%s); "
+            "planner uses its conservative default cap",
+            exc,
+        )
+        cap = None
+
+    plan = await SectionPlanner().plan(
+        chunks=raw,
+        analyses=analyses,
+        embeddings=embeddings,
+        title=source.title or "Untitled",
+        lesson_input_token_cap=cap,
+    )
+    # Reassign (not mutate) the JSONB dicts so SQLAlchemy change detection
+    # marks the rows dirty.
+    for chunk, bucket in zip(chunks, plan.assignments):
+        merged = {**(chunk.metadata_ or {})}
+        merged[SECTION_BUCKET_KEY] = bucket.bucket_id
+        merged[SECTION_BUCKET_TOPIC_KEY] = bucket.bucket_topic
+        chunk.metadata_ = merged
+    source.metadata_ = {
+        **(source.metadata_ or {}),
+        "section_planner_stats": plan.stats,
+    }
+    await db.flush()
+    logger.info(
+        "Section floor: tier=%s buckets=%s chunks=%d for source %s",
+        plan.stats.get("tier_used"),
+        plan.stats.get("bucket_count"),
+        len(chunks),
+        source.id,
+    )
+    return plan.stats
+
+
 class CourseGenerator:
     """Generates structured courses from analyzed sources."""
 
@@ -120,6 +211,23 @@ class CourseGenerator:
             rows = sorted(result.scalars().all(), key=self._chunk_order_key)
             chunks_by_source[source.id] = rows
             all_chunks.extend(rows)
+
+        # 3.5 Section-bucket floor: planning happens at generation time, so
+        # make sure no source reaches assembly bucket-less (that path degrades
+        # to one-section-per-chunk). No-op for page-structured or already-
+        # planned sources; a failure here must not abort generation.
+        for source in sources:
+            try:
+                await ensure_section_buckets(
+                    db, source, chunks_by_source[source.id], self._router
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Section floor failed for source %s; assembly may fall "
+                    "back to per-chunk sections: %s",
+                    source.id,
+                    exc,
+                )
 
         # Release the read transaction before LLM calls. Generation can sit
         # idle for minutes on local models; holding AccessShare/RowExclusive
